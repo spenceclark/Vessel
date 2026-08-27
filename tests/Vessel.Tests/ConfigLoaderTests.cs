@@ -1,0 +1,148 @@
+using System.Text.Json;
+using Vessel.Config;
+using Xunit;
+
+namespace Vessel.Tests;
+
+public class ConfigLoaderTests : IDisposable
+{
+    private readonly string _dir = Directory.CreateTempSubdirectory("vessel-tests-").FullName;
+
+    private string PathFor(string name) => Path.Combine(_dir, name);
+
+    public void Dispose() => Directory.Delete(_dir, recursive: true);
+
+    [Fact]
+    public void MissingFile_CreatesDefaultConfig()
+    {
+        string path = PathFor("vessel.json");
+
+        (VesselConfig config, bool created) = ConfigLoader.LoadOrCreate(path);
+
+        Assert.True(created);
+        Assert.True(File.Exists(path));
+        Assert.Equal("127.0.0.1:4550", config.Listen);
+        Assert.Equal("ollama", config.DefaultBackend);
+        Assert.Equal("http://localhost:11434", config.Backends["ollama"].BaseUrl);
+        Assert.Equal(1800, config.Timeouts.ActivitySeconds);
+
+        (VesselConfig reloaded, bool createdAgain) = ConfigLoader.LoadOrCreate(path);
+        Assert.False(createdAgain);
+        Assert.Equal(config.Listen, reloaded.Listen);
+    }
+
+    [Fact]
+    public void UnknownProperties_SurviveLoadSaveRoundTrip()
+    {
+        // A phase-0 binary must not destroy settings written by a later version.
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, """
+            {
+              "listen": "127.0.0.1:4550",
+              "defaultBackend": "ollama",
+              "backends": {
+                "ollama": { "baseUrl": "http://localhost:11434", "type": "ollama", "injectStreamUsage": true }
+              },
+              "timeouts": { "activitySeconds": 60, "futureTimeout": 5 },
+              "retention": { "maxRequests": 5000 }
+            }
+            """);
+
+        (VesselConfig config, _) = ConfigLoader.LoadOrCreate(path);
+        ConfigLoader.Save(path, config);
+
+        using JsonDocument saved = JsonDocument.Parse(File.ReadAllText(path));
+        JsonElement root = saved.RootElement;
+        Assert.Equal(5000, root.GetProperty("retention").GetProperty("maxRequests").GetInt32());
+        Assert.True(root.GetProperty("backends").GetProperty("ollama").GetProperty("injectStreamUsage").GetBoolean());
+        Assert.Equal(5, root.GetProperty("timeouts").GetProperty("futureTimeout").GetInt32());
+        Assert.Equal(60, root.GetProperty("timeouts").GetProperty("activitySeconds").GetInt32());
+    }
+
+    [Fact]
+    public void MalformedJson_Throws()
+    {
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, "{ not json");
+
+        var ex = Assert.Throws<ConfigException>(() => ConfigLoader.LoadOrCreate(path));
+        Assert.Contains("not valid JSON", ex.Message);
+    }
+
+    [Fact]
+    public void DefaultBackendNotConfigured_Throws()
+    {
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, """
+            {
+              "defaultBackend": "nope",
+              "backends": { "ollama": { "baseUrl": "http://localhost:11434" } }
+            }
+            """);
+
+        var ex = Assert.Throws<ConfigException>(() => ConfigLoader.LoadOrCreate(path));
+        Assert.Contains("defaultBackend 'nope'", ex.Message);
+    }
+
+    [Fact]
+    public void NoBackends_Throws()
+    {
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, """{ "defaultBackend": "ollama", "backends": {} }""");
+
+        Assert.Throws<ConfigException>(() => ConfigLoader.LoadOrCreate(path));
+    }
+
+    [Theory]
+    [InlineData("not-a-url")]
+    [InlineData("ftp://example.com")]
+    [InlineData("localhost:11434")]
+    public void InvalidBaseUrl_Throws(string baseUrl)
+    {
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, $$"""
+            {
+              "defaultBackend": "ollama",
+              "backends": { "ollama": { "baseUrl": "{{baseUrl}}" } }
+            }
+            """);
+
+        var ex = Assert.Throws<ConfigException>(() => ConfigLoader.LoadOrCreate(path));
+        Assert.Contains("baseUrl", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("nope")]
+    [InlineData("127.0.0.1")]
+    [InlineData(":4550")]
+    [InlineData("127.0.0.1:notaport")]
+    public void InvalidListen_Throws(string listen)
+    {
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, $$"""
+            {
+              "listen": "{{listen}}",
+              "defaultBackend": "ollama",
+              "backends": { "ollama": { "baseUrl": "http://localhost:11434" } }
+            }
+            """);
+
+        var ex = Assert.Throws<ConfigException>(() => ConfigLoader.LoadOrCreate(path));
+        Assert.Contains("listen", ex.Message);
+    }
+
+    [Fact]
+    public void CaseInsensitiveDefaultBackendName_IsAccepted()
+    {
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, """
+            {
+              "defaultBackend": "Ollama",
+              "backends": { "ollama": { "baseUrl": "http://localhost:11434" } }
+            }
+            """);
+
+        (VesselConfig config, _) = ConfigLoader.LoadOrCreate(path);
+        Assert.Equal("Ollama", config.DefaultBackend);
+    }
+}

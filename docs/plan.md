@@ -11,13 +11,16 @@ for design detail; section references below (§) point there.
 
 *Goal: Vessel can sit in front of Ollama all day without you noticing it exists.*
 
-- [ ] Solution + project layout per §11; .NET 10 web project, YARP package.
-- [ ] `vessel.json` config load/create-on-first-run (§9); backends model.
-- [ ] Routing: default backend, `/b/{name}/` path prefix, `X-Vessel-Backend` header;
+- [x] Solution + project layout per §11; .NET 10 web project, YARP package.
+- [x] `vessel.json` config load/create-on-first-run (§9); backends model.
+- [x] Routing: default backend, `/b/{name}/` path prefix, `X-Vessel-Backend` header;
       strip `X-Vessel-*` before forwarding (§3.2).
-- [ ] Streaming pass-through verified: SSE and NDJSON flow chunk-by-chunk, no buffering.
-- [ ] Remote HTTPS backends work (OpenAI/Anthropic as ordinary outbound TLS).
-- [ ] `404` with helpful JSON on unknown backend / upstream connection failure.
+- [x] Streaming pass-through verified: SSE and NDJSON flow chunk-by-chunk, no buffering.
+- [x] Remote HTTPS backends work (OpenAI/Anthropic as ordinary outbound TLS) — wired and
+      forwarded as plain YARP outbound HTTPS; live-key verification pending (opt-in
+      `verify.ps1 -OpenAI -Anthropic`).
+- [x] `404` with helpful JSON on unknown backend / upstream connection failure
+      (404 `unknown_backend`, 502 `upstream_unreachable`, 504 `upstream_timeout`).
 
 **Done when:** `OLLAMA_HOST`-style clients, an OpenAI SDK with
 `base_url=http://localhost:4550/b/openai/v1`, and `curl -N` streamed requests all behave

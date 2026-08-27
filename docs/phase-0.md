@@ -24,6 +24,36 @@ UI, SSE events, sessions.
 These are the micro-decisions the plan left open. Deviations found during implementation
 go back into this file and, if architectural, into architecture.md §12.
 
+### Implementation findings (recorded as the phase landed)
+
+- **Host header must be nulled explicitly.** YARP's base `HttpTransformer` copies the
+  client's `Host` through; `VesselTransformer` sets `proxyRequest.Headers.Host = null`
+  after the base call so Host derives from the backend URI (T2 caught this — the D4.2
+  "verify in the harness" instruction paid off).
+- **Config models are classes, not records.** `System.Text.Json` rejects
+  `[JsonExtensionData]` on types with a deserialization constructor, which records
+  trip over. Plain mutable classes with the source-generated context work.
+- **Tags are orthogonal to backend selection.** `/t/{tags}/…` with an
+  `X-Vessel-Backend` header routes to the header's backend (the §3.2 rule order reads
+  literally as "default backend" there, but tags don't *select* anything — the header
+  is only ignored when a `/b/` prefix names the backend).
+- **`not_found` error code added** for unrecognized `/vessel/*` paths — the reserved
+  namespace is never proxied, and D5's marking convention (header + `source: "vessel"`)
+  applies to that response too.
+- **Test stack:** xunit v3 on .NET 10 requires the Microsoft.Testing.Platform `dotnet
+  test` mode — opt-in lives in `global.json` (`"test": { "runner":
+  "Microsoft.Testing.Platform" }`); `Microsoft.NET.Test.Sdk` is not referenced.
+- **Trimming data (for the Phase 6 decision):** `PublishTrimmed=true` works today —
+  18.3 MB vs 98.9 MB untrimmed on win-x64, zero trim warnings, publish smoke passes
+  (first-run config, status, proxying, error paths). Left **off** in the csproj;
+  `publish-smoke.ps1 -Trimmed` re-gathers the data any time.
+- **Byte-identical vs real backends:** two generations are never byte-identical even
+  direct-to-direct — Ollama stamps `created_at` and `*_duration` per call, OpenAI
+  format stamps `id`/`created`. `verify.ps1` therefore masks exactly those volatile
+  fields when raw bytes differ; the generated content and token counts must still
+  match exactly (seed + temperature 0). `Content-Length` is checked for
+  self-consistency per response rather than cross-compared in that case.
+
 ### D1 — YARP via `IHttpForwarder` (direct forwarding), not the ReverseProxy pipeline
 
 Vessel's routing is custom (per-request backend selection from path/header/default), so
@@ -80,9 +110,9 @@ names), `upstream_unreachable` (502), `upstream_timeout` (504). Map from YARP's
 `ForwarderError` enum; client-disconnect errors produce **no** response (nobody's
 listening) and are logged at Debug only.
 
-> Note: this refines architecture.md §3.2, which said 502 for unknown backend — 404 is
-> more accurate (the named backend doesn't exist) and 502/504 are reserved for real
-> upstream failures. Update §3.2 when this phase lands.
+> Note: architecture.md §3.2 already specifies 404 for an unknown backend, so no
+> update was needed there — 404 (the named backend doesn't exist) with 502/504
+> reserved for real upstream failures is what shipped.
 
 ### D6 — Config handling
 
@@ -281,14 +311,20 @@ flags) one OpenAI live and one Anthropic live call via `/b/openai/v1/...` /
 
 ### Manual checklist (do these literally, once, before calling the phase done)
 
-- [ ] `$env:OLLAMA_HOST = "127.0.0.1:4550"; ollama run <model>` — interactive chat works,
-      tokens visibly stream.
+- [x] `$env:OLLAMA_HOST = "127.0.0.1:4550"; ollama run <model>` — interactive chat works,
+      tokens visibly stream. *(verified non-interactively: `ollama run qwen2.5:1.5b
+      "prompt"` through Vessel answers correctly; chunk-by-chunk streaming confirmed via
+      `curl -N` NDJSON timestamps ~85 ms apart — worth one interactive session too)*
 - [ ] OpenAI SDK (any script) with `base_url = http://127.0.0.1:4550/v1` against Ollama —
-      streamed completion works.
+      streamed completion works. *(harness covers `/v1/chat/completions` streamed +
+      non-streamed over raw HTTP; an actual SDK run is still pending)*
 - [ ] Same script with `base_url = http://127.0.0.1:4550/b/openai/v1` + real key — works.
+      *(pending keys; `verify.ps1 -OpenAI`)*
 - [ ] Anthropic SDK with `base_url = http://127.0.0.1:4550/b/anthropic` + real key — works.
+      *(pending keys; `verify.ps1 -Anthropic`)*
 - [ ] Kill Ollama mid-stream — client errors promptly, Vessel stays healthy for the next
-      request.
+      request. *(covered in-proc by T8 against a stub; the literal kill-Ollama run is
+      left for a moment when killing your Ollama is convenient)*
 - [ ] Vessel under an agent tool (Cline/Aider/whatever you actually use) for one real task.
 
 ---
