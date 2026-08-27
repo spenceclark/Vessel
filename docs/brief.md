@@ -1,84 +1,82 @@
-# Vessel
+# Vessel — Product Brief
 
-> The lightweight observability proxy for LLM traffic
+> The lightweight observability reverse proxy for LLM traffic.
+> Single binary. Point a `base_url` at it; get capture, metrics, and a UI.
 
-## Overview
+This is the **what and why**. The **how** lives in [architecture.md](architecture.md)
+(design authority) and [plan.md](plan.md) (phased delivery); per-phase specs
+(e.g. [phase-0.md](phase-0.md)) are written as each phase begins. If this document ever
+conflicts with architecture.md, architecture.md wins.
 
-- Very lightweight proxy that sits in front of LLM traffic.
-- Captures request/response
-- Understands OpenAI, Anthropic and Ollama endpoints and request/response formats
-- Forwards the whole request + headers as-is
-- Provides a UI that:
-  - Allows requests to be viewed/filtered
-  - View request level values like stop reason,
-  - Request metrics like duration, token counts, tok/s, ttft
-  - The prompt and reply
-- Initially just for my own use - but if it works and is useful i'd have it open-source MIT
+## What it is
 
-## Requirement
+A local-first reverse proxy that sits between LLM clients (agents, SDK scripts, dev
+tools) and LLM backends. It forwards traffic as-is, captures every request/response
+including streamed ones, and serves an embedded web UI to browse, search, and analyze
+them. Initially for the author's own use (99% Ollama); open-sourced under MIT if it
+proves useful.
 
-- Low overhead on wall-clock - if request/response its stored to a datastore the ideally do that in a background  thread to allow the request to run unhindered.
-- Persists data - but has easy "clear down" options / max-size to stop it getting huge.
-- Support:
-  - Ollama - own api format + their OpenAI and Anthropic formats
-  - llama.cpp - its format
-  - Unsloth Desktop - its openai compatible
-  - LM Studio - whichver it supports
-  - ANy other OpenAI compatible end point
-  - Actual OpenAI live endpoints (initiate and terminate SSL in proxy?)
-  - Actual Anthropic live endpoints (initiate and terminate SSL in proxy?)
+**Not** a load balancer, API gateway, MITM proxy, or hosted service. It never mutates
+traffic (beyond stripping its own `X-Vessel-*` control headers) and never holds API keys.
 
-## Tech
+## Core principles
 
-Looking for recommended tech stack.
+- **Zero-config drop-in** — run one self-contained executable, change one base URL.
+  With Ollama as the default backend it's a literal drop-in replacement endpoint.
+- **Forward-as-is** — what the client sent is what the backend receives.
+- **Negligible overhead** — unbuffered streaming pass-through; persistence on a
+  background writer; Vessel measures and displays its own per-request overhead.
+- **Graceful degradation** — unrecognized traffic is still proxied untouched and still
+  captured as raw bytes with timing. Silently: nothing is ever dropped or rejected.
+- **Local and private** — binds localhost by default; auth headers redacted at rest
+  (scheme + last 4 chars, recognizable for debugging).
 
-- Backend
-  - I'm only really familiar with dotnet. Any other tech would mean relying on AI to understand it fully.
-  - But dotnet comes with overhead of user needing framework installed - OR using prebuilt docker image
-  - So, open to recommendations
+## Supported traffic (v1)
 
-- Frontend
-  - I've no real front-end knowledge so leave this to recommendations. Web-based likely? Or Electron? Or..
+| Format | Covers |
+| --- | --- |
+| OpenAI chat completions | Ollama `/v1`, LM Studio, llama.cpp `llama-server`, Unsloth, any OpenAI-compatible server, OpenAI live API |
+| Anthropic messages | Anthropic live API, Ollama's Anthropic-compat endpoint |
+| Ollama native (`/api/chat`, `/api/generate`) | Ollama's own API — first-class, incl. its exact token/timing stats |
+| Raw fallback | Everything else — proxied and captured as-is |
 
-- Storage
-  - Just raw local file dumps  / JSONL??
-  - Or an actual store like SQLLite / DuckDB
-  - Postgres overkill
+Remote HTTPS backends (OpenAI/Anthropic live) work as ordinary outbound TLS from the
+proxy; clients speak plain HTTP to localhost.
 
-- UI:
-  - Session Details
-    - Request - Total/Failed
-    - Avg Latency
-    - Avg Tok/s
-    - Avg ttft
-    - "Reset" sesssion at any time
-  - History
-    - All requests in reverse order on left:
+## Backends, routing, tags
 
-    ```text
-    /chat/completions            4.5s
-    claude-opus-4-8          88 tok/s
-    [#AgentName]
-    ```
+- Multiple named backends configured in advance; one is the **default**.
+- Per-request routing by path prefix (`/b/{backend}/…`) or header
+  (`X-Vessel-Backend`); anything else goes to the default.
+- Free-form **tags** (e.g. agent name) via `X-Vessel-Tags` header or `/t/{tags}/…`
+  path prefix; shown in the UI and filterable.
 
-    - Clicking one shows:
-      - Stats
-      - Headers
-      - Prompts
-      - Response
-    - Filtering / searching
+## UI (embedded, web-based)
 
-## Backends
+- **Session stats bar** — total/failed requests, avg latency, avg tok/s, avg TTFT;
+  "Reset session" at any time (history is preserved).
+- **History** — reverse-chronological virtualized list with live in-flight requests;
+  free-text search (full-text over prompts/responses) and filters (backend, model, tag,
+  status, format, warnings).
+- **Detail view** — metrics (duration, TTFT, tok/s, token counts incl. cache read/write,
+  Vessel overhead, rate-limit headers, cost estimate), headers, rendered prompt and
+  response, tool calls as readable cards, raw JSON / raw stream toggles.
+- **Warning badges** — truncated responses (`stop_reason: length/max_tokens`), errors,
+  estimated-token counts, cold model loads, slow TTFT.
+- **Replay** — re-send any captured request, optionally against a different
+  backend/model; plus copy-as-curl. **Diff** any two requests side by side.
+- **Ollama extras** — loaded models / memory (`ollama ps`), server.log viewer.
 
-- One "Default" chosen by user (e.g Ollama) - Name + Port (and type?)
-- Multiple others can be setup in advance
-- Individual requests can be routed to different backends via HTTP header (views show where they were routed)
-- "Tags" can be added using HTTP header - e.g. to indicate "Agent Name" - which then flows through to UI (and filterable)
+## Storage
 
-## Ollama Specific
+SQLite, single file, written off the request path. Persistent, with easy clear-down and
+configurable caps (max requests / max DB size) so it never grows unbounded. Bodies
+compressed; full prompts stored by design — the README will state plainly that the DB
+contains your prompts.
 
-- If on Ollama could also expose ollama-specific details "ollama ps" memory usage - open/view ollama server.log
+## Tech (decided)
 
-## Anything else
-
-Open to suggestions of other features developers might find useful.
+.NET + YARP on Kestrel, SQLite (WAL + FTS5), embedded React + Vite + Tailwind +
+shadcn/ui SPA, SSE live feed. Shipped as a self-contained single-file executable per
+platform — no runtime install, no Docker required. Rationale and alternatives
+considered: architecture.md §12.

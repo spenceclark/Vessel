@@ -91,7 +91,7 @@ Requests are routed in this precedence order:
 3. **Default backend**: anything else. This makes Vessel a literal drop-in for Ollama:
    point any Ollama client at `http://localhost:4550` and it just works.
 
-Unknown backend name → `502` with a JSON error naming the valid backends (never silently
+Unknown backend name → `404` with a JSON error naming the valid backends (never silently
 mis-route).
 
 ### 3.3 Tags
