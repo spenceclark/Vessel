@@ -62,18 +62,35 @@ public static class ConfigLoader
         Timeouts = new TimeoutConfig(),
     };
 
-    private static void Validate(VesselConfig config, string path)
+    /// <summary>
+    /// D7 — public so <c>ConfigStore.Apply</c> (the <c>PUT /vessel/api/config</c> path) can
+    /// validate a candidate config with the exact same rules as startup, before persisting
+    /// or applying anything.
+    /// </summary>
+    public static void Validate(VesselConfig config, string path)
     {
         if (config.Backends.Count == 0)
         {
             throw new ConfigException($"config '{path}': no backends configured");
         }
 
+        // Dictionary<string, BackendConfig> keys are case-sensitive, so two names differing
+        // only in case (e.g. "ollama" and "Ollama") both survive JSON deserialization as
+        // distinct entries — undetected here, they'd silently collide in BackendRegistry's
+        // case-insensitive lookup (D7).
+        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach ((string name, BackendConfig backend) in config.Backends)
         {
             if (string.IsNullOrWhiteSpace(name))
             {
                 throw new ConfigException($"config '{path}': backend with empty name");
+            }
+
+            if (!seenNames.Add(name))
+            {
+                throw new ConfigException(
+                    $"config '{path}': duplicate backend name '{name}' (backend names are case-insensitive)");
             }
 
             if (!Uri.TryCreate(backend.BaseUrl, UriKind.Absolute, out Uri? uri)

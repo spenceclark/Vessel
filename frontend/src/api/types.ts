@@ -84,6 +84,65 @@ export interface StatusPayload {
 /** The `session` scope this UI is currently viewing: a specific session's id, or "all" history. */
 export type SessionScope = number | 'all'
 
+// Phase 4 — filters, facets, clear, config.
+
+export interface RequestFilters {
+  q: string
+  backend: string | null
+  model: string | null
+  format: string | null
+  tag: string | null
+  status: 'all' | 'ok' | 'error'
+  warnedOnly: boolean
+}
+
+export const EMPTY_FILTERS: RequestFilters = {
+  q: '',
+  backend: null,
+  model: null,
+  format: null,
+  tag: null,
+  status: 'all',
+  warnedOnly: false,
+}
+
+export function filtersActive(f: RequestFilters): boolean {
+  return f.q !== '' || f.backend !== null || f.model !== null || f.format !== null
+    || f.tag !== null || f.status !== 'all' || f.warnedOnly
+}
+
+export interface FacetsResponse {
+  backends: string[]
+  models: string[]
+  tags: string[]
+  formats: string[]
+}
+
+export interface ClearResponse {
+  deleted: number
+}
+
+export interface BackendConfigDto {
+  baseUrl: string
+  type: string
+  injectStreamUsage?: boolean
+}
+
+export interface VesselConfigDto {
+  listen: string
+  defaultBackend: string
+  backends: Record<string, BackendConfigDto>
+  timeouts: { activitySeconds: number }
+  retention: { maxRequests: number; maxDbSizeMb: number }
+  capture: { maxBodyMb: number }
+  warnings: { slowTtftMs: number }
+}
+
+export interface ConfigApplyResult {
+  applied: boolean
+  restartRequired: string[]
+}
+
 // SSE lifecycle events (D5).
 
 export interface StartedEvent {

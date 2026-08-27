@@ -40,7 +40,7 @@ catch (ConfigException ex)
 // own location rule.
 string dbPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath))!, "vessel.db");
 
-WebApplication app = VesselApp.Build(config, dbPath);
+WebApplication app = VesselApp.Build(config, dbPath, configPath);
 await app.StartAsync();
 
 string listen = app.ListenAddress();

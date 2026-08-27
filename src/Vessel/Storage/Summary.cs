@@ -104,3 +104,9 @@ public sealed record StatsResponse(
 
 /// <summary>D3/D4 — a <c>sessions</c> marker row: <c>GET/POST /sessions</c> wire shape.</summary>
 public sealed record SessionInfo(long Id, string StartedAt, string? Name);
+
+/// <summary>
+/// D2 — <c>GET /requests/facets</c> response: distinct values for the filter-bar
+/// dropdowns, scoped like the list. No counts.
+/// </summary>
+public sealed record FacetsResponse(string[] Backends, string[] Models, string[] Tags, string[] Formats);

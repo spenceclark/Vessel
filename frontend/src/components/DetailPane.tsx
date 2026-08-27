@@ -1,26 +1,45 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/client'
 import type { HeaderMap } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { PrettyJson } from '@/components/PrettyJson'
+import { MessageView } from '@/components/MessageView'
+import { renderRequest, renderResponse } from '@/render'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatMs, formatTimestamp, formatTokPerSec, formatTokenCount } from '@/lib/format'
 import { warningLabel } from '@/lib/warnings'
 import { cn } from '@/lib/utils'
 
 type TabKey = 'overview' | 'request' | 'response' | 'headers'
+type ViewMode = 'rendered' | 'raw'
 
-/** D6 — the right-hand detail pane: Overview / Request / Response / Headers, raw JSON only this phase. */
+/**
+ * D6/D4 — the right-hand detail pane: Overview / Request / Response / Headers. Request and
+ * Response each default to the rendered message view (D4) when extraction succeeds, with a
+ * toggle back to the raw-JSON view Phase 3 shipped — kept exactly as-is, on every tab,
+ * regardless of format.
+ */
 export function DetailPane({ id }: { id: number | null }) {
   const [tab, setTab] = useState<TabKey>('overview')
   const [responseView, setResponseView] = useState<'reassembled' | 'raw'>('reassembled')
+  const [requestDisplay, setRequestDisplay] = useState<ViewMode>('rendered')
+  const [responseDisplay, setResponseDisplay] = useState<ViewMode>('rendered')
 
   const query = useQuery({
     queryKey: ['request', id],
     queryFn: () => api.getRequest(id as number),
     enabled: id !== null,
   })
+
+  const requestRendered = useMemo(() => (query.data ? renderRequest(query.data) : null), [query.data])
+  const responseRendered = useMemo(() => (query.data ? renderResponse(query.data) : null), [query.data])
+
+  useEffect(() => {
+    setResponseView('reassembled')
+    setRequestDisplay('rendered')
+    setResponseDisplay('rendered')
+  }, [id])
 
   if (id === null) {
     return (
@@ -54,39 +73,51 @@ export function DetailPane({ id }: { id: number | null }) {
         </TabsContent>
 
         <TabsContent value="request">
-          <PrettyJson body={detail.requestBody} emptyLabel="No request body" />
+          {requestRendered && <ViewModeToggle mode={requestDisplay} onChange={setRequestDisplay} />}
+          {requestDisplay === 'rendered' && requestRendered ? (
+            <MessageView view={requestRendered} />
+          ) : (
+            <PrettyJson body={detail.requestBody} emptyLabel="No request body" />
+          )}
         </TabsContent>
 
         <TabsContent value="response">
-          {detail.streamed && detail.responseRaw && (
-            <div className="flex items-center gap-2 border-b border-[var(--border)] px-2 py-1 text-xs">
-              <span className="text-[var(--muted)]">View:</span>
-              <button
-                type="button"
-                onClick={() => setResponseView('reassembled')}
-                className={cn(
-                  'rounded px-2 py-0.5',
-                  responseView === 'reassembled' ? 'bg-[var(--card)] font-medium' : 'text-[var(--muted)]',
-                )}
-              >
-                Reassembled
-              </button>
-              <button
-                type="button"
-                onClick={() => setResponseView('raw')}
-                className={cn(
-                  'rounded px-2 py-0.5',
-                  responseView === 'raw' ? 'bg-[var(--card)] font-medium' : 'text-[var(--muted)]',
-                )}
-              >
-                Raw stream
-              </button>
-            </div>
+          {responseRendered && <ViewModeToggle mode={responseDisplay} onChange={setResponseDisplay} />}
+          {responseDisplay === 'rendered' && responseRendered ? (
+            <MessageView view={responseRendered} />
+          ) : (
+            <>
+              {detail.streamed && detail.responseRaw && (
+                <div className="flex items-center gap-2 border-b border-[var(--border)] px-2 py-1 text-xs">
+                  <span className="text-[var(--muted)]">View:</span>
+                  <button
+                    type="button"
+                    onClick={() => setResponseView('reassembled')}
+                    className={cn(
+                      'rounded px-2 py-0.5',
+                      responseView === 'reassembled' ? 'bg-[var(--card)] font-medium' : 'text-[var(--muted)]',
+                    )}
+                  >
+                    Reassembled
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setResponseView('raw')}
+                    className={cn(
+                      'rounded px-2 py-0.5',
+                      responseView === 'raw' ? 'bg-[var(--card)] font-medium' : 'text-[var(--muted)]',
+                    )}
+                  >
+                    Raw stream
+                  </button>
+                </div>
+              )}
+              <PrettyJson
+                body={responseView === 'raw' && detail.streamed ? detail.responseRaw : detail.responseBody}
+                emptyLabel="No response body"
+              />
+            </>
           )}
-          <PrettyJson
-            body={responseView === 'raw' && detail.streamed ? detail.responseRaw : detail.responseBody}
-            emptyLabel="No response body"
-          />
         </TabsContent>
 
         <TabsContent value="headers" className="p-3">
@@ -153,7 +184,12 @@ function OverviewTab({ detail, isError }: { detail: import('@/api/types').Reques
           <Field label="Cached read" value={formatTokenCount(detail.tokensCachedRead, false)} />
           <Field label="Cached write" value={formatTokenCount(detail.tokensCachedWrite, false)} />
         </div>
+        {detail.format === 'anthropic-messages' && (detail.tokensCachedRead ?? 0) > 0 && (
+          <p className="mt-1 text-xs text-[var(--muted)]">Anthropic's "In" already includes cached tokens.</p>
+        )}
       </div>
+
+      <RateLimitTable headers={detail.responseHeaders} />
 
       {detail.tags.length > 0 && (
         <div>
@@ -167,6 +203,81 @@ function OverviewTab({ detail, isError }: { detail: import('@/api/types').Reques
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+const RATE_LIMIT_PREFIX = /^(x-ratelimit-|anthropic-ratelimit-)/i
+
+/**
+ * D5 — client-side scan of the response headers for `x-ratelimit-*` /
+ * `anthropic-ratelimit-*`, grouped by the middle segment (e.g. "requests", "input-tokens")
+ * into limit/remaining/reset rows. Rendered only when at least one such header exists.
+ */
+function RateLimitTable({ headers }: { headers: import('@/api/types').HeaderMap | null }) {
+  if (!headers) return null
+
+  const groups = new Map<string, { limit?: string; remaining?: string; reset?: string }>()
+  for (const [name, values] of Object.entries(headers)) {
+    if (!RATE_LIMIT_PREFIX.test(name)) continue
+    const rest = name.replace(RATE_LIMIT_PREFIX, '')
+    const [kind, ...rest2] = rest.split('-')
+    const group = rest2.join('-') || 'default'
+    const entry = groups.get(group) ?? {}
+    const value = values.join(', ')
+    if (kind === 'limit') entry.limit = value
+    else if (kind === 'remaining') entry.remaining = value
+    else if (kind === 'reset') entry.reset = value
+    groups.set(group, entry)
+  }
+
+  if (groups.size === 0) return null
+
+  return (
+    <div>
+      <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Rate limits</h3>
+      <table className="w-full border-collapse text-xs">
+        <thead>
+          <tr className="text-[var(--muted)]">
+            <th className="py-1 pr-2 text-left font-medium">&nbsp;</th>
+            <th className="py-1 pr-2 text-left font-medium">Limit</th>
+            <th className="py-1 pr-2 text-left font-medium">Remaining</th>
+            <th className="py-1 text-left font-medium">Reset</th>
+          </tr>
+        </thead>
+        <tbody>
+          {[...groups.entries()].map(([name, row]) => (
+            <tr key={name} className="border-t border-[var(--border)]">
+              <td className="py-1 pr-2 font-medium">{name}</td>
+              <td className="py-1 pr-2">{row.limit ?? '—'}</td>
+              <td className="py-1 pr-2">{row.remaining ?? '—'}</td>
+              <td className="py-1">{row.reset ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function ViewModeToggle({ mode, onChange }: { mode: ViewMode; onChange: (mode: ViewMode) => void }) {
+  return (
+    <div className="flex items-center gap-2 border-b border-[var(--border)] px-2 py-1 text-xs">
+      <span className="text-[var(--muted)]">View:</span>
+      <button
+        type="button"
+        onClick={() => onChange('rendered')}
+        className={cn('rounded px-2 py-0.5', mode === 'rendered' ? 'bg-[var(--card)] font-medium' : 'text-[var(--muted)]')}
+      >
+        Rendered
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange('raw')}
+        className={cn('rounded px-2 py-0.5', mode === 'raw' ? 'bg-[var(--card)] font-medium' : 'text-[var(--muted)]')}
+      >
+        Raw JSON
+      </button>
     </div>
   )
 }

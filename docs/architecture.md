@@ -348,6 +348,39 @@ editable in the UI:
 }
 ```
 
+### 9.1 Live apply (Phase 4)
+
+`GET`/`PUT /vessel/api/config` are backed by a `ConfigStore` singleton: an immutable
+`VesselConfig` snapshot behind `Volatile.Read`, plus a version counter bumped on every
+successful `PUT`. `PUT` validates the candidate with the exact same rules `ConfigLoader`
+applies at startup (a bad config → `400` with the human validation message, nothing
+persisted or applied), then writes `vessel.json`, swaps the snapshot, and bumps the
+version — serialized under a lock, last write wins (single user, single machine).
+
+Every consumer that used to cache values from `VesselConfig` at construction now either
+reads `ConfigStore.Current` per-request/per-batch, or rebuilds its derived state lazily
+when the version has advanced since it last looked:
+
+- `BackendRegistry` rebuilds its name → backend map on the next access after the version
+  changes — add/edit/remove a backend, or change the default, and the very next request
+  sees it.
+- `ProxyHandler` reads `Capture.MaxBodyMb` and `Timeouts.ActivitySeconds` fresh at the top
+  of every request (one snapshot read, used consistently for that request even if a `PUT`
+  races concurrently).
+- `FormatEnricher` re-derives its backend-type map and slow-TTFT threshold on version
+  change.
+- The writer (`SqliteCaptureStore.EnforceRetention`) re-reads retention caps on every
+  batch, so a tightened cap takes effect on the next flush, not the next restart.
+
+**`listen` is the one field that doesn't apply live** — `PUT` still validates and persists
+it, and the response reports `restartRequired: ["listen"]` so the UI can banner it; Kestrel
+keeps serving on the address it already bound.
+
+In-flight requests are unaffected by a concurrent `PUT`: `RouteResolver.Resolve` runs once
+at the top of `ProxyHandler.Handle`, and the resulting `RouteDecision` (holding its own
+resolved `ResolvedBackend`) is what the rest of the request uses — removing or repointing
+that backend mid-flight never aborts traffic already in progress to it.
+
 ---
 
 ## 10. Frontend

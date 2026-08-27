@@ -99,13 +99,13 @@ came back".
 
 *Goal: findability and readability at 10k requests.*
 
-- [ ] FTS5 index + free-text search wired into the list (§6.2).
-- [ ] Full filter bar: backend, model, tag, status, format, session, warnings-only (§7).
-- [ ] Tags end-to-end: header + `/t/` path capture → row display → filter (§3.3).
-- [ ] Rendered message view: system/user/assistant blocks, markdown, long-content collapse.
-- [ ] **Tool calls as cards** — name, args, result, collapsible (§5.2).
-- [ ] Rate-limit headers + cache token metrics on Overview (§10).
-- [ ] Clear-all / clear-before-date; config editor page (backends, retention) (§7, §9).
+- [x] FTS5 index + free-text search wired into the list (§6.2).
+- [x] Full filter bar: backend, model, tag, status, format, session, warnings-only (§7).
+- [x] Tags end-to-end: header + `/t/` path capture → row display → filter (§3.3).
+- [x] Rendered message view: system/user/assistant blocks, markdown, long-content collapse.
+- [x] **Tool calls as cards** — name, args, result, collapsible (§5.2).
+- [x] Rate-limit headers + cache token metrics on Overview (§10).
+- [x] Clear-all / clear-before-date; config editor page (backends, retention) (§7, §9).
 
 **Done when:** "find that request from this morning where the agent got truncated" takes
 under ten seconds: filter warnings-only, or search a phrase, click, read.
@@ -153,7 +153,7 @@ captured request in under two minutes, without reading more than the quickstart.
 ## Risks to watch
 
 | Risk | Mitigation |
-|---|---|
+| --- | --- |
 | Streaming tee subtly alters timing/bytes (the whole product's credibility) | Phase 0 byte-identical verification; keep `vessel_overhead_ms` honest and visible |
 | Format drift (providers change SSE shapes) | Golden-file fixtures from real captures; raw fallback means drift degrades gracefully, never breaks proxying |
 | Trimming breaks YARP/SQLite at publish time | Test single-file publish in Phase 0, not Phase 6 |

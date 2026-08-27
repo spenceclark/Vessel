@@ -12,7 +12,7 @@ namespace Vessel;
 /// <summary>Builds the Vessel host from a validated config. Shared by Program and the integration tests.</summary>
 public static class VesselApp
 {
-    public static WebApplication Build(VesselConfig config, string dbPath)
+    public static WebApplication Build(VesselConfig config, string dbPath, string configPath)
     {
         var builder = WebApplication.CreateSlimBuilder();
 
@@ -33,15 +33,15 @@ public static class VesselApp
         });
 
         builder.Services.AddHttpForwarder();
-        builder.Services.AddSingleton(config);
+        builder.Services.AddSingleton(sp => new ConfigStore(config, configPath));
         builder.Services.AddSingleton<BackendRegistry>();
         builder.Services.AddSingleton<ProxyHandler>();
         builder.Services.AddSingleton<CaptureChannel>();
         builder.Services.AddSingleton<CaptureEvents>();
         builder.Services.AddSingleton<CurrentSession>();
         builder.Services.AddSingleton(sp => new FormatEnricher(
-            sp.GetRequiredService<VesselConfig>(), sp.GetService<ILogger<FormatEnricher>>()));
-        builder.Services.AddSingleton(sp => new SqliteCaptureStore(dbPath, sp.GetRequiredService<VesselConfig>()));
+            sp.GetRequiredService<ConfigStore>(), sp.GetService<ILogger<FormatEnricher>>()));
+        builder.Services.AddSingleton(sp => new SqliteCaptureStore(dbPath, sp.GetRequiredService<ConfigStore>()));
         builder.Services.AddSingleton<ICaptureStore>(sp => sp.GetRequiredService<SqliteCaptureStore>());
         builder.Services.AddSingleton(sp => new SqliteReadStore(dbPath));
         // Registered before Kestrel's own hosted service starts the listener, so the
@@ -54,10 +54,14 @@ public static class VesselApp
         // never proxied (D7).
         app.MapGet("/vessel/api/status", (RequestDelegate)StatusEndpoint.Handle);
         app.MapGet("/vessel/api/requests", (RequestDelegate)RequestsEndpoints.List);
+        app.MapDelete("/vessel/api/requests", (RequestDelegate)RequestsEndpoints.Delete);
+        app.MapGet("/vessel/api/requests/facets", (RequestDelegate)FacetsEndpoint.Handle);
         app.MapGet("/vessel/api/requests/{id:long}", (RequestDelegate)RequestsEndpoints.Detail);
         app.MapGet("/vessel/api/stats", (RequestDelegate)StatsEndpoint.Handle);
         app.MapGet("/vessel/api/sessions", (RequestDelegate)SessionsEndpoints.List);
         app.MapPost("/vessel/api/sessions", (RequestDelegate)SessionsEndpoints.Create);
+        app.MapGet("/vessel/api/config", (RequestDelegate)ConfigEndpoints.Get);
+        app.MapPut("/vessel/api/config", (RequestDelegate)ConfigEndpoints.Put);
         app.MapGet("/vessel/api/events", (RequestDelegate)EventsEndpoint.Handle);
         app.Map("/vessel/api/{**rest}", (RequestDelegate)(context =>
             VesselErrors.Write(

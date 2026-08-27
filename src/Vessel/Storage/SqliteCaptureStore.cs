@@ -8,9 +8,29 @@ namespace Vessel.Storage;
 /// <summary>
 /// The single-writer SQLite store: schema migrations, batched inserts, retention.
 /// Only the background writer touches this; WAL lets future UI reads run concurrently.
+/// D7 — two constructors: a static <see cref="VesselConfig"/> for tests (unchanged
+/// behavior), and a live <see cref="ConfigStore"/> for the running app, so retention
+/// re-reads its config on every batch instead of freezing it at construction.
 /// </summary>
-public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : ICaptureStore, IDisposable
+public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
 {
+    private readonly string _dbPath;
+    private readonly VesselConfig? _staticConfig;
+    private readonly ConfigStore? _configStore;
+
+    public SqliteCaptureStore(string dbPath, VesselConfig config)
+    {
+        _dbPath = dbPath;
+        _staticConfig = config;
+    }
+
+    public SqliteCaptureStore(string dbPath, ConfigStore configStore)
+    {
+        _dbPath = dbPath;
+        _configStore = configStore;
+    }
+
+    private RetentionConfig Retention => (_configStore?.Current ?? _staticConfig!).Retention;
 
     private static readonly string[] _migrations =
     [
@@ -67,14 +87,14 @@ public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : ICa
 
     private SqliteConnection? _connection;
 
-    public string DbPath => dbPath;
+    public string DbPath => _dbPath;
 
     /// <summary>Opens the database, applies pragmas and pending migrations. Fail-fast at startup.</summary>
     public void Initialize()
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = dbPath,
+            DataSource = _dbPath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Pooling = false,
         }.ToString());
@@ -266,17 +286,21 @@ public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : ICa
         return new SessionInfo(id, startedAt, name);
     }
 
-    /// <summary>§6.4 — both caps, oldest-first, run by the writer after each batch.</summary>
+    /// <summary>
+    /// §6.4 — both caps, oldest-first, run by the writer after each batch. D7 — reads
+    /// <see cref="Retention"/> fresh each call, so a live config PUT takes effect on the
+    /// very next batch.
+    /// </summary>
     public void EnforceRetention()
     {
-        long excess = ExecuteScalar("SELECT COUNT(*) FROM requests") - config.Retention.MaxRequests;
+        long excess = ExecuteScalar("SELECT COUNT(*) FROM requests") - Retention.MaxRequests;
         if (excess > 0)
         {
             DeleteOldest(excess);
             Execute("PRAGMA incremental_vacuum");
         }
 
-        long maxBytes = (long)config.Retention.MaxDbSizeMb * 1024 * 1024;
+        long maxBytes = (long)Retention.MaxDbSizeMb * 1024 * 1024;
         while (DatabaseSizeBytes() > maxBytes)
         {
             // Oldest-first, ~1% of rows per iteration: coarse enough to converge
@@ -328,6 +352,51 @@ public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : ICa
         }
 
         transaction.Commit();
+        return deleted;
+    }
+
+    /// <summary>
+    /// D6 — deletes <c>requests</c> rows (and their FTS rows) matching
+    /// <paramref name="beforeIso"/>, or every row when null, in one transaction — same
+    /// shape as <see cref="DeleteOldest"/>, filtered by <c>started_at</c> instead of an
+    /// oldest-<c>N</c> limit. <c>incremental_vacuum</c> runs after commit so the file
+    /// actually shrinks.
+    /// </summary>
+    public int Clear(string? beforeIso)
+    {
+        SqliteConnection connection = Connected();
+        using SqliteTransaction transaction = connection.BeginTransaction();
+
+        string filter = beforeIso is null ? "" : "WHERE started_at < $before";
+        string matching = $"SELECT id FROM requests {filter}";
+
+        using (SqliteCommand fts = connection.CreateCommand())
+        {
+            fts.Transaction = transaction;
+            fts.CommandText = $"DELETE FROM requests_fts WHERE rowid IN ({matching})";
+            if (beforeIso is not null)
+            {
+                AddTo(fts, "$before").Value = beforeIso;
+            }
+
+            fts.ExecuteNonQuery();
+        }
+
+        int deleted;
+        using (SqliteCommand rows = connection.CreateCommand())
+        {
+            rows.Transaction = transaction;
+            rows.CommandText = $"DELETE FROM requests {filter}";
+            if (beforeIso is not null)
+            {
+                AddTo(rows, "$before").Value = beforeIso;
+            }
+
+            deleted = rows.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        Execute("PRAGMA incremental_vacuum");
         return deleted;
     }
 

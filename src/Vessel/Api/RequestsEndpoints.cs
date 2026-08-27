@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text.Json;
+using Vessel.Capture;
 using Vessel.Storage;
 
 namespace Vessel.Api;
@@ -29,15 +31,79 @@ public static class RequestsEndpoints
             ? parsedSession
             : null;
 
-        RequestListResponse response = store.ListRequests(limit, before, session);
+        string? q = NullIfEmpty(context.Request.Query["q"]);
+        string? backend = NullIfEmpty(context.Request.Query["backend"]);
+        string? model = NullIfEmpty(context.Request.Query["model"]);
+        string? format = NullIfEmpty(context.Request.Query["format"]);
+        string? tag = NullIfEmpty(context.Request.Query["tag"]);
+        string? status = NullIfEmpty(context.Request.Query["status"]);
+        bool warned = context.Request.Query["warned"] == "1";
+
+        RequestListResponse response = store.ListRequests(
+            limit, before, session, q, backend, model, format, tag, status, warned);
         context.Response.ContentType = "application/json; charset=utf-8";
         await JsonSerializer.SerializeAsync(
             context.Response.Body, response, ApiJsonContext.Default.RequestListResponse, context.RequestAborted);
     }
 
+    /// <summary>
+    /// D6 — <c>DELETE /requests?scope=all</c> or <c>?before=&lt;ISO-8601&gt;</c>. The delete
+    /// runs on the writer thread (single-writer invariant); this handler never touches
+    /// SQLite directly.
+    /// </summary>
+    public static async Task Delete(HttpContext context)
+    {
+        string? scope = NullIfEmpty(context.Request.Query["scope"]);
+        string? beforeRaw = NullIfEmpty(context.Request.Query["before"]);
+
+        string? beforeIso;
+        if (scope == "all" && beforeRaw is null)
+        {
+            beforeIso = null;
+        }
+        else if (scope is null && beforeRaw is not null)
+        {
+            if (!DateTime.TryParse(
+                    beforeRaw, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTime parsed))
+            {
+                await VesselErrors.Write(
+                    context, StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
+                    $"'before' is not a valid ISO-8601 timestamp: {beforeRaw}");
+                return;
+            }
+
+            beforeIso = parsed.ToUniversalTime().ToString("o");
+        }
+        else
+        {
+            await VesselErrors.Write(
+                context, StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
+                "specify exactly one of ?scope=all or ?before=<ISO-8601>");
+            return;
+        }
+
+        var channel = context.RequestServices.GetRequiredService<CaptureChannel>();
+        var completion = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        channel.Enqueue(new ClearCommand(beforeIso, completion));
+        int deleted = await completion.Task;
+
+        context.Response.ContentType = "application/json; charset=utf-8";
+        await JsonSerializer.SerializeAsync(
+            context.Response.Body, new ClearResponse(deleted), ApiJsonContext.Default.ClearResponse, context.RequestAborted);
+    }
+
+    private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+
     public static async Task Detail(HttpContext context)
     {
-        long id = long.Parse((string)context.Request.RouteValues["id"]!);
+        if (!long.TryParse((string?)context.Request.RouteValues["id"], out long id))
+        {
+            await VesselErrors.Write(
+                context, StatusCodes.Status404NotFound, VesselErrors.NotFound,
+                $"no such request: {context.Request.RouteValues["id"]}");
+            return;
+        }
+
         var store = context.RequestServices.GetRequiredService<SqliteReadStore>();
 
         RequestDetail? detail = store.GetDetail(id);

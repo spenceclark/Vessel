@@ -22,25 +22,83 @@ public sealed class SqliteReadStore(string dbPath)
 
     private const int SummaryColumnCount = 25;
 
-    /// <summary>D3 — reverse-chron by id; <paramref name="before"/> and <paramref name="sessionId"/> are the only filters this phase.</summary>
-    public RequestListResponse ListRequests(int limit, long? before, long? sessionId)
+    /// <summary>
+    /// D3/D1 — reverse-chron by id, with every filter combinable: <paramref name="before"/>
+    /// and <paramref name="sessionId"/> (the cursor and session scope), plus <paramref
+    /// name="q"/> (FTS5, sanitized so hostile input can never throw a syntax error),
+    /// <paramref name="backend"/> (case-insensitive exact), <paramref name="model"/>/
+    /// <paramref name="format"/> (exact), <paramref name="tag"/> (exact element match,
+    /// never substring), <paramref name="status"/> (<c>ok</c>|<c>error</c>), and
+    /// <paramref name="warned"/> (warnings present). <c>requests_fts</c> is joined only
+    /// when <paramref name="q"/> actually sanitizes to something — an unconditional join
+    /// would silently drop rows that never got an FTS row (no prompt/response text, e.g.
+    /// raw fallback) from every unfiltered list call.
+    /// </summary>
+    public RequestListResponse ListRequests(
+        int limit, long? before, long? sessionId,
+        string? q = null, string? backend = null, string? model = null, string? format = null,
+        string? tag = null, string? status = null, bool warned = false)
     {
         using SqliteConnection connection = Open();
         using SqliteCommand command = connection.CreateCommand();
 
+        string? ftsQuery = SanitizeFtsQuery(q);
+
         var where = new List<string>();
         if (before is not null)
         {
-            where.Add("id < $before");
+            where.Add("requests.id < $before");
         }
 
         if (sessionId is not null)
         {
-            where.Add("session_id = $session");
+            where.Add("requests.session_id = $session");
         }
 
+        if (backend is not null)
+        {
+            where.Add("requests.backend = $backend COLLATE NOCASE");
+        }
+
+        if (model is not null)
+        {
+            where.Add("requests.model = $model");
+        }
+
+        if (format is not null)
+        {
+            where.Add("requests.format = $format");
+        }
+
+        if (tag is not null)
+        {
+            where.Add("EXISTS (SELECT 1 FROM json_each(COALESCE(requests.tags, '[]')) WHERE json_each.value = $tag)");
+        }
+
+        if (status == "ok")
+        {
+            where.Add("(requests.error IS NULL AND (requests.status_code < 400 OR requests.status_code IS NULL))");
+        }
+        else if (status == "error")
+        {
+            where.Add("(requests.error IS NOT NULL OR requests.status_code >= 400)");
+        }
+
+        if (warned)
+        {
+            where.Add("requests.warnings IS NOT NULL");
+        }
+
+        if (ftsQuery is not null)
+        {
+            where.Add("requests_fts MATCH $q");
+        }
+
+        string fromClause = ftsQuery is not null
+            ? "FROM requests JOIN requests_fts ON requests_fts.rowid = requests.id"
+            : "FROM requests";
         string whereClause = where.Count == 0 ? "" : "WHERE " + string.Join(" AND ", where);
-        command.CommandText = $"SELECT {SummaryColumns} FROM requests {whereClause} ORDER BY id DESC LIMIT $limit";
+        command.CommandText = $"SELECT {SummaryColumns} {fromClause} {whereClause} ORDER BY requests.id DESC LIMIT $limit";
 
         if (before is long beforeVal)
         {
@@ -50,6 +108,31 @@ public sealed class SqliteReadStore(string dbPath)
         if (sessionId is long sessionVal)
         {
             command.Parameters.AddWithValue("$session", sessionVal);
+        }
+
+        if (backend is not null)
+        {
+            command.Parameters.AddWithValue("$backend", backend);
+        }
+
+        if (model is not null)
+        {
+            command.Parameters.AddWithValue("$model", model);
+        }
+
+        if (format is not null)
+        {
+            command.Parameters.AddWithValue("$format", format);
+        }
+
+        if (tag is not null)
+        {
+            command.Parameters.AddWithValue("$tag", tag);
+        }
+
+        if (ftsQuery is not null)
+        {
+            command.Parameters.AddWithValue("$q", ftsQuery);
         }
 
         // Fetch one extra row so "is there a next page" doesn't require a second query.
@@ -72,6 +155,98 @@ public sealed class SqliteReadStore(string dbPath)
         }
 
         return new RequestListResponse(rows.ToArray(), nextBefore);
+    }
+
+    /// <summary>
+    /// D2 — distinct <c>backend</c>/<c>model</c>/<c>format</c>/<c>tag</c> values, scoped
+    /// like the list (session or all), each capped at 100 and alphabetical. No counts —
+    /// the dropdowns don't need them, and it keeps the query cheap.
+    /// </summary>
+    public FacetsResponse GetFacets(long? sessionId)
+    {
+        using SqliteConnection connection = Open();
+
+        string[] Distinct(string column)
+        {
+            var conditions = new List<string> { $"{column} IS NOT NULL" };
+            if (sessionId is not null)
+            {
+                conditions.Add("session_id = $session");
+            }
+
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText =
+                $"SELECT DISTINCT {column} FROM requests WHERE {string.Join(" AND ", conditions)} ORDER BY {column} LIMIT 100";
+            if (sessionId is long s)
+            {
+                command.Parameters.AddWithValue("$session", s);
+            }
+
+            var values = new List<string>();
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                values.Add(reader.GetString(0));
+            }
+
+            return values.ToArray();
+        }
+
+        string[] backends = Distinct("backend");
+        string[] models = Distinct("model");
+        string[] formats = Distinct("format");
+
+        var tagConditions = new List<string> { "json_each.value IS NOT NULL" };
+        if (sessionId is not null)
+        {
+            tagConditions.Add("requests.session_id = $session");
+        }
+
+        using SqliteCommand tagCommand = connection.CreateCommand();
+        tagCommand.CommandText =
+            $"""
+            SELECT DISTINCT json_each.value FROM requests, json_each(COALESCE(requests.tags, '[]'))
+            WHERE {string.Join(" AND ", tagConditions)}
+            ORDER BY json_each.value LIMIT 100
+            """;
+        if (sessionId is long sid)
+        {
+            tagCommand.Parameters.AddWithValue("$session", sid);
+        }
+
+        var tags = new List<string>();
+        using (SqliteDataReader tagReader = tagCommand.ExecuteReader())
+        {
+            while (tagReader.Read())
+            {
+                tags.Add(tagReader.GetString(0));
+            }
+        }
+
+        return new FacetsResponse(backends, models, tags.ToArray(), formats);
+    }
+
+    /// <summary>
+    /// D1 — splits on whitespace, wraps each token in a quoted FTS5 phrase (doubling
+    /// embedded quotes to escape them), joins with implicit AND. This means FTS operators
+    /// (<c>AND</c>, <c>(</c>, <c>*</c>, <c>NEAR</c>, …) are always literal text in the
+    /// user's query — never a syntax error. Empty/whitespace-only input returns null (no
+    /// filter, not "no results").
+    /// </summary>
+    private static string? SanitizeFtsQuery(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        string[] tokens = raw.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0)
+        {
+            return null;
+        }
+
+        return string.Join(" ", tokens.Select(t => "\"" + t.Replace("\"", "\"\"") + "\""));
     }
 
     /// <summary>D3 — full detail with bodies decompressed server-side, or null for an unknown id (caller writes 404).</summary>

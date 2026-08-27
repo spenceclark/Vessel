@@ -21,4 +21,11 @@ public interface ICaptureStore
 
     /// <summary>D4 — inserts a new session marker row (the writer-thread-safe half of <c>POST /sessions</c>).</summary>
     SessionInfo CreateSession(string? name);
+
+    /// <summary>
+    /// D6 — deletes <c>requests</c> rows (and their FTS rows) matching
+    /// <paramref name="beforeIso"/>, or every row when null. Returns the number of
+    /// <c>requests</c> rows deleted.
+    /// </summary>
+    int Clear(string? beforeIso);
 }

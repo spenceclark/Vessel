@@ -7,7 +7,7 @@ namespace Vessel.Tests;
 
 public class RouteResolverTests
 {
-    private static readonly BackendRegistry _registry = new(new VesselConfig
+    private static readonly BackendRegistry _registry = new(new ConfigStore(new VesselConfig
     {
         DefaultBackend = "ollama",
         Backends = new Dictionary<string, BackendConfig>
@@ -15,7 +15,7 @@ public class RouteResolverTests
             ["ollama"] = new() { BaseUrl = "http://localhost:11434", Type = "ollama" },
             ["openai"] = new() { BaseUrl = "https://api.openai.com", Type = "openai" },
         },
-    });
+    }, "unused.json"));
 
     private static RouteDecision Resolve(string path, params (string Name, string Value)[] headers)
     {

@@ -19,8 +19,14 @@ namespace Vessel.Api;
 [JsonSerializable(typeof(SessionInfo))]
 [JsonSerializable(typeof(SessionInfo[]))]
 [JsonSerializable(typeof(CreateSessionRequest))]
+[JsonSerializable(typeof(FacetsResponse))]
+[JsonSerializable(typeof(ClearResponse))]
+[JsonSerializable(typeof(Vessel.Config.ConfigApplyResult))]
 [JsonSerializable(typeof(JsonNode))]
 public sealed partial class ApiJsonContext : JsonSerializerContext;
 
 /// <summary>D3 — optional <c>POST /sessions</c> request body.</summary>
 public sealed record CreateSessionRequest(string? Name);
+
+/// <summary>D6 — <c>DELETE /requests</c> response.</summary>
+public sealed record ClearResponse(int Deleted);

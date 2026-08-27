@@ -131,6 +131,9 @@ public sealed class CaptureWriterService(
                 case CreateSessionCommand command:
                     RunCreateSession(command);
                     break;
+                case ClearCommand command:
+                    RunClear(command);
+                    break;
             }
         }
 
@@ -187,6 +190,19 @@ public sealed class CaptureWriterService(
         try
         {
             command.Completion.TrySetResult(store.CreateSession(command.Name));
+        }
+        catch (Exception ex)
+        {
+            command.Completion.TrySetException(ex);
+        }
+    }
+
+    /// <summary>D6 — runs a <c>DELETE /requests</c> clear on the writer thread; never throws out.</summary>
+    private void RunClear(ClearCommand command)
+    {
+        try
+        {
+            command.Completion.TrySetResult(store.Clear(command.BeforeIso));
         }
         catch (Exception ex)
         {

@@ -18,3 +18,11 @@ public sealed record CapturedRequest(CaptureRecord Record) : CaptureWork;
 /// write connection or a lock dance.
 /// </summary>
 public sealed record CreateSessionCommand(string? Name, TaskCompletionSource<SessionInfo> Completion) : CaptureWork;
+
+/// <summary>
+/// D6 — <c>DELETE /requests</c> enqueues this: <see cref="BeforeIso"/> null means "clear
+/// all", otherwise an ISO-8601 UTC timestamp ("clear before"). Runs on the writer thread,
+/// like <see cref="CreateSessionCommand"/>; <see cref="Completion"/> carries the number of
+/// <c>requests</c> rows deleted.
+/// </summary>
+public sealed record ClearCommand(string? BeforeIso, TaskCompletionSource<int> Completion) : CaptureWork;

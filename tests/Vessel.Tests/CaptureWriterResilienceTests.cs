@@ -62,6 +62,8 @@ public class CaptureWriterResilienceTests
         public SessionInfo CreateSession(string? name) =>
             new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name);
 
+        public int Clear(string? beforeIso) => 0;
+
         public int SnapshotAttempts()
         {
             lock (_lock)

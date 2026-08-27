@@ -16,6 +16,8 @@ public static class VesselErrors
     public const string UpstreamUnreachable = "upstream_unreachable";
     public const string UpstreamTimeout = "upstream_timeout";
     public const string NotFound = "not_found";
+    public const string InvalidRequest = "invalid_request";
+    public const string InvalidConfig = "invalid_config";
 
     /// <summary>Capture-only code (no response is written — nobody's listening).</summary>
     public const string ClientDisconnect = "client_disconnect";

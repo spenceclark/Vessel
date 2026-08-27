@@ -2,8 +2,11 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/client'
 import type { SessionScope } from '@/api/types'
+import { ConfigPanel } from '@/components/ConfigPanel'
+import { DataPanel } from '@/components/DataPanel'
 import { Button } from '@/components/ui/button'
-import { ConfirmDialog } from '@/components/ui/dialog'
+import { ConfirmDialog, Dialog } from '@/components/ui/dialog'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import { formatMs, formatTokPerSec } from '@/lib/format'
 
@@ -21,6 +24,8 @@ export function StatsBar({
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [resetting, setResetting] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<'data' | 'config'>('data')
 
   const statsQuery = useQuery({
     queryKey: ['stats', scope],
@@ -85,6 +90,15 @@ export function StatsBar({
         <Button variant="outline" size="sm" disabled={resetting} onClick={() => setConfirmOpen(true)}>
           Reset session
         </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Settings"
+          title="Data & config"
+          onClick={() => setSettingsOpen(true)}
+        >
+          ⚙
+        </Button>
       </div>
 
       {statusQuery.data && statusQuery.data.backends.length > 0 && (
@@ -107,6 +121,21 @@ export function StatsBar({
         onConfirm={handleConfirmReset}
         onCancel={() => setConfirmOpen(false)}
       />
+
+      <Dialog open={settingsOpen} title="Data & config" onClose={() => setSettingsOpen(false)} widthClassName="w-[620px]">
+        <Tabs value={settingsTab} onValueChange={(v) => setSettingsTab(v as 'data' | 'config')}>
+          <TabsList>
+            <TabsTrigger value="data">Data</TabsTrigger>
+            <TabsTrigger value="config">Config</TabsTrigger>
+          </TabsList>
+          <TabsContent value="data" className="pt-3">
+            <DataPanel />
+          </TabsContent>
+          <TabsContent value="config" className="pt-3">
+            <ConfigPanel />
+          </TabsContent>
+        </Tabs>
+      </Dialog>
     </div>
   )
 }

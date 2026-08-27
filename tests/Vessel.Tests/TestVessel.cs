@@ -18,6 +18,8 @@ public sealed class TestVessel : IAsyncDisposable
 
     public string DbPath { get; private set; } = null!;
 
+    public string ConfigPath { get; private set; } = null!;
+
     public static async Task<TestVessel> StartAsync(Action<VesselConfig>? mutate = null)
     {
         var vessel = new TestVessel
@@ -26,6 +28,7 @@ public sealed class TestVessel : IAsyncDisposable
             Stub = await StubBackend.StartAsync("stub"),
         };
         vessel.DbPath = Path.Combine(vessel._tempDir, "vessel.db");
+        vessel.ConfigPath = Path.Combine(vessel._tempDir, "vessel.json");
 
         var config = new VesselConfig
         {
@@ -38,7 +41,7 @@ public sealed class TestVessel : IAsyncDisposable
         };
         mutate?.Invoke(config);
 
-        vessel._app = VesselApp.Build(config, vessel.DbPath);
+        vessel._app = VesselApp.Build(config, vessel.DbPath, vessel.ConfigPath);
         await vessel._app.StartAsync();
         vessel.BaseUrl = vessel._app.ListenAddress();
         return vessel;

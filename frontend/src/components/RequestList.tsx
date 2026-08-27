@@ -1,46 +1,64 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '@/api/client'
-import type { RequestListResponse, SessionScope, Summary } from '@/api/types'
+import { filtersActive, type RequestFilters, type RequestListResponse, type SessionScope, type Summary } from '@/api/types'
 import { useEvents, useNowTick, type InFlightRequest } from '@/api/useEvents'
 import { InFlightRow, RequestRow } from '@/components/RequestRow'
 
 const PAGE_LIMIT = 100
 
 /**
- * D6 — reverse-chron virtualized history. In-flight rows (from SSE `started`, not yet
+ * D6/D3 — reverse-chron virtualized history. In-flight rows (from SSE `started`, not yet
  * `completed`) pin above the loaded pages with a live timer. A `completed` event with a
  * row inserts it straight into the first page's cache entry rather than triggering a
  * refetch — cheap, and it can never race a REST page's own cursor (D5: duplicates
- * resolved in favor of REST rows, checked by id before inserting).
+ * resolved in favor of REST rows, checked by id before inserting) — but only while no
+ * filter beyond session scope is active; a new row may not match the active filter, and
+ * refetching on every completion would defeat the cache, so instead a "new requests"
+ * pill appears for the user to refresh on demand.
  */
 export function RequestList({
   scope,
+  filters,
   selectedId,
   onSelect,
 }: {
   scope: SessionScope | null
+  filters: RequestFilters
   selectedId: number | null
   onSelect: (id: number) => void
 }) {
   const queryClient = useQueryClient()
   const parentRef = useRef<HTMLDivElement>(null)
+  const [newSinceFilter, setNewSinceFilter] = useState(0)
 
-  const queryKey = ['requests', scope] as const
+  const queryKey = ['requests', scope, filters] as const
+  const filtered = filtersActive(filters)
 
   const query = useInfiniteQuery({
     queryKey,
     queryFn: ({ pageParam }) =>
-      api.listRequests({ limit: PAGE_LIMIT, before: pageParam, session: scope ?? undefined }),
+      api.listRequests({ limit: PAGE_LIMIT, before: pageParam, session: scope ?? undefined, filters }),
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (lastPage) => lastPage.nextBefore ?? undefined,
     enabled: scope !== null,
   })
 
+  const queryKeySignature = JSON.stringify(queryKey)
+  useEffect(() => {
+    setNewSinceFilter(0)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryKeySignature])
+
   const { inFlight } = useEvents((row) => {
     if (!row || scope === null) return
     if (scope !== 'all' && row.sessionId !== scope) return
+
+    if (filtered) {
+      setNewSinceFilter((n) => n + 1)
+      return
+    }
 
     queryClient.setQueryData<InfiniteData<RequestListResponse, number | undefined>>(queryKey, (old) => {
       if (!old) return old
@@ -77,6 +95,18 @@ export function RequestList({
 
   return (
     <div ref={parentRef} className="h-full overflow-y-auto">
+      {newSinceFilter > 0 && (
+        <button
+          type="button"
+          onClick={() => {
+            setNewSinceFilter(0)
+            void queryClient.invalidateQueries({ queryKey })
+          }}
+          className="sticky top-0 z-10 w-full border-b border-[var(--border)] bg-[var(--accent)]/10 px-3 py-1.5 text-center text-xs font-medium text-[var(--accent)] hover:bg-[var(--accent)]/15"
+        >
+          {newSinceFilter} new request{newSinceFilter === 1 ? '' : 's'} — refresh
+        </button>
+      )}
       {itemCount === 0 && !query.isLoading && (
         <div className="p-6 text-center text-sm text-[var(--muted)]">
           No requests yet — traffic through Vessel will show up here.

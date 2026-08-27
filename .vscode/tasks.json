@@ -63,6 +63,24 @@
             "problemMatcher": []
         },
         {
+            "label": "frontend: build",
+            "type": "shell",
+            "command": "npm run build",
+            "options": {
+                "cwd": "${workspaceFolder}/frontend"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "build: embedded (frontend + backend)",
+            "dependsOn": [
+                "frontend: build",
+                "backend: build"
+            ],
+            "dependsOrder": "sequence",
+            "problemMatcher": []
+        },
+        {
             "label": "frontend: dev",
             "type": "shell",
             "command": "npm run dev",

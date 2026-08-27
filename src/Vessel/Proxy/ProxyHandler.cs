@@ -21,27 +21,26 @@ public sealed class ProxyHandler
     private readonly CaptureChannel _captureChannel;
     private readonly CaptureEvents _captureEvents;
     private readonly CurrentSession _currentSession;
+    private readonly ConfigStore _configStore;
     private readonly HttpMessageInvoker _invoker;
-    private readonly ForwarderRequestConfig _requestConfig;
-    private readonly long _maxBodyBytes;
     private readonly ILogger<ProxyHandler> _logger;
 
     public ProxyHandler(
         IHttpForwarder forwarder, BackendRegistry registry, CaptureChannel captureChannel,
         CaptureEvents captureEvents, CurrentSession currentSession,
-        VesselConfig config, ILogger<ProxyHandler> logger)
+        ConfigStore configStore, ILogger<ProxyHandler> logger)
     {
         _forwarder = forwarder;
         _registry = registry;
         _captureChannel = captureChannel;
         _captureEvents = captureEvents;
         _currentSession = currentSession;
-        _maxBodyBytes = (long)config.Capture.MaxBodyMb * 1024 * 1024;
+        _configStore = configStore;
         _logger = logger;
 
         // One shared invoker for all backends, per YARP direct-forwarding guidance.
         // AutomaticDecompression stays off: if the client asked for gzip, the client
-        // gets gzip — Vessel never decodes or re-encodes.
+        // gets gzip — Vessel never decodes or re-encodes. Config-independent — built once.
         _invoker = new HttpMessageInvoker(new SocketsHttpHandler
         {
             UseProxy = false,
@@ -52,18 +51,22 @@ public sealed class ProxyHandler
             ActivityHeadersPropagator = null,
             ConnectTimeout = TimeSpan.FromSeconds(15),
         });
+    }
 
-        _requestConfig = new ForwarderRequestConfig
+    public async Task Handle(HttpContext context)
+    {
+        // D7 — one snapshot read per request: self-consistent even if a config PUT races
+        // concurrently. maxBodyMb/timeouts are never cached across requests.
+        VesselConfig config = _configStore.Current;
+        long maxBodyBytes = (long)config.Capture.MaxBodyMb * 1024 * 1024;
+        var requestConfig = new ForwarderRequestConfig
         {
             ActivityTimeout = TimeSpan.FromSeconds(config.Timeouts.ActivitySeconds),
             Version = HttpVersion.Version20,
             VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
         };
-    }
 
-    public async Task Handle(HttpContext context)
-    {
-        var capture = new CaptureContext(_maxBodyBytes, _currentSession.Id, _captureEvents);
+        var capture = new CaptureContext(maxBodyBytes, _currentSession.Id, _captureEvents);
         context.Items[CaptureContext.ItemsKey] = capture;
 
         // The response tee: bytes written to the client first, then buffered. The feature
@@ -83,7 +86,7 @@ public sealed class ProxyHandler
         // The request tee: request bytes observed as YARP reads them upstream. For
         // injectStreamUsage-eligible backends the body is prepared specially (D11);
         // otherwise it is teed as-is.
-        await PrepareRequestBody(context, capture, decision);
+        await PrepareRequestBody(context, capture, decision, maxBodyBytes);
 
         try
         {
@@ -99,7 +102,7 @@ public sealed class ProxyHandler
             context.Items[RouteDecision.ItemsKey] = decision;
 
             ForwarderError error = await _forwarder.SendAsync(
-                context, decision.Backend.BaseUrl, _invoker, _requestConfig, VesselTransformer.Instance);
+                context, decision.Backend.BaseUrl, _invoker, requestConfig, VesselTransformer.Instance);
 
             if (error != ForwarderError.None)
             {
@@ -145,7 +148,7 @@ public sealed class ProxyHandler
     /// streamed request; the stored copy is always the client's original bytes, and any
     /// disqualifying condition forwards the body unmodified.
     /// </summary>
-    private async Task PrepareRequestBody(HttpContext context, CaptureContext capture, RouteDecision decision)
+    private async Task PrepareRequestBody(HttpContext context, CaptureContext capture, RouteDecision decision, long maxBodyBytes)
     {
         if (decision.Backend is not { InjectStreamUsage: true }
             || !decision.ForwardPath.Value!.EndsWith(ChatCompletionsSuffix, StringComparison.Ordinal)
@@ -155,7 +158,7 @@ public sealed class ProxyHandler
             return;
         }
 
-        (byte[] head, bool overCap, Stream? remainder) = await ReadCapped(context.Request.Body, _maxBodyBytes);
+        (byte[] head, bool overCap, Stream? remainder) = await ReadCapped(context.Request.Body, maxBodyBytes);
 
         if (overCap)
         {

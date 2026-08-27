@@ -100,9 +100,12 @@ public sealed class StubBackend : IAsyncDisposable
             }
 
             string marker = context.Request.Query["marker"].ToString();
+            // FilterTests (D1/D2) needs distinct `model` values to seed — an optional
+            // override, defaulting to "stub-model" for every existing caller.
+            string model = context.Request.Query["model"].ToString() is { Length: > 0 } m ? m : "stub-model";
             string body =
                 $$"""
-                {"model":"stub-model","message":{"role":"assistant","content":"{{marker}}"},"done_reason":"stop","done":true,"total_duration":100000000,"load_duration":10000000,"prompt_eval_count":5,"prompt_eval_duration":20000000,"eval_count":3,"eval_duration":30000000}
+                {"model":"{{model}}","message":{"role":"assistant","content":"{{marker}}"},"done_reason":"stop","done":true,"total_duration":100000000,"load_duration":10000000,"prompt_eval_count":5,"prompt_eval_duration":20000000,"eval_count":3,"eval_duration":30000000}
                 """;
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsync(body);

@@ -19,6 +19,24 @@
             "url": "http://localhost:5173/vessel/",
             "webRoot": "${workspaceFolder}/frontend/src",
             "preLaunchTask": "frontend: dev"
+        },
+        {
+            "name": "Backend: Vessel (embedded UI, :4550 only)",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build: embedded (frontend + backend)",
+            "program": "${workspaceFolder}/src/Vessel/bin/Debug/net10.0/Vessel.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/src/Vessel",
+            "stopAtEntry": false,
+            "console": "internalConsole"
+        },
+        {
+            "name": "Frontend: Chrome (embedded, :4550)",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:4550/vessel/",
+            "webRoot": "${workspaceFolder}/frontend/src"
         }
     ],
     "compounds": [
@@ -27,6 +45,14 @@
             "configurations": [
                 "Backend: Vessel",
                 "Frontend: Chrome (vessel UI)"
+            ],
+            "stopAll": true
+        },
+        {
+            "name": "Full stack, single port (embedded UI, no :5173)",
+            "configurations": [
+                "Backend: Vessel (embedded UI, :4550 only)",
+                "Frontend: Chrome (embedded, :4550)"
             ],
             "stopAll": true
         }

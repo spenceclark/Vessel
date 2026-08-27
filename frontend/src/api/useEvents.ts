@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import type { CompletedEvent, FirstTokenEvent, StartedEvent, Summary } from './types'
 
 export interface InFlightRequest {
@@ -22,11 +23,23 @@ export function useEvents(onCompleted: (row: Summary | null, seq: number) => voi
   const [connected, setConnected] = useState(false)
   const onCompletedRef = useRef(onCompleted)
   onCompletedRef.current = onCompleted
+  const queryClient = useQueryClient()
+  const hasConnectedBefore = useRef(false)
 
   useEffect(() => {
     const source = new EventSource('/vessel/api/events')
 
-    source.addEventListener('open', () => setConnected(true))
+    // C2 — a dropped EventSource (laptop sleep, Vessel restart) loses whatever fired
+    // during the gap. EventSource reconnects on its own; on every `open` after the
+    // first, close the gap with a refetch instead of leaving the list stale.
+    source.addEventListener('open', () => {
+      setConnected(true)
+      if (hasConnectedBefore.current) {
+        void queryClient.invalidateQueries({ queryKey: ['requests'] })
+        void queryClient.invalidateQueries({ queryKey: ['stats'] })
+      }
+      hasConnectedBefore.current = true
+    })
     source.addEventListener('error', () => setConnected(false))
 
     source.addEventListener('started', (e: MessageEvent<string>) => {

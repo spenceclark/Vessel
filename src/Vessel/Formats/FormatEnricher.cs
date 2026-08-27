@@ -16,10 +16,13 @@ namespace Vessel.Formats;
 public sealed class FormatEnricher
 {
     private readonly IReadOnlyDictionary<string, IFormatAdapter> _adapters;
-    private readonly IReadOnlyDictionary<string, string> _backendTypes;
-    private readonly int _slowTtftMs;
     private readonly ILogger<FormatEnricher>? _logger;
+    private readonly ConfigStore? _configStore;
+    private IReadOnlyDictionary<string, string> _backendTypes = new Dictionary<string, string>();
+    private int _slowTtftMs;
+    private int _builtVersion = -1;
 
+    /// <summary>Static snapshot — used by tests and anywhere a live config isn't wired up. Never re-reads <paramref name="config"/>.</summary>
     public FormatEnricher(VesselConfig config, ILogger<FormatEnricher>? logger = null)
         : this(config, DefaultAdapters(), logger)
     {
@@ -31,10 +34,44 @@ public sealed class FormatEnricher
         ILogger<FormatEnricher>? logger = null)
     {
         _adapters = adapters;
-        _slowTtftMs = config.Warnings.SlowTtftMs;
         _logger = logger;
+        RebuildFrom(config);
+    }
+
+    /// <summary>D7 — live: re-derives <see cref="_backendTypes"/>/<see cref="_slowTtftMs"/> whenever <paramref name="configStore"/>'s version advances.</summary>
+    public FormatEnricher(ConfigStore configStore, ILogger<FormatEnricher>? logger = null)
+        : this(configStore, DefaultAdapters(), logger)
+    {
+    }
+
+    public FormatEnricher(
+        ConfigStore configStore,
+        IReadOnlyDictionary<string, IFormatAdapter> adapters,
+        ILogger<FormatEnricher>? logger = null)
+    {
+        _adapters = adapters;
+        _logger = logger;
+        _configStore = configStore;
+        RebuildFrom(configStore.Current);
+        _builtVersion = configStore.Version;
+    }
+
+    private void RebuildFrom(VesselConfig config)
+    {
+        _slowTtftMs = config.Warnings.SlowTtftMs;
         _backendTypes = config.Backends.ToDictionary(
             kvp => kvp.Key, kvp => kvp.Value.Type, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void EnsureCurrent()
+    {
+        if (_configStore is null || _builtVersion == _configStore.Version)
+        {
+            return;
+        }
+
+        RebuildFrom(_configStore.Current);
+        _builtVersion = _configStore.Version;
     }
 
     public static Dictionary<string, IFormatAdapter> DefaultAdapters() => new()
@@ -47,6 +84,7 @@ public sealed class FormatEnricher
 
     public EnrichedRecord Enrich(CaptureRecord record)
     {
+        EnsureCurrent();
         try
         {
             return EnrichCore(record);

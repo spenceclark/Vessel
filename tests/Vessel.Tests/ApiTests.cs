@@ -216,6 +216,23 @@ public class ApiTests
         Assert.Equal(secondSessionId, sessions[0].GetProperty("id").GetInt64()); // newest-first
     }
 
+    // C1 (phase-4 carry-in): a non-numeric or overflowing id must 404, not 500.
+    [Fact]
+    public async Task Detail_NonNumericOrOverflowingId_404NotFound()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        using HttpResponseMessage nonNumeric = await client.GetAsync($"{vessel.BaseUrl}/vessel/api/requests/abc", CT);
+        Assert.Equal(HttpStatusCode.NotFound, nonNumeric.StatusCode);
+        Assert.Equal("not_found", nonNumeric.Headers.GetValues("X-Vessel-Error").Single());
+
+        using HttpResponseMessage overflow = await client.GetAsync(
+            $"{vessel.BaseUrl}/vessel/api/requests/99999999999999999999", CT);
+        Assert.Equal(HttpStatusCode.NotFound, overflow.StatusCode);
+        Assert.Equal("not_found", overflow.Headers.GetValues("X-Vessel-Error").Single());
+    }
+
     // U7: unknown API path -> 404 JSON with X-Vessel-Error; /vessel/ without an embedded
     // dist -> a 200 placeholder, and it must never be the proxied backend's content.
     [Fact]
