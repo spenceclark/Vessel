@@ -36,7 +36,11 @@ catch (ConfigException ex)
     return 1;
 }
 
-WebApplication app = VesselApp.Build(config);
+// The database lives next to the config file (not the exe), matching the config's
+// own location rule.
+string dbPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath))!, "vessel.db");
+
+WebApplication app = VesselApp.Build(config, dbPath);
 await app.StartAsync();
 
 string listen = app.ListenAddress();

@@ -25,6 +25,9 @@ public class ConfigLoaderTests : IDisposable
         Assert.Equal("ollama", config.DefaultBackend);
         Assert.Equal("http://localhost:11434", config.Backends["ollama"].BaseUrl);
         Assert.Equal(1800, config.Timeouts.ActivitySeconds);
+        Assert.Equal(10_000, config.Retention.MaxRequests);
+        Assert.Equal(500, config.Retention.MaxDbSizeMb);
+        Assert.Equal(32, config.Capture.MaxBodyMb);
 
         (VesselConfig reloaded, bool createdAgain) = ConfigLoader.LoadOrCreate(path);
         Assert.False(createdAgain);
@@ -129,6 +132,45 @@ public class ConfigLoaderTests : IDisposable
 
         var ex = Assert.Throws<ConfigException>(() => ConfigLoader.LoadOrCreate(path));
         Assert.Contains("listen", ex.Message);
+    }
+
+    // C13: retention/capture settings load, and absent sections get the defaults.
+    [Fact]
+    public void RetentionAndCaptureSections_LoadWithPartialDefaults()
+    {
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, """
+            {
+              "defaultBackend": "ollama",
+              "backends": { "ollama": { "baseUrl": "http://localhost:11434" } },
+              "retention": { "maxRequests": 42 },
+              "capture": { "maxBodyMb": 8 }
+            }
+            """);
+
+        (VesselConfig config, _) = ConfigLoader.LoadOrCreate(path);
+        Assert.Equal(42, config.Retention.MaxRequests);
+        Assert.Equal(500, config.Retention.MaxDbSizeMb); // absent → default
+        Assert.Equal(8, config.Capture.MaxBodyMb);
+    }
+
+    [Theory]
+    [InlineData("""  "retention": { "maxRequests": 0 }  """, "retention.maxRequests")]
+    [InlineData("""  "retention": { "maxDbSizeMb": -1 }  """, "retention.maxDbSizeMb")]
+    [InlineData("""  "capture": { "maxBodyMb": 0 }  """, "capture.maxBodyMb")]
+    public void NonPositiveRetentionOrCaptureValues_Throw(string section, string expectedInMessage)
+    {
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, $$"""
+            {
+              "defaultBackend": "ollama",
+              "backends": { "ollama": { "baseUrl": "http://localhost:11434" } },
+              {{section}}
+            }
+            """);
+
+        var ex = Assert.Throws<ConfigException>(() => ConfigLoader.LoadOrCreate(path));
+        Assert.Contains(expectedInMessage, ex.Message);
     }
 
     [Fact]

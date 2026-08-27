@@ -32,14 +32,14 @@ byte-identically with and without Vessel in the middle. Daily-drive it from here
 
 *Goal: everything that passes through is recorded, cheaply.*
 
-- [ ] Tee streams for request/response bodies with memory cap + `truncated` flag (§4.1).
-- [ ] Timings: `duration_ms`, `ttft_ms`, `vessel_overhead_ms` on monotonic clock (§4.2).
-- [ ] Header redaction before the record leaves the request path (§8).
-- [ ] `Channel<CaptureRecord>` + background writer, batched transactions (§6.1).
-- [ ] SQLite schema + migrations, WAL, zstd body compression (§6.2).
-- [ ] Raw-fallback capture: unknown traffic stored with timing + bodies, silently (§5).
-- [ ] Retention: `maxRequests` / `maxDbSizeMb` enforcement + incremental vacuum (§6.4).
-- [ ] Tests: tee doesn't alter bytes; timings sane; redaction covers all auth headers.
+- [x] Tee streams for request/response bodies with memory cap + `truncated` flag (§4.1).
+- [x] Timings: `duration_ms`, `ttft_ms`, `vessel_overhead_ms` on monotonic clock (§4.2).
+- [x] Header redaction before the record leaves the request path (§8).
+- [x] `Channel<CaptureRecord>` + background writer, batched transactions (§6.1).
+- [x] SQLite schema + migrations, WAL, zstd body compression (§6.2).
+- [x] Raw-fallback capture: unknown traffic stored with timing + bodies, silently (§5).
+- [x] Retention: `maxRequests` / `maxDbSizeMb` enforcement + incremental vacuum (§6.4).
+- [x] Tests: tee doesn't alter bytes; timings sane; redaction covers all auth headers.
 
 **Done when:** a day of real traffic produces a `vessel.db` you can query by hand in a
 SQLite browser, DB stays under the cap, and no plaintext key appears anywhere in it.

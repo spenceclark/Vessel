@@ -13,6 +13,10 @@ public sealed class VesselConfig
 
     public TimeoutConfig Timeouts { get; set; } = new();
 
+    public RetentionConfig Retention { get; set; } = new();
+
+    public CaptureConfig Capture { get; set; } = new();
+
     // Properties this binary doesn't know about (from a newer Vessel version) must
     // survive a load/save round trip.
     [JsonExtensionData]
@@ -37,6 +41,30 @@ public sealed class TimeoutConfig
     /// Sized for LLM traffic — a cold local model can sit in prompt eval for minutes.
     /// </summary>
     public int ActivitySeconds { get; set; } = 1800;
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+}
+
+public sealed class RetentionConfig
+{
+    /// <summary>Delete oldest rows beyond this count, enforced after each writer batch.</summary>
+    public int MaxRequests { get; set; } = 10_000;
+
+    /// <summary>Delete oldest rows until the database file is under this size.</summary>
+    public int MaxDbSizeMb { get; set; } = 500;
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+}
+
+public sealed class CaptureConfig
+{
+    /// <summary>
+    /// Per-body capture buffer cap. Beyond it the stored copy is truncated and flagged;
+    /// the proxied traffic itself is never truncated.
+    /// </summary>
+    public int MaxBodyMb { get; set; } = 32;
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }

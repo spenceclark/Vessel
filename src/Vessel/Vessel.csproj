@@ -5,10 +5,15 @@
     <RootNamespace>Vessel</RootNamespace>
     <Version>0.1.0</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- SQLite's e_sqlite3 is a native library; without this it lands beside the exe
+         and the "single binary" is a lie. Extracted at first run, standard behavior. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
     <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0" />
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
   </ItemGroup>
 
 </Project>

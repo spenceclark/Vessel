@@ -35,6 +35,14 @@ public sealed class VesselTransformer : HttpTransformer
         {
             RemoveVesselHeaders(proxyRequest.Content.Headers);
         }
+
+        // The outbound request is now fully prepared — everything up to here is
+        // Vessel's own per-request cost (§4.2 vessel_overhead_ms).
+        if (httpContext.Items.TryGetValue(Capture.CaptureContext.ItemsKey, out object? item)
+            && item is Capture.CaptureContext capture)
+        {
+            capture.MarkOverhead();
+        }
     }
 
     private static void RemoveVesselHeaders(System.Net.Http.Headers.HttpHeaders headers)

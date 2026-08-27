@@ -77,6 +77,17 @@ public sealed class StubBackend : IAsyncDisposable
         app.Map("/ndjson", (RequestDelegate)(context =>
             StreamChunks(context, "application/x-ndjson", i => $"{{\"i\":{i}}}\n")));
 
+        app.Map("/big", (RequestDelegate)(async context =>
+        {
+            // Deterministic but incompressible bytes, for truncation and DB-size tests.
+            int bytes = int.TryParse(context.Request.Query["bytes"], out int bv) ? bv : 1024;
+            byte[] data = new byte[bytes];
+            new Random(12345).NextBytes(data);
+            context.Response.ContentType = "application/octet-stream";
+            context.Response.ContentLength = bytes;
+            await context.Response.Body.WriteAsync(data);
+        }));
+
         app.Map("/slow-headers", (RequestDelegate)(async context =>
         {
             int ms = int.TryParse(context.Request.Query["ms"], out int v) ? v : 3000;

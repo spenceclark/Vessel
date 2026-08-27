@@ -106,6 +106,21 @@ public static class ConfigLoader
         {
             throw new ConfigException($"config '{path}': timeouts.activitySeconds must be positive");
         }
+
+        if (config.Retention.MaxRequests <= 0)
+        {
+            throw new ConfigException($"config '{path}': retention.maxRequests must be positive");
+        }
+
+        if (config.Retention.MaxDbSizeMb <= 0)
+        {
+            throw new ConfigException($"config '{path}': retention.maxDbSizeMb must be positive");
+        }
+
+        if (config.Capture.MaxBodyMb <= 0)
+        {
+            throw new ConfigException($"config '{path}': capture.maxBodyMb must be positive");
+        }
     }
 
     public static bool TryParseListen(string listen, out System.Net.IPAddress address, out int port)

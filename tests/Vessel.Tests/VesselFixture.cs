@@ -23,11 +23,18 @@ public sealed class VesselFixture : IAsyncLifetime
 
     public HttpClient Client { get; } = new();
 
+    /// <summary>Path of the main Vessel instance's capture database (temp dir, deleted on dispose).</summary>
+    public string DbPath { get; private set; } = null!;
+
+    private string _tempDir = null!;
     private WebApplication _vessel = null!;
     private WebApplication _shortTimeoutVessel = null!;
 
     public async ValueTask InitializeAsync()
     {
+        _tempDir = Directory.CreateTempSubdirectory("vessel-tests-").FullName;
+        DbPath = Path.Combine(_tempDir, "vessel.db");
+
         Alpha = await StubBackend.StartAsync("alpha");
         Beta = await StubBackend.StartAsync("beta");
 
@@ -43,7 +50,7 @@ public sealed class VesselFixture : IAsyncLifetime
             },
         };
 
-        _vessel = VesselApp.Build(config);
+        _vessel = VesselApp.Build(config, DbPath);
         await _vessel.StartAsync();
         VesselBaseUrl = _vessel.ListenAddress();
 
@@ -54,7 +61,7 @@ public sealed class VesselFixture : IAsyncLifetime
             Backends = config.Backends,
             Timeouts = new TimeoutConfig { ActivitySeconds = 1 },
         };
-        _shortTimeoutVessel = VesselApp.Build(shortTimeoutConfig);
+        _shortTimeoutVessel = VesselApp.Build(shortTimeoutConfig, Path.Combine(_tempDir, "vessel-short-timeout.db"));
         await _shortTimeoutVessel.StartAsync();
         ShortTimeoutBaseUrl = _shortTimeoutVessel.ListenAddress();
     }
@@ -72,9 +79,20 @@ public sealed class VesselFixture : IAsyncLifetime
     public async ValueTask DisposeAsync()
     {
         Client.Dispose();
+        // Stop before dispose so the capture writer drains gracefully (dispose alone
+        // skips IHostedService.StopAsync).
+        await _shortTimeoutVessel.StopAsync();
         await _shortTimeoutVessel.DisposeAsync();
+        await _vessel.StopAsync();
         await _vessel.DisposeAsync();
         await Beta.DisposeAsync();
         await Alpha.DisposeAsync();
+        try
+        {
+            Directory.Delete(_tempDir, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
     }
 }

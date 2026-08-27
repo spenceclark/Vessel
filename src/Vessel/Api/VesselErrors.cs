@@ -17,6 +17,9 @@ public static class VesselErrors
     public const string UpstreamTimeout = "upstream_timeout";
     public const string NotFound = "not_found";
 
+    /// <summary>Capture-only code (no response is written — nobody's listening).</summary>
+    public const string ClientDisconnect = "client_disconnect";
+
     public static Task Write(
         HttpContext context, int statusCode, string code, string message, string[]? backends = null)
     {
