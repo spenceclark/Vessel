@@ -1,0 +1,107 @@
+# Top-level EditorConfig file
+root = true
+
+# ================================
+# Global defaults
+# ================================
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# ================================
+# C# files
+# ================================
+
+[*.cs]
+
+# IDE0130: Namespace does not match folder structure
+dotnet_diagnostic.IDE0130.severity = warning
+
+# Use file-scoped namespaces (C# 10+)
+csharp_style_namespace_declarations = file_scoped:suggestion
+
+# Prefer explicit access modifiers (except interface members)
+dotnet_style_require_accessibility_modifiers = always:suggestion
+dotnet_code_quality_unused_parameters = all:suggestion
+# IDE0040: Don't require modifiers on interface members
+dotnet_diagnostic.IDE0040.severity = none
+
+# Use 'var' where it improves readability
+csharp_style_var_for_built_in_types = false:silent
+csharp_style_var_when_type_is_apparent = false:silent
+csharp_style_var_elsewhere = true:silent
+
+# Expression-bodied members (light use)
+csharp_style_expression_bodied_methods = false:silent
+csharp_style_expression_bodied_properties = true:silent
+csharp_style_expression_bodied_accessors = true:silent
+
+# Prefer readonly where possible
+dotnet_style_readonly_field = true:suggestion
+
+# Prefer explicit type for fields
+csharp_style_prefer_simple_using_statement = true:suggestion
+
+# Remove unused usings automatically
+dotnet_remove_unnecessary_imports = true
+
+# Sorting
+dotnet_sort_system_directives_first = true
+
+# Braces
+csharp_prefer_braces = when_multiline
+
+# ================================
+# Naming rules
+# ================================
+
+# Interfaces start with I
+dotnet_naming_rule.interfaces_start_with_i.symbols = interface_symbols
+dotnet_naming_rule.interfaces_start_with_i.style = pascal_case_with_i
+dotnet_naming_rule.interfaces_start_with_i.severity = suggestion
+
+dotnet_naming_symbols.interface_symbols.applicable_kinds = interface
+dotnet_naming_style.pascal_case_with_i.required_prefix = I
+dotnet_naming_style.pascal_case_with_i.capitalization = pascal_case
+
+# Private instance fields use _camelCase
+dotnet_naming_rule.private_fields_underscore.symbols = private_fields
+dotnet_naming_rule.private_fields_underscore.style = underscore_prefix
+dotnet_naming_rule.private_fields_underscore.severity = warning
+
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_symbols.private_fields.required_modifiers = !const
+
+dotnet_naming_style.underscore_prefix.required_prefix = _
+dotnet_naming_style.underscore_prefix.capitalization = camel_case
+
+# Private const fields use PascalCase
+dotnet_naming_rule.private_consts_pascal_case.symbols = private_consts
+dotnet_naming_rule.private_consts_pascal_case.style = pascal_case
+dotnet_naming_rule.private_consts_pascal_case.severity = warning
+
+dotnet_naming_symbols.private_consts.applicable_kinds = field
+dotnet_naming_symbols.private_consts.applicable_accessibilities = private
+dotnet_naming_symbols.private_consts.required_modifiers = const
+
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+# ================================
+# Formatting preferences
+# ================================
+csharp_new_line_before_open_brace = all
+csharp_indent_case_contents = true
+csharp_indent_switch_labels = true
+
+
+# Excluding EFCore migration files from rules
+[**/Migrations/*.cs]
+generated_code = true
+dotnet_diagnostic.CS8981.severity = none
+
+dotnet_diagnostic.CA1873.severity = none

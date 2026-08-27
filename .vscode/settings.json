@@ -1,0 +1,50 @@
+{
+    "editor.formatOnSave": true,
+
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "editor.rulers": [120],
+    "editor.minimap.enabled": false,
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "files.exclude": {
+        "**/bin": true,
+        "**/obj": true,
+        "**/.vs": true,
+        "**/.vscode": false,
+        "**/.git": true,
+        "**/.meta": true,
+        "**/.codex*": true,
+        "**/.agents": true
+    },
+    "search.exclude": {
+        "**/bin": true,
+        "**/obj": true,
+        "**/.vs": true,
+        "**/.vscode": false,
+        "**/.git": true,
+        "**/.meta": true
+    },
+    "csharp.format.enable": true,
+    "csharp.format.enableEditorConfigSupport": true,
+    "csharp.semanticHighlighting.enabled": true,
+    "editor.defaultFormatter": "ms-dotnettools.csharp",
+    "explorer.confirmDelete": false,
+    "explorer.confirmDragAndDrop": false,
+    "workbench.tree.indent": 16,
+    "workbench.tree.renderIndentGuides": "always",
+    "chat.useAgentSkills": true,
+    "github.copilot.config.claudeCode.enabled": false,
+
+    // C# Dev Kit IntelliSense reliability improvements
+    "dotnet.backgroundAnalysis.analyzerDiagnosticsScope": "fullSolution",
+    "dotnet.backgroundAnalysis.compilerDiagnosticsScope": "fullSolution",
+    "dotnet.server.useOmnisharp": false,
+    "omnisharp.autoStart": false,
+    "dotnet.codeLens.enableReferencesCodeLens": true,
+    "dotnet.completion.showCompletionItemsFromUnimportedNamespaces": true,
+    "dotnet.inlayHints.enableInlayHintsForParameters": false,
+    "dotnet.inlayHints.enableInlayHintsForLiteralParameters": false,
+
+    "editor.semanticHighlighting.enabled": true
+}

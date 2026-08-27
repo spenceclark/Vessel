@@ -1,0 +1,53 @@
+# Build output
+bin/
+obj/
+
+# Asset meta data should be kept, but NOT the cache
+!Assets/**/*.meta
+
+# ======================
+# Visual Studio / Rider
+# ======================
+.vs/
+.vscode/*.log
+.vscode/*.db
+*.suo
+*.user
+*.userprefs
+*.sln.docstates
+*.csproj.user
+
+# Rider
+.idea/
+
+# ======================
+# OS generated files
+# ======================
+.DS_Store
+Thumbs.db
+
+# ======================
+# Build outputs
+# ======================
+*.apk
+*.aab
+*.exe
+*.app
+# `*.app` above case-insensitively swallows the `ManaDuel.App` source directory on Windows;
+# re-include it explicitly (everything else named *.app stays ignored).
+!ManaDuel.App
+
+
+# ======================
+# Logs
+# ======================
+*.log
+
+# ======================
+# Local config / secrets
+# ======================
+.env
+.env.*
+
+
+*.jsonl
