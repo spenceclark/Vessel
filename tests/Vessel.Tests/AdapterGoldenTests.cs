@@ -51,6 +51,8 @@ public class AdapterGoldenTests
 
         var record = new CaptureRecord(
             StartedAt: "2026-08-27T00:00:00.0000000Z",
+            Seq: 0,
+            SessionId: 1,
             Backend: Str(m, "backend") ?? "test",
             TagsJson: null,
             Method: "POST",

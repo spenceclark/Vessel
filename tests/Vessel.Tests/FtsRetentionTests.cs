@@ -45,6 +45,7 @@ public class FtsRetentionTests
             using (var store = new SqliteCaptureStore(dbPath, new VesselConfig()))
             {
                 store.Initialize();
+                store.EnsureInitialSession();
                 store.InsertBatch([OllamaRow("pineapple", "watermelon"), RawRow("garbagerow")]);
             }
 
@@ -70,6 +71,7 @@ public class FtsRetentionTests
             using (var store = new SqliteCaptureStore(dbPath, config))
             {
                 store.Initialize();
+                store.EnsureInitialSession();
                 for (int i = 0; i < 12; i++)
                 {
                     store.InsertBatch([OllamaRow($"prompt{i}", $"response{i}")]);
@@ -101,6 +103,7 @@ public class FtsRetentionTests
             using (var store = new SqliteCaptureStore(dbPath, config))
             {
                 store.Initialize();
+                store.EnsureInitialSession();
                 // ~250 KB of content per row pushes the file over the 1 MB cap after a few rows.
                 for (int i = 0; i < 12; i++)
                 {

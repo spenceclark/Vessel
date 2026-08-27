@@ -49,8 +49,3 @@ public sealed record StatusPayload(
     StatusBackend[] Backends);
 
 public sealed record StatusBackend(string Name, string BaseUrl, string Type, bool Default);
-
-[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true)]
-[JsonSerializable(typeof(ErrorPayload))]
-[JsonSerializable(typeof(StatusPayload))]
-public sealed partial class ApiJsonContext : JsonSerializerContext;

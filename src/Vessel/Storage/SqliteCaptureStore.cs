@@ -114,8 +114,10 @@ public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : ICa
     /// flattened text — a matching contentless FTS row keyed on the same id, so search stays
     /// consistent from the moment the text exists. Bodies are zstd-compressed here, on the
     /// writer thread; the streamed <c>response_body</c> is the Vessel-synthesized document.
+    /// Returns each row's new id, in <paramref name="batch"/> order, so the writer can emit
+    /// the <c>completed</c> SSE event (D5) with the real DB id.
     /// </summary>
-    public void InsertBatch(IReadOnlyList<EnrichedRecord> batch)
+    public IReadOnlyList<long> InsertBatch(IReadOnlyList<EnrichedRecord> batch)
     {
         SqliteConnection connection = Connected();
         using SqliteTransaction transaction = connection.BeginTransaction();
@@ -125,13 +127,13 @@ public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : ICa
         command.CommandText =
             """
             INSERT INTO requests (
-                started_at, backend, tags, method, path, format, model, status_code, error,
+                started_at, session_id, backend, tags, method, path, format, model, status_code, error,
                 streamed, duration_ms, ttft_ms, vessel_overhead_ms, tok_per_sec,
                 tokens_in, tokens_out, tokens_cached_read, tokens_cached_write, tokens_estimated,
                 stop_reason, warnings,
                 request_headers, response_headers, request_body, response_body, response_raw, truncated)
             VALUES (
-                $started_at, $backend, $tags, $method, $path, $format, $model, $status_code, $error,
+                $started_at, $session_id, $backend, $tags, $method, $path, $format, $model, $status_code, $error,
                 $streamed, $duration_ms, $ttft_ms, $vessel_overhead_ms, $tok_per_sec,
                 $tokens_in, $tokens_out, $tokens_cached_read, $tokens_cached_write, $tokens_estimated,
                 $stop_reason, $warnings,
@@ -148,6 +150,7 @@ public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : ICa
         }
 
         SqliteParameter startedAt = Add("$started_at");
+        SqliteParameter sessionId = Add("$session_id");
         SqliteParameter backend = Add("$backend");
         SqliteParameter tags = Add("$tags");
         SqliteParameter method = Add("$method");
@@ -183,10 +186,12 @@ public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : ICa
         SqliteParameter ftsPrompt = AddTo(ftsCommand, "$prompt_text");
         SqliteParameter ftsResponse = AddTo(ftsCommand, "$response_text");
 
+        var ids = new List<long>(batch.Count);
         foreach (EnrichedRecord enriched in batch)
         {
             CaptureRecord record = enriched.Record;
             startedAt.Value = record.StartedAt;
+            sessionId.Value = record.SessionId;
             backend.Value = record.Backend;
             tags.Value = (object?)record.TagsJson ?? DBNull.Value;
             method.Value = record.Method;
@@ -215,6 +220,7 @@ public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : ICa
             truncated.Value = record.Truncated ? 1 : 0;
 
             long id = Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+            ids.Add(id);
 
             if (enriched.PromptText is not null || enriched.ResponseText is not null)
             {
@@ -226,6 +232,38 @@ public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : ICa
         }
 
         transaction.Commit();
+        return ids;
+    }
+
+    /// <summary>D4 — the newest <c>sessions</c> row, or a freshly created "session 1" on an empty database.</summary>
+    public SessionInfo EnsureInitialSession()
+    {
+        using (SqliteCommand select = Connected().CreateCommand())
+        {
+            select.CommandText = "SELECT id, started_at, name FROM sessions ORDER BY id DESC LIMIT 1";
+            using SqliteDataReader reader = select.ExecuteReader();
+            if (reader.Read())
+            {
+                return new SessionInfo(
+                    reader.GetInt64(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2));
+            }
+        }
+
+        return InsertSession("session 1");
+    }
+
+    /// <summary>D4 — writer-thread-only insert for <c>POST /sessions</c>.</summary>
+    public SessionInfo CreateSession(string? name) => InsertSession(name);
+
+    private SessionInfo InsertSession(string? name)
+    {
+        using SqliteCommand insert = Connected().CreateCommand();
+        string startedAt = DateTime.UtcNow.ToString("o");
+        insert.CommandText = "INSERT INTO sessions (started_at, name) VALUES ($started_at, $name) RETURNING id";
+        insert.Parameters.AddWithValue("$started_at", startedAt);
+        insert.Parameters.AddWithValue("$name", (object?)name ?? DBNull.Value);
+        long id = Convert.ToInt64(insert.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+        return new SessionInfo(id, startedAt, name);
     }
 
     /// <summary>§6.4 — both caps, oldest-first, run by the writer after each batch.</summary>

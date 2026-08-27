@@ -267,14 +267,20 @@ public class ProxyIntegrationTests(VesselFixture fx) : IClassFixture<VesselFixtu
         Assert.Equal("upstream_timeout", response.Headers.GetValues("X-Vessel-Error").Single());
     }
 
-    // Reserved namespace: /vessel/* is never proxied.
+    // Reserved namespace: /vessel/* is never proxied. Unknown API paths still get the
+    // marked JSON 404 (D7); non-API paths serve the embedded UI (or its placeholder when
+    // none is embedded, as in this test binary) instead of proxying anywhere.
     [Fact]
     public async Task T12_VesselNamespace_IsNeverProxied()
     {
-        using HttpResponseMessage response = await fx.Client.GetAsync($"{fx.VesselBaseUrl}/vessel/does-not-exist", CT);
+        using HttpResponseMessage apiResponse = await fx.Client.GetAsync($"{fx.VesselBaseUrl}/vessel/api/does-not-exist", CT);
+        Assert.Equal(HttpStatusCode.NotFound, apiResponse.StatusCode);
+        Assert.Equal("not_found", apiResponse.Headers.GetValues("X-Vessel-Error").Single());
 
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        Assert.Equal("not_found", response.Headers.GetValues("X-Vessel-Error").Single());
+        using HttpResponseMessage uiResponse = await fx.Client.GetAsync($"{fx.VesselBaseUrl}/vessel/does-not-exist", CT);
+        Assert.False(uiResponse.Headers.Contains("X-Vessel-Error")); // never Vessel's marked error path
+        string body = await uiResponse.Content.ReadAsStringAsync(CT);
+        Assert.DoesNotContain("ServerId", body); // never reached a backend's echo
 
         // But the same path is reachable on a backend via an explicit prefix.
         EchoPayload echo = await GetEcho(await fx.Client.GetAsync($"{fx.VesselBaseUrl}/b/beta/echo", CT));

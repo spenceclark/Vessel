@@ -11,7 +11,14 @@ public interface ICaptureStore
 {
     void Initialize();
 
-    void InsertBatch(IReadOnlyList<EnrichedRecord> batch);
+    /// <summary>Inserts the batch and returns each row's new id, in the same order as <paramref name="batch"/>.</summary>
+    IReadOnlyList<long> InsertBatch(IReadOnlyList<EnrichedRecord> batch);
 
     void EnforceRetention();
+
+    /// <summary>D4 — the newest <c>sessions</c> row, or a freshly created "session 1" on an empty database.</summary>
+    SessionInfo EnsureInitialSession();
+
+    /// <summary>D4 — inserts a new session marker row (the writer-thread-safe half of <c>POST /sessions</c>).</summary>
+    SessionInfo CreateSession(string? name);
 }

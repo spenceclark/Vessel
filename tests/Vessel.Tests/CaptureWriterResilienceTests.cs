@@ -24,11 +24,15 @@ public class CaptureWriterResilienceTests
 
         public Func<int, bool> ThrowOnAttempt { get; init; } = _ => false;
 
+        private long _nextId = 1;
+
+        private long _nextSessionId = 1;
+
         public void Initialize()
         {
         }
 
-        public void InsertBatch(IReadOnlyList<EnrichedRecord> batch)
+        public IReadOnlyList<long> InsertBatch(IReadOnlyList<EnrichedRecord> batch)
         {
             lock (_lock)
             {
@@ -38,13 +42,25 @@ public class CaptureWriterResilienceTests
                     throw new InvalidOperationException("simulated SQLITE_BUSY");
                 }
 
-                InsertedPaths.AddRange(batch.Select(e => e.Record.Path));
+                var ids = new List<long>(batch.Count);
+                foreach (EnrichedRecord e in batch)
+                {
+                    InsertedPaths.Add(e.Record.Path);
+                    ids.Add(_nextId++);
+                }
+
+                return ids;
             }
         }
 
         public void EnforceRetention()
         {
         }
+
+        public SessionInfo EnsureInitialSession() => new(1, "2026-01-01T00:00:00.0000000Z", "session 1");
+
+        public SessionInfo CreateSession(string? name) =>
+            new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name);
 
         public int SnapshotAttempts()
         {
@@ -64,7 +80,8 @@ public class CaptureWriterResilienceTests
     }
 
     private static CaptureWriterService NewWriter(CaptureChannel channel, ICaptureStore store) =>
-        new(channel, store, new FormatEnricher(new VesselConfig()), NullLogger<CaptureWriterService>.Instance);
+        new(channel, store, new FormatEnricher(new VesselConfig()), new CaptureEvents(), new CurrentSession(),
+            NullLogger<CaptureWriterService>.Instance);
 
     private static async Task WaitFor(Func<bool> condition)
     {

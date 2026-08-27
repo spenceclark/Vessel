@@ -19,6 +19,8 @@ public sealed class ProxyHandler
     private readonly IHttpForwarder _forwarder;
     private readonly BackendRegistry _registry;
     private readonly CaptureChannel _captureChannel;
+    private readonly CaptureEvents _captureEvents;
+    private readonly CurrentSession _currentSession;
     private readonly HttpMessageInvoker _invoker;
     private readonly ForwarderRequestConfig _requestConfig;
     private readonly long _maxBodyBytes;
@@ -26,11 +28,14 @@ public sealed class ProxyHandler
 
     public ProxyHandler(
         IHttpForwarder forwarder, BackendRegistry registry, CaptureChannel captureChannel,
+        CaptureEvents captureEvents, CurrentSession currentSession,
         VesselConfig config, ILogger<ProxyHandler> logger)
     {
         _forwarder = forwarder;
         _registry = registry;
         _captureChannel = captureChannel;
+        _captureEvents = captureEvents;
+        _currentSession = currentSession;
         _maxBodyBytes = (long)config.Capture.MaxBodyMb * 1024 * 1024;
         _logger = logger;
 
@@ -58,16 +63,22 @@ public sealed class ProxyHandler
 
     public async Task Handle(HttpContext context)
     {
-        var capture = new CaptureContext(_maxBodyBytes);
+        var capture = new CaptureContext(_maxBodyBytes, _currentSession.Id, _captureEvents);
         context.Items[CaptureContext.ItemsKey] = capture;
 
         // The response tee: bytes written to the client first, then buffered. The feature
         // wrap covers both the Stream and PipeWriter write paths.
         IHttpResponseBodyFeature priorBody = context.Features.Get<IHttpResponseBodyFeature>()!;
         context.Features.Set<IHttpResponseBodyFeature>(
-            new StreamResponseBodyFeature(new ResponseTeeStream(priorBody.Stream, capture), priorBody));
+            new StreamResponseBodyFeature(new ResponseTeeStream(priorBody.Stream, capture, context), priorBody));
 
         RouteDecision decision = RouteResolver.Resolve(context.Request.Path, context.Request.Headers, _registry);
+
+        // D5 — as early as backend/tags are known, before any forwarding work begins.
+        _captureEvents.Started(
+            capture.Seq, capture.StartedAtIso, context.Request.Method,
+            decision.ForwardPath.Value + context.Request.QueryString.Value,
+            decision.Backend?.Name ?? decision.RequestedName ?? "", decision.Tags);
 
         // The request tee: request bytes observed as YARP reads them upstream. For
         // injectStreamUsage-eligible backends the body is prepared specially (D11);

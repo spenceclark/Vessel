@@ -3,9 +3,11 @@ namespace Vessel.Capture;
 /// <summary>
 /// Write-through tee over the response body: every chunk goes to the client first,
 /// then to the capture buffer — capture work never delays or withholds a byte.
-/// Flushes pass straight through, preserving unbuffered streaming.
+/// Flushes pass straight through, preserving unbuffered streaming. The first write also
+/// checks whether to emit the live <c>first_token</c> SSE event (D5) — a cheap check
+/// (content type + subscriber-emptiness) that never touches the client's bytes.
 /// </summary>
-public sealed class ResponseTeeStream(Stream inner, CaptureContext capture) : Stream
+public sealed class ResponseTeeStream(Stream inner, CaptureContext capture, HttpContext httpContext) : Stream
 {
     public override bool CanRead => false;
 
@@ -26,9 +28,9 @@ public sealed class ResponseTeeStream(Stream inner, CaptureContext capture) : St
 
     public override void Write(ReadOnlySpan<byte> buffer)
     {
-        if (buffer.Length > 0)
+        if (buffer.Length > 0 && capture.MarkFirstResponseByte())
         {
-            capture.MarkFirstResponseByte();
+            capture.EmitFirstTokenIfStreamed(httpContext.Response.ContentType);
         }
 
         inner.Write(buffer);
@@ -38,9 +40,9 @@ public sealed class ResponseTeeStream(Stream inner, CaptureContext capture) : St
 
     public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
     {
-        if (buffer.Length > 0)
+        if (buffer.Length > 0 && capture.MarkFirstResponseByte())
         {
-            capture.MarkFirstResponseByte();
+            capture.EmitFirstTokenIfStreamed(httpContext.Response.ContentType);
         }
 
         await inner.WriteAsync(buffer, cancellationToken);

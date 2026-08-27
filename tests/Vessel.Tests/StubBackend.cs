@@ -74,9 +74,31 @@ public sealed class StubBackend : IAsyncDisposable
 
         // A canned Ollama-native chat response whose assistant content echoes the
         // ?marker= query, so enrichment tests can locate the row and search its text.
+        // ?stream=1 switches to a canned streamed NDJSON reply instead (wire-true to the
+        // ollama-chat/streamed-basic golden fixture) — path must stay literally "/api/chat"
+        // for format detection, so the choice is a query flag rather than a second route.
         app.Map("/api/chat", (RequestDelegate)(async context =>
         {
             await context.Request.Body.CopyToAsync(Stream.Null);
+
+            if (context.Request.Query["stream"] == "1")
+            {
+                context.Response.ContentType = "application/x-ndjson";
+                string[] lines =
+                [
+                    """{"model":"qwen2.5:1.5b","created_at":"2026-08-27T00:00:00.100000Z","message":{"role":"assistant","content":"He"},"done":false}""",
+                    """{"model":"qwen2.5:1.5b","created_at":"2026-08-27T00:00:00.200000Z","message":{"role":"assistant","content":"llo"},"done":false}""",
+                    """{"model":"qwen2.5:1.5b","created_at":"2026-08-27T00:00:00.300000Z","message":{"role":"assistant","content":""},"done_reason":"stop","done":true,"total_duration":500000000,"load_duration":30000000,"prompt_eval_count":10,"prompt_eval_duration":100000000,"eval_count":2,"eval_duration":40000000}""",
+                ];
+                foreach (string line in lines)
+                {
+                    await context.Response.WriteAsync(line + "\n");
+                    await context.Response.Body.FlushAsync();
+                }
+
+                return;
+            }
+
             string marker = context.Request.Query["marker"].ToString();
             string body =
                 $$"""

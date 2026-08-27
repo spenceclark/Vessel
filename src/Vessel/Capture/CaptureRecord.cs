@@ -7,6 +7,8 @@ namespace Vessel.Capture;
 /// </summary>
 public sealed record CaptureRecord(
     string StartedAt,
+    long Seq,
+    long SessionId,
     string Backend,
     string? TagsJson,
     string Method,

@@ -12,8 +12,11 @@ public static class TestCapture
         string? responseBody = null,
         bool streamed = false,
         string? error = null,
-        int? status = 200) => new(
+        int? status = 200,
+        long sessionId = 1) => new(
         StartedAt: "2026-08-27T00:00:00.0000000Z",
+        Seq: 0,
+        SessionId: sessionId,
         Backend: "test",
         TagsJson: null,
         Method: "POST",

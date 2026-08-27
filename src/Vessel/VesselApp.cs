@@ -37,10 +37,13 @@ public static class VesselApp
         builder.Services.AddSingleton<BackendRegistry>();
         builder.Services.AddSingleton<ProxyHandler>();
         builder.Services.AddSingleton<CaptureChannel>();
+        builder.Services.AddSingleton<CaptureEvents>();
+        builder.Services.AddSingleton<CurrentSession>();
         builder.Services.AddSingleton(sp => new FormatEnricher(
             sp.GetRequiredService<VesselConfig>(), sp.GetService<ILogger<FormatEnricher>>()));
         builder.Services.AddSingleton(sp => new SqliteCaptureStore(dbPath, sp.GetRequiredService<VesselConfig>()));
         builder.Services.AddSingleton<ICaptureStore>(sp => sp.GetRequiredService<SqliteCaptureStore>());
+        builder.Services.AddSingleton(sp => new SqliteReadStore(dbPath));
         // Registered before Kestrel's own hosted service starts the listener, so the
         // database initializes (fail-fast) before any traffic is accepted.
         builder.Services.AddHostedService<CaptureWriterService>();
@@ -48,12 +51,20 @@ public static class VesselApp
         var app = builder.Build();
 
         // Everything Vessel-owned lives under /vessel/ — mapped before the catch-all,
-        // never proxied.
+        // never proxied (D7).
         app.MapGet("/vessel/api/status", (RequestDelegate)StatusEndpoint.Handle);
-        app.Map("/vessel/{**rest}", (RequestDelegate)(context =>
+        app.MapGet("/vessel/api/requests", (RequestDelegate)RequestsEndpoints.List);
+        app.MapGet("/vessel/api/requests/{id:long}", (RequestDelegate)RequestsEndpoints.Detail);
+        app.MapGet("/vessel/api/stats", (RequestDelegate)StatsEndpoint.Handle);
+        app.MapGet("/vessel/api/sessions", (RequestDelegate)SessionsEndpoints.List);
+        app.MapPost("/vessel/api/sessions", (RequestDelegate)SessionsEndpoints.Create);
+        app.MapGet("/vessel/api/events", (RequestDelegate)EventsEndpoint.Handle);
+        app.Map("/vessel/api/{**rest}", (RequestDelegate)(context =>
             VesselErrors.Write(
                 context, StatusCodes.Status404NotFound, VesselErrors.NotFound,
-                $"no such Vessel endpoint: {context.Request.Path}")));
+                $"no such Vessel API endpoint: {context.Request.Path}")));
+        app.Map("/vessel", (RequestDelegate)StaticUi.Handle);
+        app.Map("/vessel/{**rest}", (RequestDelegate)StaticUi.Handle);
 
         app.Map("/{**catchall}", (RequestDelegate)(context =>
             context.RequestServices.GetRequiredService<ProxyHandler>().Handle(context)));

@@ -1,0 +1,34 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Backend: Vessel",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "backend: build",
+            "program": "${workspaceFolder}/src/Vessel/bin/Debug/net10.0/Vessel.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/src/Vessel",
+            "stopAtEntry": false,
+            "console": "internalConsole"
+        },
+        {
+            "name": "Frontend: Chrome (vessel UI)",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:5173/vessel/",
+            "webRoot": "${workspaceFolder}/frontend/src",
+            "preLaunchTask": "frontend: dev"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Full stack (backend + frontend)",
+            "configurations": [
+                "Backend: Vessel",
+                "Frontend: Chrome (vessel UI)"
+            ],
+            "stopAll": true
+        }
+    ]
+}

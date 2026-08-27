@@ -17,6 +17,8 @@ public class StorageTests
 
     private static EnrichedRecord MinimalRecord(string path) => _enricher.Enrich(new CaptureRecord(
         StartedAt: DateTime.UtcNow.ToString("o"),
+        Seq: 0,
+        SessionId: 1,
         Backend: "test",
         TagsJson: null,
         Method: "GET",
@@ -48,6 +50,7 @@ public class StorageTests
             using (SqliteCaptureStore store = NewStore(dir))
             {
                 store.Initialize();
+                store.EnsureInitialSession();
                 store.InsertBatch([MinimalRecord("/first")]);
             }
 
@@ -55,6 +58,7 @@ public class StorageTests
             using (SqliteCaptureStore store = NewStore(dir))
             {
                 store.Initialize();
+                store.EnsureInitialSession();
                 store.InsertBatch([MinimalRecord("/second")]);
             }
 
@@ -65,7 +69,7 @@ public class StorageTests
             Assert.Equal("wal", (string)Scalar(connection, "PRAGMA journal_mode"));
             Assert.Equal(2L, Scalar(connection, "PRAGMA auto_vacuum")); // 2 = INCREMENTAL
             Assert.Equal(2L, Scalar(connection, "SELECT COUNT(*) FROM requests"));
-            Assert.Equal(0L, Scalar(connection, "SELECT COUNT(*) FROM sessions"));
+            Assert.Equal(1L, Scalar(connection, "SELECT COUNT(*) FROM sessions")); // EnsureInitialSession creates "session 1" once
             Assert.Equal(0L, Scalar(connection, "SELECT COUNT(*) FROM requests_fts"));
         }
         finally

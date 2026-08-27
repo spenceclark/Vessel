@@ -16,4 +16,26 @@
     <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
   </ItemGroup>
 
+  <!-- D1: frontend/dist is embedded under a fixed "vessel-ui/" logical-name prefix that
+       StaticUi.cs strips itself, so serving doesn't depend on ManifestEmbeddedFileProvider's
+       relative-path conventions. Condition guards a dev binary built without the frontend
+       (dist doesn't exist) — the backend must still build and run, serving a placeholder. -->
+  <PropertyGroup>
+    <FrontendDir>$(MSBuildThisFileDirectory)..\..\frontend</FrontendDir>
+    <FrontendDistDir>$(FrontendDir)\dist</FrontendDistDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="$(FrontendDistDir)\**\*" Condition="Exists('$(FrontendDistDir)')">
+      <LogicalName>vessel-ui/%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <!-- D1: dotnet publish runs the frontend build as a pre-step. Plain dotnet build / dotnet
+       test never touch npm — PrepareForPublish only runs for `dotnet publish`. -->
+  <Target Name="BuildFrontend" BeforeTargets="PrepareForPublish" Condition="Exists('$(FrontendDir)\package.json')">
+    <Exec Command="npm ci" WorkingDirectory="$(FrontendDir)" />
+    <Exec Command="npm run build" WorkingDirectory="$(FrontendDir)" />
+  </Target>
+
 </Project>

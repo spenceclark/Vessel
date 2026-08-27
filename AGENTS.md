@@ -9,7 +9,7 @@ If you asked to implement a phase - only concern with that phase spec, not anyth
 
 ## Non-negotiables
 
-See .editorconfig for house nameing styles
+See .editorconfig for house nameing styles. Specifically private class level variables being with underscore and camel-case.
 
 Violating any of these is either a security incident or unrecoverable. If a task appears to require it, **stop and ask**.
 

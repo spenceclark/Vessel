@@ -1,0 +1,51 @@
+@import 'tailwindcss';
+
+/*
+ * D6: dark/light via prefers-color-scheme, no toggle this phase. Tailwind v4's `dark:`
+ * variant already maps to that media query by default, so plain `dark:` utilities below
+ * just work without extra config.
+ */
+:root {
+  --background: #ffffff;
+  --foreground: #0f1115;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --card: #f9fafb;
+  --accent: #2563eb;
+  --danger: #dc2626;
+  --warning: #d97706;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0f1115;
+    --foreground: #e5e7eb;
+    --muted: #9ca3af;
+    --border: #262a33;
+    --card: #171a21;
+    --accent: #60a5fa;
+    --danger: #f87171;
+    --warning: #fbbf24;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font: 14px/1.5 system-ui, 'Segoe UI', Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}

@@ -78,15 +78,15 @@ request still proxies and lands as `raw`.
 
 *Goal: stop using the SQLite browser.*
 
-- [ ] Vite + React + TS + Tailwind + shadcn scaffold; embedded static hosting under
+- [x] Vite + React + TS + Tailwind + shadcn scaffold; embedded static hosting under
       `/vessel/`; publish pipeline runs `vite build` (§10, §11).
-- [ ] REST: list (paged, basic filters), detail; stats endpoint (§7).
-- [ ] SSE `/vessel/api/events` with lifecycle events; live in-flight rows with running
+- [x] REST: list (paged, basic filters), detail; stats endpoint (§7).
+- [x] SSE `/vessel/api/events` with lifecycle events; live in-flight rows with running
       timer (§4.4).
-- [ ] History list: virtualized, reverse-chron, row = path/model/duration/tok-s/tags/badge.
-- [ ] Detail tabs: Overview (metrics, warnings), Headers (redacted marked), Request,
+- [x] History list: virtualized, reverse-chron, row = path/model/duration/tok-s/tags/badge.
+- [x] Detail tabs: Overview (metrics, warnings), Headers (redacted marked), Request,
       Response — raw JSON toggles first; rich message rendering next.
-- [ ] Sessions: marker rows, stats bar (total/failed, avg latency, avg tok/s, avg TTFT),
+- [x] Sessions: marker rows, stats bar (total/failed, avg latency, avg tok/s, avg TTFT),
       Reset button (§6.3).
 
 **Done when:** you keep a browser tab open on Vessel while working and it's genuinely

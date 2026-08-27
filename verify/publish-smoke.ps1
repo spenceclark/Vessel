@@ -161,6 +161,35 @@ try {
         Write-Host "PASS: unknown backend -> 404 unknown_backend" -ForegroundColor Green
     }
 
+    # Phase 3 D1: the frontend was built and embedded as part of this publish (Node is on
+    # PATH in this environment) - /vessel/ must serve the real SPA shell, not the
+    # no-frontend-embedded placeholder, and its bundled JS asset must be reachable too.
+    $uiResp = $client.GetAsync("$baseUrl/vessel/").GetAwaiter().GetResult()
+    $uiBody = $uiResp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+    if ([int]$uiResp.StatusCode -ne 200 -or $uiBody -notmatch '<title>Vessel</title>' -or $uiBody -match 'not built into this binary') {
+        Write-Host "FAIL: /vessel/ did not serve the embedded UI - status=$([int]$uiResp.StatusCode)" -ForegroundColor Red
+        $failures++
+    }
+    else {
+        Write-Host "PASS: /vessel/ serves the embedded SPA shell" -ForegroundColor Green
+
+        if ($uiBody -match 'src="(/vessel/assets/[^"]+\.js)"') {
+            $assetUrl = "$baseUrl$($Matches[1])"
+            $assetResp = $client.GetAsync($assetUrl).GetAwaiter().GetResult()
+            if ([int]$assetResp.StatusCode -ne 200) {
+                Write-Host "FAIL: embedded UI asset $assetUrl -> $([int]$assetResp.StatusCode)" -ForegroundColor Red
+                $failures++
+            }
+            else {
+                Write-Host "PASS: embedded UI asset $assetUrl loads" -ForegroundColor Green
+            }
+        }
+        else {
+            Write-Host "FAIL: could not find a bundled <script src> in /vessel/ to verify" -ForegroundColor Red
+            $failures++
+        }
+    }
+
     $client.Dispose()
 }
 finally {
