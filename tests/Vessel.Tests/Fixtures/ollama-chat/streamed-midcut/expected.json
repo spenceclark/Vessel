@@ -1,0 +1,18 @@
+{
+  "format": "ollama-chat",
+  "model": "qwen2.5:1.5b",
+  "tokensIn": 2,
+  "tokensOut": 1,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": true,
+  "stopReason": null,
+  "warnings": ["tokens_estimated", "stream_incomplete"],
+  "promptText": "user: Hi",
+  "responseText": "Hel",
+  "responseBody": {
+    "model": "qwen2.5:1.5b",
+    "done": false,
+    "message": {"role": "assistant", "content": "Hel"}
+  }
+}

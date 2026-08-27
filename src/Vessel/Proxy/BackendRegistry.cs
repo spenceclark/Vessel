@@ -3,7 +3,7 @@ using Vessel.Config;
 namespace Vessel.Proxy;
 
 /// <summary>A configured backend with its name resolved and base URL normalized.</summary>
-public sealed record ResolvedBackend(string Name, string BaseUrl, string Type, bool IsDefault);
+public sealed record ResolvedBackend(string Name, string BaseUrl, string Type, bool IsDefault, bool InjectStreamUsage);
 
 /// <summary>Case-insensitive name → backend lookup, built once from config at startup.</summary>
 public sealed class BackendRegistry
@@ -16,7 +16,8 @@ public sealed class BackendRegistry
         foreach ((string name, BackendConfig backend) in config.Backends)
         {
             bool isDefault = string.Equals(name, config.DefaultBackend, StringComparison.OrdinalIgnoreCase);
-            _byName[name] = new ResolvedBackend(name, backend.BaseUrl.TrimEnd('/'), backend.Type, isDefault);
+            _byName[name] = new ResolvedBackend(
+                name, backend.BaseUrl.TrimEnd('/'), backend.Type, isDefault, backend.InjectStreamUsage);
         }
 
         Default = _byName.Values.Single(b => b.IsDefault);

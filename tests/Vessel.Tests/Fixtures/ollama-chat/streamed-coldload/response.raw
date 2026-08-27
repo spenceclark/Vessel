@@ -1,0 +1,2 @@
+{"model":"qwen2.5:1.5b","message":{"role":"assistant","content":"Hi"},"done":false}
+{"model":"qwen2.5:1.5b","message":{"role":"assistant","content":""},"done_reason":"stop","done":true,"total_duration":5000000000,"load_duration":3000000000,"prompt_eval_count":5,"prompt_eval_duration":100000000,"eval_count":1,"eval_duration":20000000}

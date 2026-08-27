@@ -1,0 +1,24 @@
+{
+  "format": "anthropic-messages",
+  "model": "claude-haiku-4-5-20251001",
+  "tokensIn": 125,
+  "tokensOut": 4,
+  "tokensCachedRead": 100,
+  "tokensCachedWrite": 20,
+  "tokensEstimated": false,
+  "stopReason": "end_turn",
+  "tokPerSec": 4.0,
+  "warnings": [],
+  "promptText": "system: You have a large cached context.\nuser: Repeat cached content",
+  "responseText": "Cached",
+  "responseBody": {
+    "id": "msg_3",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-4-5-20251001",
+    "content": [{"type": "text", "text": "Cached"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "usage": {"input_tokens": 5, "output_tokens": 4, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 20}
+  }
+}

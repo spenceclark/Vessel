@@ -23,11 +23,38 @@ param(
     [switch]$OpenAI,
     [switch]$Anthropic,
     [string]$OpenAIModel = "gpt-4o-mini",
-    [string]$AnthropicModel = "claude-haiku-4-5-20251001"
+    [string]$AnthropicModel = "claude-haiku-4-5-20251001",
+    # Phase 2: assert the enriched row (format/model/tokens/tok_per_sec/stop_reason) each
+    # Ollama case lands in vessel.db. Auto-detected from the dev-run layout if left blank.
+    [string]$DbPath = "",
+    [switch]$SkipDbChecks
 )
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Net.Http
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "lib-db.ps1")
+
+if ([string]::IsNullOrEmpty($DbPath)) {
+    foreach ($candidate in @(
+        (Join-Path $repoRoot "src/Vessel/bin/Debug/net10.0/vessel.db"),
+        (Join-Path $repoRoot "src/Vessel/bin/Release/net10.0/vessel.db"),
+        (Join-Path $repoRoot "vessel.db"))) {
+        if (Test-Path $candidate) { $DbPath = $candidate; break }
+    }
+}
+
+$script:DbReady = $false
+if (-not $SkipDbChecks) {
+    if ([string]::IsNullOrEmpty($DbPath) -or -not (Test-Path $DbPath)) {
+        Write-Warning "DB checks skipped: vessel.db not found (pass -DbPath, or -SkipDbChecks to silence)."
+    }
+    elseif (Import-VesselSqlite -RepoRoot $repoRoot) {
+        $script:DbReady = $true
+        Write-Host "DB checks enabled against $DbPath" -ForegroundColor Green
+    }
+}
 
 $client = New-Object System.Net.Http.HttpClient
 $client.Timeout = [TimeSpan]::FromMinutes(10)
@@ -175,6 +202,80 @@ function Compare-Case {
     Write-Host ("   first byte: direct {0:n1} ms, vessel {1:n1} ms (delta {2:n1} ms)" -f $direct.FirstByteMs, $proxied.FirstByteMs, $delta)
 
     if (-not $ok) { $script:Failures++ }
+    return $direct
+}
+
+# Concatenated assistant text from an OpenAI-format SSE stream (for the synthesized-body check).
+function Get-SseAssistantText {
+    param([byte[]]$Bytes)
+    $text = [Text.Encoding]::UTF8.GetString($Bytes)
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($line in ($text -split "`n")) {
+        $line = $line.TrimEnd("`r")
+        if (-not $line.StartsWith("data:")) { continue }
+        $data = $line.Substring(5).Trim()
+        if ($data -eq "[DONE]" -or $data.Length -eq 0) { continue }
+        try {
+            $delta = ($data | ConvertFrom-Json).choices[0].delta.content
+            if ($null -ne $delta) { [void]$sb.Append($delta) }
+        }
+        catch { }
+    }
+    return $sb.ToString()
+}
+
+# Polls vessel.db for the row tagged $Tag and asserts the Phase 2 enrichment fields.
+function Assert-EnrichedRow {
+    param([string]$Tag, [string]$ExpectedFormat, [bool]$Sse = $false, [string]$DirectText = "")
+
+    if (-not $script:DbReady) { return }
+
+    $row = $null
+    for ($i = 0; $i -lt 40; $i++) {
+        $rows = Get-VesselRows -DbPath $DbPath -Sql @"
+SELECT id, format, model, tokens_in, tokens_out, tok_per_sec, stop_reason, response_body
+FROM requests WHERE tags LIKE '%$Tag%' ORDER BY id DESC LIMIT 1
+"@
+        if ($rows.Count -gt 0) { $row = $rows[0]; break }
+        Start-Sleep -Milliseconds 250
+    }
+
+    if ($null -eq $row) {
+        Write-Host "   DB FAIL: no captured row for tag $Tag" -ForegroundColor Red
+        $script:Failures++
+        return
+    }
+
+    $problems = @()
+    if ($row.format -ne $ExpectedFormat) { $problems += "format '$($row.format)' != '$ExpectedFormat'" }
+    if ([string]::IsNullOrEmpty([string]$row.model)) { $problems += "model is null" }
+    if ($null -eq $row.tokens_in -or [long]$row.tokens_in -le 0) { $problems += "tokens_in not positive" }
+    if ($null -eq $row.tokens_out -or [long]$row.tokens_out -le 0) { $problems += "tokens_out not positive" }
+    if ($null -eq $row.tok_per_sec) { $problems += "tok_per_sec is null" }
+    if ([string]::IsNullOrEmpty([string]$row.stop_reason)) { $problems += "stop_reason is null" }
+
+    if ($Sse) {
+        if ($null -eq $row.response_body) {
+            $problems += "synthesized response_body is null"
+        }
+        else {
+            try {
+                $json = [Text.Encoding]::UTF8.GetString((Expand-VesselBody ([byte[]]$row.response_body)))
+                $text = ($json | ConvertFrom-Json).choices[0].message.content
+                if ($text -ne $DirectText) { $problems += "synthesized text '$text' != direct '$DirectText'" }
+            }
+            catch { $problems += "response_body did not parse/decompress: $_" }
+        }
+    }
+
+    if ($problems.Count -gt 0) {
+        foreach ($p in $problems) { Write-Host "   DB FAIL: $p" -ForegroundColor Red }
+        $script:Failures++
+    }
+    else {
+        $tps = [Math]::Round([double]$row.tok_per_sec, 1)
+        Write-Host "   DB: format=$($row.format) model=$($row.model) in=$($row.tokens_in) out=$($row.tokens_out) tok/s=$tps stop=$($row.stop_reason)" -ForegroundColor Green
+    }
 }
 
 # --- Preflight ------------------------------------------------------------------------
@@ -207,21 +308,36 @@ if ([string]::IsNullOrEmpty($Model)) {
 $msg = '{"role":"user","content":"Reply with exactly the word: hello"}'
 $ollamaOpts = '"options":{"seed":42,"temperature":0}'
 
+function New-Tag { "vtag" + [Guid]::NewGuid().ToString("N").Substring(0, 12) }
+
+$t1 = New-Tag
 Compare-Case -Name "ollama native /api/chat (non-streamed)" `
     -DirectBase $BackendUrl -VesselBase $VesselUrl -Path "/api/chat" `
-    -BodyJson "{`"model`":`"$Model`",`"messages`":[$msg],`"stream`":false,$ollamaOpts}"
+    -BodyJson "{`"model`":`"$Model`",`"messages`":[$msg],`"stream`":false,$ollamaOpts}" `
+    -Headers @{ "X-Vessel-Tags" = $t1 } | Out-Null
+Assert-EnrichedRow -Tag $t1 -ExpectedFormat "ollama-chat"
 
+$t2 = New-Tag
 Compare-Case -Name "ollama native /api/chat (NDJSON streamed)" `
     -DirectBase $BackendUrl -VesselBase $VesselUrl -Path "/api/chat" `
-    -BodyJson "{`"model`":`"$Model`",`"messages`":[$msg],`"stream`":true,$ollamaOpts}"
+    -BodyJson "{`"model`":`"$Model`",`"messages`":[$msg],`"stream`":true,$ollamaOpts}" `
+    -Headers @{ "X-Vessel-Tags" = $t2 } | Out-Null
+Assert-EnrichedRow -Tag $t2 -ExpectedFormat "ollama-chat"
 
+$t3 = New-Tag
 Compare-Case -Name "ollama /v1/chat/completions (non-streamed)" `
     -DirectBase $BackendUrl -VesselBase $VesselUrl -Path "/v1/chat/completions" `
-    -BodyJson "{`"model`":`"$Model`",`"messages`":[$msg],`"stream`":false,`"seed`":42,`"temperature`":0}"
+    -BodyJson "{`"model`":`"$Model`",`"messages`":[$msg],`"stream`":false,`"seed`":42,`"temperature`":0}" `
+    -Headers @{ "X-Vessel-Tags" = $t3 } | Out-Null
+Assert-EnrichedRow -Tag $t3 -ExpectedFormat "openai-chat"
 
-Compare-Case -Name "ollama /v1/chat/completions (SSE streamed)" `
+$t4 = New-Tag
+$directSse = Compare-Case -Name "ollama /v1/chat/completions (SSE streamed)" `
     -DirectBase $BackendUrl -VesselBase $VesselUrl -Path "/v1/chat/completions" `
-    -BodyJson "{`"model`":`"$Model`",`"messages`":[$msg],`"stream`":true,`"seed`":42,`"temperature`":0}"
+    -BodyJson "{`"model`":`"$Model`",`"messages`":[$msg],`"stream`":true,`"seed`":42,`"temperature`":0}" `
+    -Headers @{ "X-Vessel-Tags" = $t4 }
+$directText = if ($null -ne $directSse) { Get-SseAssistantText $directSse.Bytes } else { "" }
+Assert-EnrichedRow -Tag $t4 -ExpectedFormat "openai-chat" -Sse $true -DirectText $directText
 
 # --- Live cases (opt-in; compared with volatile-field masking) ------------------------
 

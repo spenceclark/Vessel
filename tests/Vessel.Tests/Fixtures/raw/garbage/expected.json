@@ -1,0 +1,13 @@
+{
+  "format": "raw",
+  "model": null,
+  "tokensIn": null,
+  "tokensOut": null,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": null,
+  "warnings": [],
+  "promptText": null,
+  "responseText": null
+}

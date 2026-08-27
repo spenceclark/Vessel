@@ -1,0 +1,26 @@
+{
+  "format": "ollama-generate",
+  "model": "qwen2.5:1.5b",
+  "tokensIn": 8,
+  "tokensOut": 1,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": "stop",
+  "tokPerSec": 40.0,
+  "warnings": [],
+  "promptText": "user: What is 2+2? Reply with just the number.",
+  "responseText": "4",
+  "responseBody": {
+    "model": "qwen2.5:1.5b",
+    "response": "4",
+    "done": true,
+    "done_reason": "stop",
+    "total_duration": 300000000,
+    "load_duration": 20000000,
+    "prompt_eval_count": 8,
+    "prompt_eval_duration": 50000000,
+    "eval_count": 1,
+    "eval_duration": 25000000
+  }
+}

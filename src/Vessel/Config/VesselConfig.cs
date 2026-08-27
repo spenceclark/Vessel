@@ -17,6 +17,8 @@ public sealed class VesselConfig
 
     public CaptureConfig Capture { get; set; } = new();
 
+    public WarningsConfig Warnings { get; set; } = new();
+
     // Properties this binary doesn't know about (from a newer Vessel version) must
     // survive a load/save round trip.
     [JsonExtensionData]
@@ -29,6 +31,14 @@ public sealed class BackendConfig
 
     /// <summary>Hint for format parsing and UI affordances: openai | anthropic | ollama | auto.</summary>
     public string Type { get; set; } = "auto";
+
+    /// <summary>
+    /// D11 — for OpenAI-format backends, add <c>stream_options.include_usage</c> to streamed
+    /// requests so exact token counts are reported. Off by default; the one request-path
+    /// mutation, and only ever on <c>type: openai</c> backends.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool InjectStreamUsage { get; set; }
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }
@@ -65,6 +75,18 @@ public sealed class CaptureConfig
     /// the proxied traffic itself is never truncated.
     /// </summary>
     public int MaxBodyMb { get; set; } = 32;
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+}
+
+public sealed class WarningsConfig
+{
+    /// <summary>
+    /// D7 — a streamed response whose TTFT exceeds this (ms) gets the <c>slow_ttft</c>
+    /// warning, unless a cold model load already explains it. <c>0</c> disables the check.
+    /// </summary>
+    public int SlowTtftMs { get; set; } = 5000;
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }

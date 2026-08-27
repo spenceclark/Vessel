@@ -1,0 +1,14 @@
+{
+  "format": "ollama-generate",
+  "model": "qwen2.5:1.5b",
+  "tokensIn": 8,
+  "tokensOut": 1,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": "stop",
+  "tokPerSec": 40.0,
+  "warnings": [],
+  "promptText": "user: What is 2+2? Reply with just the number.",
+  "responseText": "4"
+}

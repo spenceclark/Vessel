@@ -1,0 +1,6 @@
+data: {"id":"chatcmpl-3","object":"chat.completion.chunk","created":1756252800,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-3","object":"chat.completion.chunk","created":1756252800,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":" there"},"finish_reason":"stop"}]}
+
+data: [DONE]
+

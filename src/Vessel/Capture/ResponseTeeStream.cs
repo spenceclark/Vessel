@@ -32,6 +32,7 @@ public sealed class ResponseTeeStream(Stream inner, CaptureContext capture) : St
         }
 
         inner.Write(buffer);
+        capture.MarkLastResponseByte();
         capture.ResponseBuffer.Append(buffer);
     }
 
@@ -43,6 +44,7 @@ public sealed class ResponseTeeStream(Stream inner, CaptureContext capture) : St
         }
 
         await inner.WriteAsync(buffer, cancellationToken);
+        capture.MarkLastResponseByte();
         capture.ResponseBuffer.Append(buffer.Span);
     }
 

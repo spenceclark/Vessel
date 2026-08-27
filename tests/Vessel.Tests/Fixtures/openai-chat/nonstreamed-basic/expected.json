@@ -1,0 +1,13 @@
+{
+  "format": "openai-chat",
+  "model": "gpt-4o-mini",
+  "tokensIn": 12,
+  "tokensOut": 1,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": "stop",
+  "warnings": [],
+  "promptText": "system: You are terse.\nuser: Say hello",
+  "responseText": "Hello"
+}

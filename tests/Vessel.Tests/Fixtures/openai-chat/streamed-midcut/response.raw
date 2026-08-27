@@ -1,0 +1,3 @@
+data: {"id":"chatcmpl-6","object":"chat.completion.chunk","created":1756252800,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-6","object":"chat.completion.chunk","created":1756252800,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"lo wor

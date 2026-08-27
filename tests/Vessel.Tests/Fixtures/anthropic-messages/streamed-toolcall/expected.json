@@ -1,0 +1,26 @@
+{
+  "format": "anthropic-messages",
+  "model": "claude-haiku-4-5-20251001",
+  "tokensIn": 15,
+  "tokensOut": 8,
+  "tokensCachedRead": 0,
+  "tokensCachedWrite": 0,
+  "tokensEstimated": false,
+  "stopReason": "tool_use",
+  "tokPerSec": 8.0,
+  "warnings": [],
+  "promptText": "user: Weather in Paris?",
+  "responseText": "[tool_use get_weather] {\"city\":\"Paris\"}",
+  "responseBody": {
+    "id": "msg_5",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-4-5-20251001",
+    "content": [
+      {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}
+    ],
+    "stop_reason": "tool_use",
+    "stop_sequence": null,
+    "usage": {"input_tokens": 15, "output_tokens": 8, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+  }
+}

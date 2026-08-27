@@ -1,0 +1,1 @@
+{"path":"/v1/chat/completions","status":200,"responseContentType":"application/json","responseContentEncoding":"weird-encoding","backend":"openai","backendType":"openai"}

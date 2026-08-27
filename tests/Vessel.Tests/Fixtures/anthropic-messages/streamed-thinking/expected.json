@@ -1,0 +1,27 @@
+{
+  "format": "anthropic-messages",
+  "model": "claude-haiku-4-5-20251001",
+  "tokensIn": 8,
+  "tokensOut": 12,
+  "tokensCachedRead": 0,
+  "tokensCachedWrite": 0,
+  "tokensEstimated": false,
+  "stopReason": "end_turn",
+  "tokPerSec": 12.0,
+  "warnings": [],
+  "promptText": "user: What is 2+2? Think first.",
+  "responseText": "Let me think\nThe answer is 4",
+  "responseBody": {
+    "id": "msg_4",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-4-5-20251001",
+    "content": [
+      {"type": "thinking", "thinking": "Let me think"},
+      {"type": "text", "text": "The answer is 4"}
+    ],
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "usage": {"input_tokens": 8, "output_tokens": 12, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+  }
+}

@@ -121,6 +121,32 @@ public static class ConfigLoader
         {
             throw new ConfigException($"config '{path}': capture.maxBodyMb must be positive");
         }
+
+        if (config.Warnings.SlowTtftMs < 0)
+        {
+            throw new ConfigException($"config '{path}': warnings.slowTtftMs must be zero or positive (0 disables)");
+        }
+    }
+
+    /// <summary>
+    /// Non-fatal configuration warnings surfaced at startup (D11): <c>injectStreamUsage</c>
+    /// is only meaningful on <c>type: openai</c> backends. Returned rather than thrown —
+    /// these never stop Vessel from starting.
+    /// </summary>
+    public static IReadOnlyList<string> CollectWarnings(VesselConfig config)
+    {
+        var warnings = new List<string>();
+        foreach ((string name, BackendConfig backend) in config.Backends)
+        {
+            if (backend.InjectStreamUsage && !string.Equals(backend.Type, "openai", StringComparison.OrdinalIgnoreCase))
+            {
+                warnings.Add(
+                    $"backend '{name}': injectStreamUsage is only meaningful on type 'openai' " +
+                    $"(this backend is '{backend.Type}'); it will be ignored");
+            }
+        }
+
+        return warnings;
     }
 
     public static bool TryParseListen(string listen, out System.Net.IPAddress address, out int port)

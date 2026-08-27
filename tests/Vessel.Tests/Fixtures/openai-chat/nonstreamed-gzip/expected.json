@@ -1,0 +1,13 @@
+{
+  "format": "openai-chat",
+  "model": "gpt-4o-mini",
+  "tokensIn": 7,
+  "tokensOut": 3,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": "stop",
+  "warnings": [],
+  "promptText": "user: hi",
+  "responseText": "Compressed hi"
+}

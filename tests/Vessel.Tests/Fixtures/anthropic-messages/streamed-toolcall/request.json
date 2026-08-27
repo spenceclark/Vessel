@@ -1,0 +1,1 @@
+{"model":"claude-haiku-4-5-20251001","max_tokens":256,"tools":[{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}],"messages":[{"role":"user","content":"Weather in Paris?"}]}

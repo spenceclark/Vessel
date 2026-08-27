@@ -1,0 +1,24 @@
+{
+  "format": "openai-chat",
+  "model": "gpt-4o-mini",
+  "tokensIn": 5,
+  "tokensOut": 16,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": "length",
+  "tokPerSec": 16.0,
+  "warnings": ["truncated_response"],
+  "promptText": "user: Tell me a story",
+  "responseText": "This is a very long",
+  "responseBody": {
+    "id": "chatcmpl-5",
+    "object": "chat.completion",
+    "created": 1756252800,
+    "model": "gpt-4o-mini",
+    "choices": [
+      {"index": 0, "message": {"role": "assistant", "content": "This is a very long"}, "finish_reason": "length"}
+    ],
+    "usage": {"prompt_tokens": 5, "completion_tokens": 16, "total_tokens": 21}
+  }
+}

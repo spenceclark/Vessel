@@ -1,0 +1,14 @@
+{
+  "format": "ollama-chat",
+  "model": "qwen2.5:1.5b",
+  "tokensIn": 10,
+  "tokensOut": 2,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": "stop",
+  "tokPerSec": 50.0,
+  "warnings": [],
+  "promptText": "user: Reply with exactly the word: Hello",
+  "responseText": "Hello"
+}

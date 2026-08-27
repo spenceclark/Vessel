@@ -18,9 +18,12 @@ public sealed record CaptureRecord(
     double? DurationMs,
     double? TtftMs,
     double? VesselOverheadMs,
+    double? FirstResponseByteMs,
+    double? LastResponseByteMs,
     string RequestHeadersJson,
     string? ResponseHeadersJson,
     byte[]? RequestBody,
     byte[]? ResponseBody,
     byte[]? ResponseRaw,
-    bool Truncated);
+    bool Truncated,
+    bool UsageInjected);

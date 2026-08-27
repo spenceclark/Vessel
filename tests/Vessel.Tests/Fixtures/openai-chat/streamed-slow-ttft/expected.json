@@ -1,0 +1,24 @@
+{
+  "format": "openai-chat",
+  "model": "gpt-4o-mini",
+  "tokensIn": 9,
+  "tokensOut": 2,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": "stop",
+  "tokPerSec": 2.0,
+  "warnings": ["slow_ttft"],
+  "promptText": "user: Say hello",
+  "responseText": "Hello!",
+  "responseBody": {
+    "id": "chatcmpl-8",
+    "object": "chat.completion",
+    "created": 1756252800,
+    "model": "gpt-4o-mini",
+    "choices": [
+      {"index": 0, "message": {"role": "assistant", "content": "Hello!"}, "finish_reason": "stop"}
+    ],
+    "usage": {"prompt_tokens": 9, "completion_tokens": 2, "total_tokens": 11}
+  }
+}

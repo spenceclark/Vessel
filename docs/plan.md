@@ -50,20 +50,23 @@ SQLite browser, DB stays under the cap, and no plaintext key appears anywhere in
 
 *Goal: rows have model, tokens, stop reason, flattened text — not just bytes.*
 
-- [ ] Adapter interface + payload sniffing (§5); runs in the writer, never request path.
-- [ ] **Ollama native** (`/api/chat`, `/api/generate`): NDJSON reassembly; exact
+- [x] Adapter interface + payload sniffing (§5); runs in the writer, never request path.
+- [x] **Ollama native** (`/api/chat`, `/api/generate`): NDJSON reassembly; exact
       `eval_count`/`eval_duration` metrics; `load_duration` captured (§5, §5.3).
-- [ ] **OpenAI chat**: SSE delta reassembly; usage-from-final-chunk;
+- [x] **OpenAI chat**: SSE delta reassembly; usage-from-final-chunk;
       `chars/4` estimation + `tokens_estimated` flag when absent (§5.4); optional
       per-backend `injectStreamUsage` (§3.4).
-- [ ] **Anthropic messages**: event-type folding; usage from `message_start`/`message_delta`;
+- [x] **Anthropic messages**: event-type folding; usage from `message_start`/`message_delta`;
       cache read/write tokens (§5).
-- [ ] Warning flags: `length`/`max_tokens` stop, non-2xx, client disconnect, estimated
+- [x] Warning flags: `length`/`max_tokens` stop, non-2xx, client disconnect, estimated
       tokens, high TTFT (§5.3).
-- [ ] Store reassembled + raw chunk stream for streamed responses (§4.3).
-- [ ] Test fixtures: recorded real wire captures (streamed + non-streamed, all three
-      formats, plus malformed/truncated cases) as golden files. This is the highest-value
-      test surface in the project — build it properly.
+- [x] Store reassembled + raw chunk stream for streamed responses (§4.3).
+- [x] FTS population + delete maintenance (moved here from Phase 4 — text exists now,
+      so consistency starts now; Phase 4 wires the search UI only).
+- [x] Test fixtures: golden files for all three formats (streamed + non-streamed, tool
+      calls, truncation, cold-load, cache tokens, thinking, gzip, plus malformed/truncated
+      cases). Hand-authored to the documented wire shape (no live backend at authoring
+      time); `verify/record-fixtures.ps1` re-records them wire-true against real Ollama.
 
 **Done when:** rows from Ollama-native, Ollama `/v1`, LM Studio, and a live Anthropic call
 all show correct model, token counts, tok/s, and stop reason; a deliberately garbage

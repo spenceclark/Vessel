@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Vessel.Capture;
 using Vessel.Config;
+using Vessel.Formats;
 
 namespace Vessel.Storage;
 
@@ -8,7 +9,7 @@ namespace Vessel.Storage;
 /// The single-writer SQLite store: schema migrations, batched inserts, retention.
 /// Only the background writer touches this; WAL lets future UI reads run concurrently.
 /// </summary>
-public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : IDisposable
+public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : ICaptureStore, IDisposable
 {
 
     private static readonly string[] _migrations =
@@ -108,25 +109,34 @@ public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : IDi
         }
     }
 
-    /// <summary>One transaction per batch; bodies are zstd-compressed here, on the writer thread.</summary>
-    public void InsertBatch(IReadOnlyList<CaptureRecord> batch)
+    /// <summary>
+    /// One transaction per batch (D10): each enriched row is inserted, then — for rows with
+    /// flattened text — a matching contentless FTS row keyed on the same id, so search stays
+    /// consistent from the moment the text exists. Bodies are zstd-compressed here, on the
+    /// writer thread; the streamed <c>response_body</c> is the Vessel-synthesized document.
+    /// </summary>
+    public void InsertBatch(IReadOnlyList<EnrichedRecord> batch)
     {
         SqliteConnection connection = Connected();
         using SqliteTransaction transaction = connection.BeginTransaction();
+
         using SqliteCommand command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
             """
             INSERT INTO requests (
-                started_at, backend, tags, method, path, format, status_code, error,
-                streamed, duration_ms, ttft_ms, vessel_overhead_ms,
-                request_headers, response_headers, request_body, response_body,
-                response_raw, truncated)
+                started_at, backend, tags, method, path, format, model, status_code, error,
+                streamed, duration_ms, ttft_ms, vessel_overhead_ms, tok_per_sec,
+                tokens_in, tokens_out, tokens_cached_read, tokens_cached_write, tokens_estimated,
+                stop_reason, warnings,
+                request_headers, response_headers, request_body, response_body, response_raw, truncated)
             VALUES (
-                $started_at, $backend, $tags, $method, $path, $format, $status_code, $error,
-                $streamed, $duration_ms, $ttft_ms, $vessel_overhead_ms,
-                $request_headers, $response_headers, $request_body, $response_body,
-                $response_raw, $truncated)
+                $started_at, $backend, $tags, $method, $path, $format, $model, $status_code, $error,
+                $streamed, $duration_ms, $ttft_ms, $vessel_overhead_ms, $tok_per_sec,
+                $tokens_in, $tokens_out, $tokens_cached_read, $tokens_cached_write, $tokens_estimated,
+                $stop_reason, $warnings,
+                $request_headers, $response_headers, $request_body, $response_body, $response_raw, $truncated)
+            RETURNING id
             """;
 
         SqliteParameter Add(string name)
@@ -143,12 +153,21 @@ public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : IDi
         SqliteParameter method = Add("$method");
         SqliteParameter path = Add("$path");
         SqliteParameter format = Add("$format");
+        SqliteParameter model = Add("$model");
         SqliteParameter statusCode = Add("$status_code");
         SqliteParameter error = Add("$error");
         SqliteParameter streamed = Add("$streamed");
         SqliteParameter durationMs = Add("$duration_ms");
         SqliteParameter ttftMs = Add("$ttft_ms");
         SqliteParameter overheadMs = Add("$vessel_overhead_ms");
+        SqliteParameter tokPerSec = Add("$tok_per_sec");
+        SqliteParameter tokensIn = Add("$tokens_in");
+        SqliteParameter tokensOut = Add("$tokens_out");
+        SqliteParameter tokensCachedRead = Add("$tokens_cached_read");
+        SqliteParameter tokensCachedWrite = Add("$tokens_cached_write");
+        SqliteParameter tokensEstimated = Add("$tokens_estimated");
+        SqliteParameter stopReason = Add("$stop_reason");
+        SqliteParameter warnings = Add("$warnings");
         SqliteParameter requestHeaders = Add("$request_headers");
         SqliteParameter responseHeaders = Add("$response_headers");
         SqliteParameter requestBody = Add("$request_body");
@@ -156,27 +175,54 @@ public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : IDi
         SqliteParameter responseRaw = Add("$response_raw");
         SqliteParameter truncated = Add("$truncated");
 
-        foreach (CaptureRecord record in batch)
+        using SqliteCommand ftsCommand = connection.CreateCommand();
+        ftsCommand.Transaction = transaction;
+        ftsCommand.CommandText =
+            "INSERT INTO requests_fts (rowid, prompt_text, response_text) VALUES ($rowid, $prompt_text, $response_text)";
+        SqliteParameter ftsRowid = AddTo(ftsCommand, "$rowid");
+        SqliteParameter ftsPrompt = AddTo(ftsCommand, "$prompt_text");
+        SqliteParameter ftsResponse = AddTo(ftsCommand, "$response_text");
+
+        foreach (EnrichedRecord enriched in batch)
         {
+            CaptureRecord record = enriched.Record;
             startedAt.Value = record.StartedAt;
             backend.Value = record.Backend;
             tags.Value = (object?)record.TagsJson ?? DBNull.Value;
             method.Value = record.Method;
             path.Value = record.Path;
-            format.Value = record.Format;
+            format.Value = enriched.Format;
+            model.Value = (object?)enriched.Model ?? DBNull.Value;
             statusCode.Value = (object?)record.StatusCode ?? DBNull.Value;
             error.Value = (object?)record.Error ?? DBNull.Value;
             streamed.Value = record.Streamed ? 1 : 0;
             durationMs.Value = (object?)record.DurationMs ?? DBNull.Value;
             ttftMs.Value = (object?)record.TtftMs ?? DBNull.Value;
             overheadMs.Value = (object?)record.VesselOverheadMs ?? DBNull.Value;
+            tokPerSec.Value = (object?)enriched.TokPerSec ?? DBNull.Value;
+            tokensIn.Value = (object?)enriched.TokensIn ?? DBNull.Value;
+            tokensOut.Value = (object?)enriched.TokensOut ?? DBNull.Value;
+            tokensCachedRead.Value = (object?)enriched.TokensCachedRead ?? DBNull.Value;
+            tokensCachedWrite.Value = (object?)enriched.TokensCachedWrite ?? DBNull.Value;
+            tokensEstimated.Value = enriched.TokensEstimated ? 1 : 0;
+            stopReason.Value = (object?)enriched.StopReason ?? DBNull.Value;
+            warnings.Value = (object?)enriched.WarningsJson ?? DBNull.Value;
             requestHeaders.Value = record.RequestHeadersJson;
             responseHeaders.Value = (object?)record.ResponseHeadersJson ?? DBNull.Value;
             requestBody.Value = CompressOrNull(record.RequestBody);
-            responseBody.Value = CompressOrNull(record.ResponseBody);
+            responseBody.Value = CompressOrNull(enriched.ReassembledResponse ?? record.ResponseBody);
             responseRaw.Value = CompressOrNull(record.ResponseRaw);
             truncated.Value = record.Truncated ? 1 : 0;
-            command.ExecuteNonQuery();
+
+            long id = Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+
+            if (enriched.PromptText is not null || enriched.ResponseText is not null)
+            {
+                ftsRowid.Value = id;
+                ftsPrompt.Value = (object?)enriched.PromptText ?? DBNull.Value;
+                ftsResponse.Value = (object?)enriched.ResponseText ?? DBNull.Value;
+                ftsCommand.ExecuteNonQuery();
+            }
         }
 
         transaction.Commit();
@@ -188,7 +234,7 @@ public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : IDi
         long excess = ExecuteScalar("SELECT COUNT(*) FROM requests") - config.Retention.MaxRequests;
         if (excess > 0)
         {
-            Execute($"DELETE FROM requests WHERE id IN (SELECT id FROM requests ORDER BY id LIMIT {excess})");
+            DeleteOldest(excess);
             Execute("PRAGMA incremental_vacuum");
         }
 
@@ -200,14 +246,59 @@ public sealed class SqliteCaptureStore(string dbPath, VesselConfig config) : IDi
             // just to get under the cap.
             long count = ExecuteScalar("SELECT COUNT(*) FROM requests");
             long chunk = Math.Max(1, count / 100);
-            long deleted = ExecuteScalar(
-                $"DELETE FROM requests WHERE id IN (SELECT id FROM requests ORDER BY id LIMIT {chunk}); SELECT changes()");
+            long deleted = DeleteOldest(chunk);
             Execute("PRAGMA incremental_vacuum");
             if (deleted == 0)
             {
                 break;
             }
         }
+    }
+
+    /// <summary>
+    /// Deletes the oldest <paramref name="limit"/> rows from <c>requests</c> and their
+    /// matching contentless FTS rows in one transaction (D10), so retention never leaves an
+    /// orphaned FTS row. Returns the number of <c>requests</c> rows deleted.
+    /// </summary>
+    private long DeleteOldest(long limit)
+    {
+        if (limit <= 0)
+        {
+            return 0;
+        }
+
+        SqliteConnection connection = Connected();
+        using SqliteTransaction transaction = connection.BeginTransaction();
+
+        const string oldest = "SELECT id FROM requests ORDER BY id LIMIT $limit";
+
+        using (SqliteCommand fts = connection.CreateCommand())
+        {
+            fts.Transaction = transaction;
+            fts.CommandText = $"DELETE FROM requests_fts WHERE rowid IN ({oldest})";
+            AddTo(fts, "$limit").Value = limit;
+            fts.ExecuteNonQuery();
+        }
+
+        long deleted;
+        using (SqliteCommand rows = connection.CreateCommand())
+        {
+            rows.Transaction = transaction;
+            rows.CommandText = $"DELETE FROM requests WHERE id IN ({oldest})";
+            AddTo(rows, "$limit").Value = limit;
+            deleted = rows.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        return deleted;
+    }
+
+    private static SqliteParameter AddTo(SqliteCommand command, string name)
+    {
+        SqliteParameter parameter = command.CreateParameter();
+        parameter.ParameterName = name;
+        command.Parameters.Add(parameter);
+        return parameter;
     }
 
     private long DatabaseSizeBytes() =>

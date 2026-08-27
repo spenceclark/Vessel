@@ -1,0 +1,34 @@
+{
+  "format": "openai-chat",
+  "model": "gpt-4o-mini",
+  "tokensIn": 20,
+  "tokensOut": 10,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": "tool_calls",
+  "tokPerSec": 10.0,
+  "warnings": [],
+  "promptText": "user: Weather in Paris?",
+  "responseText": "[tool_call get_weather] {\"city\":\"Paris\"}",
+  "responseBody": {
+    "id": "chatcmpl-4",
+    "object": "chat.completion",
+    "created": 1756252800,
+    "model": "gpt-4o-mini",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {"index": 0, "id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}}
+          ]
+        },
+        "finish_reason": "tool_calls"
+      }
+    ],
+    "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}
+  }
+}

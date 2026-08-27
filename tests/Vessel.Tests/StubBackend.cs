@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -69,6 +70,32 @@ public sealed class StubBackend : IAsyncDisposable
             context.Response.Headers["X-Stub-Multi"] = new[] { "one", "two" };
             context.Response.ContentLength = bytes.Length;
             await context.Response.Body.WriteAsync(bytes);
+        }));
+
+        // A canned Ollama-native chat response whose assistant content echoes the
+        // ?marker= query, so enrichment tests can locate the row and search its text.
+        app.Map("/api/chat", (RequestDelegate)(async context =>
+        {
+            await context.Request.Body.CopyToAsync(Stream.Null);
+            string marker = context.Request.Query["marker"].ToString();
+            string body =
+                $$"""
+                {"model":"stub-model","message":{"role":"assistant","content":"{{marker}}"},"done_reason":"stop","done":true,"total_duration":100000000,"load_duration":10000000,"prompt_eval_count":5,"prompt_eval_duration":20000000,"eval_count":3,"eval_duration":30000000}
+                """;
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync(body);
+        }));
+
+        // Reflects the request body it received (text + declared Content-Length), so the
+        // injectStreamUsage tests can assert exactly what was forwarded upstream.
+        app.Map("/v1/chat/completions", (RequestDelegate)(async context =>
+        {
+            using var received = new MemoryStream();
+            await context.Request.Body.CopyToAsync(received);
+            var payload = new ReflectPayload(
+                Encoding.UTF8.GetString(received.ToArray()), context.Request.ContentLength);
+            context.Response.ContentType = "application/json";
+            await JsonSerializer.SerializeAsync(context.Response.Body, payload);
         }));
 
         app.Map("/sse", (RequestDelegate)(context =>
@@ -164,3 +191,5 @@ public sealed record EchoPayload(
     Dictionary<string, string> Headers,
     string BodySha256,
     long BodyLength);
+
+public sealed record ReflectPayload(string SeenBody, long? SeenContentLength);

@@ -1,0 +1,24 @@
+{
+  "format": "anthropic-messages",
+  "model": "claude-haiku-4-5-20251001",
+  "tokensIn": 5,
+  "tokensOut": 16,
+  "tokensCachedRead": 0,
+  "tokensCachedWrite": 0,
+  "tokensEstimated": false,
+  "stopReason": "max_tokens",
+  "tokPerSec": 16.0,
+  "warnings": ["truncated_response"],
+  "promptText": "user: Tell me a long story",
+  "responseText": "This is truncated",
+  "responseBody": {
+    "id": "msg_6",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-4-5-20251001",
+    "content": [{"type": "text", "text": "This is truncated"}],
+    "stop_reason": "max_tokens",
+    "stop_sequence": null,
+    "usage": {"input_tokens": 5, "output_tokens": 16, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+  }
+}

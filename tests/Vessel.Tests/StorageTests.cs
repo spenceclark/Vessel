@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Vessel.Capture;
 using Vessel.Config;
+using Vessel.Formats;
 using Vessel.Storage;
 using Xunit;
 
@@ -9,10 +10,12 @@ namespace Vessel.Tests;
 /// <summary>C12 (migrations/pragmas) and CaptureBuffer/compression unit coverage.</summary>
 public class StorageTests
 {
+    private static readonly FormatEnricher _enricher = new(new VesselConfig());
+
     private static SqliteCaptureStore NewStore(string dir) =>
         new(Path.Combine(dir, "vessel.db"), new VesselConfig());
 
-    private static CaptureRecord MinimalRecord(string path) => new(
+    private static EnrichedRecord MinimalRecord(string path) => _enricher.Enrich(new CaptureRecord(
         StartedAt: DateTime.UtcNow.ToString("o"),
         Backend: "test",
         TagsJson: null,
@@ -25,12 +28,15 @@ public class StorageTests
         DurationMs: 1.0,
         TtftMs: null,
         VesselOverheadMs: 0.1,
+        FirstResponseByteMs: null,
+        LastResponseByteMs: null,
         RequestHeadersJson: "{}",
         ResponseHeadersJson: null,
         RequestBody: [1, 2, 3],
         ResponseBody: null,
         ResponseRaw: null,
-        Truncated: false);
+        Truncated: false,
+        UsageInjected: false));
 
     // C12: fresh DB → user_version 1, WAL, incremental auto_vacuum; reopening is a no-op.
     [Fact]

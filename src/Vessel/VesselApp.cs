@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Vessel.Api;
 using Vessel.Capture;
 using Vessel.Config;
+using Vessel.Formats;
 using Vessel.Proxy;
 using Vessel.Storage;
 
@@ -36,7 +37,10 @@ public static class VesselApp
         builder.Services.AddSingleton<BackendRegistry>();
         builder.Services.AddSingleton<ProxyHandler>();
         builder.Services.AddSingleton<CaptureChannel>();
+        builder.Services.AddSingleton(sp => new FormatEnricher(
+            sp.GetRequiredService<VesselConfig>(), sp.GetService<ILogger<FormatEnricher>>()));
         builder.Services.AddSingleton(sp => new SqliteCaptureStore(dbPath, sp.GetRequiredService<VesselConfig>()));
+        builder.Services.AddSingleton<ICaptureStore>(sp => sp.GetRequiredService<SqliteCaptureStore>());
         // Registered before Kestrel's own hosted service starts the listener, so the
         // database initializes (fail-fast) before any traffic is accepted.
         builder.Services.AddHostedService<CaptureWriterService>();

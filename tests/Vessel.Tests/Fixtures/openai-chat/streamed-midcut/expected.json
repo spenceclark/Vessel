@@ -1,0 +1,22 @@
+{
+  "format": "openai-chat",
+  "model": "gpt-4o-mini",
+  "tokensIn": 2,
+  "tokensOut": 1,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": true,
+  "stopReason": null,
+  "warnings": ["tokens_estimated", "stream_incomplete"],
+  "promptText": "user: Hi",
+  "responseText": "Hel",
+  "responseBody": {
+    "id": "chatcmpl-6",
+    "object": "chat.completion",
+    "created": 1756252800,
+    "model": "gpt-4o-mini",
+    "choices": [
+      {"index": 0, "message": {"role": "assistant", "content": "Hel"}, "finish_reason": null}
+    ]
+  }
+}

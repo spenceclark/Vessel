@@ -14,4 +14,9 @@
     <ProjectReference Include="..\..\src\Vessel\Vessel.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Golden fixtures (D12): recorded/wire-true bytes read at test time. -->
+    <Content Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

@@ -1,0 +1,13 @@
+{
+  "format": "anthropic-messages",
+  "model": "claude-haiku-4-5-20251001",
+  "tokensIn": 10,
+  "tokensOut": 3,
+  "tokensCachedRead": 0,
+  "tokensCachedWrite": 0,
+  "tokensEstimated": false,
+  "stopReason": "end_turn",
+  "warnings": [],
+  "promptText": "user: Say hello",
+  "responseText": "Hello there"
+}

@@ -1,0 +1,1 @@
+{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Weather in Paris?"}],"tools":[{"type":"function","function":{"name":"get_weather","parameters":{}}}],"stream":true}

@@ -49,10 +49,14 @@ string backendSummary = string.Join(", ", registry.All
     .OrderByDescending(b => b.IsDefault)
     .Select(b => b.IsDefault ? $"{b.Name} (default, {b.BaseUrl})" : $"{b.Name} ({b.BaseUrl})"));
 
-app.Services.GetRequiredService<ILoggerFactory>()
-    .CreateLogger("Vessel")
-    .LogInformation("Vessel {Version} listening on {Listen} - backends: {Backends}",
-        Vessel.Api.StatusEndpoint.Version, listen, backendSummary);
+ILogger startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Vessel");
+startupLogger.LogInformation("Vessel {Version} listening on {Listen} - backends: {Backends}",
+    Vessel.Api.StatusEndpoint.Version, listen, backendSummary);
+
+foreach (string warning in ConfigLoader.CollectWarnings(config))
+{
+    startupLogger.LogWarning("config: {Warning}", warning);
+}
 
 if (created)
 {

@@ -1,0 +1,23 @@
+{
+  "format": "anthropic-messages",
+  "model": "claude-haiku-4-5-20251001",
+  "tokensIn": 6,
+  "tokensOut": 0,
+  "tokensCachedRead": 0,
+  "tokensCachedWrite": 0,
+  "tokensEstimated": false,
+  "stopReason": null,
+  "warnings": ["stream_incomplete"],
+  "promptText": "user: Give a long answer",
+  "responseText": null,
+  "responseBody": {
+    "id": "msg_7",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-4-5-20251001",
+    "content": [{"type": "text", "text": ""}],
+    "stop_reason": null,
+    "stop_sequence": null,
+    "usage": {"input_tokens": 6, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+  }
+}

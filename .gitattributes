@@ -1,0 +1,3 @@
+# Golden fixtures are byte-exact wire captures — never normalize line endings, and treat
+# the gzip case as binary. The parsers under test depend on the exact bytes.
+tests/Vessel.Tests/Fixtures/** -text

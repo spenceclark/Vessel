@@ -1,0 +1,23 @@
+{
+  "format": "openai-chat",
+  "model": "gpt-4o-mini",
+  "tokensIn": 2,
+  "tokensOut": 2,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": true,
+  "stopReason": "stop",
+  "tokPerSec": 4.0,
+  "warnings": ["tokens_estimated"],
+  "promptText": "user: Hi",
+  "responseText": "Hi there",
+  "responseBody": {
+    "id": "chatcmpl-3",
+    "object": "chat.completion",
+    "created": 1756252800,
+    "model": "gpt-4o-mini",
+    "choices": [
+      {"index": 0, "message": {"role": "assistant", "content": "Hi there"}, "finish_reason": "stop"}
+    ]
+  }
+}

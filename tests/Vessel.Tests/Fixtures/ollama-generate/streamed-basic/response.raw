@@ -1,0 +1,2 @@
+{"model":"qwen2.5:1.5b","response":"4","done":false}
+{"model":"qwen2.5:1.5b","response":"","done":true,"done_reason":"stop","total_duration":300000000,"load_duration":20000000,"prompt_eval_count":8,"prompt_eval_duration":50000000,"eval_count":1,"eval_duration":25000000}

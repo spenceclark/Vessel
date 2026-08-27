@@ -31,8 +31,14 @@ public sealed class CaptureContext(long maxBodyBytes)
     /// <summary>Entry of the first write on the response tee — first response body byte from upstream.</summary>
     public double? FirstResponseByteMs { get; private set; }
 
+    /// <summary>Last write on the response tee — last response body byte (§4.2 tok/s denominator, carry-in).</summary>
+    public double? LastResponseByteMs { get; private set; }
+
     /// <summary>Proxy-level failure code, e.g. unknown_backend / upstream_unreachable / client_disconnect.</summary>
     public string? Error { get; set; }
+
+    /// <summary>Set by <c>ProxyHandler</c> when it injected <c>stream_options.include_usage</c> (D11).</summary>
+    public bool UsageInjected { get; set; }
 
     private double ElapsedMs => Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
 
@@ -41,6 +47,9 @@ public sealed class CaptureContext(long maxBodyBytes)
     public void MarkRequestForwarded() => RequestForwardedMs = ElapsedMs;
 
     public void MarkFirstResponseByte() => FirstResponseByteMs ??= ElapsedMs;
+
+    /// <summary>Overwrite semantics: every response-tee write restamps the last-byte mark.</summary>
+    public void MarkLastResponseByte() => LastResponseByteMs = ElapsedMs;
 
     /// <summary>
     /// Builds the record on the request path — headers are redacted here, before the
@@ -75,6 +84,8 @@ public sealed class CaptureContext(long maxBodyBytes)
             DurationMs: durationMs,
             TtftMs: ttftMs,
             VesselOverheadMs: OverheadMs,
+            FirstResponseByteMs: FirstResponseByteMs,
+            LastResponseByteMs: LastResponseByteMs,
             RequestHeadersJson: HeaderRedactor.ToRedactedJson(context.Request.Headers),
             ResponseHeadersJson: context.Response.HasStarted || Error is null
                 ? HeaderRedactor.ToRedactedJson(context.Response.Headers)
@@ -82,7 +93,8 @@ public sealed class CaptureContext(long maxBodyBytes)
             RequestBody: RequestBuffer.ToArrayOrNull(),
             ResponseBody: streamed ? null : responseBytes,
             ResponseRaw: streamed ? responseBytes : null,
-            Truncated: RequestBuffer.Truncated || ResponseBuffer.Truncated);
+            Truncated: RequestBuffer.Truncated || ResponseBuffer.Truncated,
+            UsageInjected: UsageInjected);
     }
 
     /// <summary>

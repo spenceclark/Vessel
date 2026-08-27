@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Http.Features;
 using Vessel.Api;
 using Vessel.Capture;
@@ -60,15 +61,18 @@ public sealed class ProxyHandler
         var capture = new CaptureContext(_maxBodyBytes);
         context.Items[CaptureContext.ItemsKey] = capture;
 
-        // The tees: request bytes observed as YARP reads them upstream; response bytes
-        // written to the client first, then buffered. The feature wrap covers both the
-        // Stream and PipeWriter write paths.
-        context.Request.Body = new RequestTeeStream(context.Request.Body, capture);
+        // The response tee: bytes written to the client first, then buffered. The feature
+        // wrap covers both the Stream and PipeWriter write paths.
         IHttpResponseBodyFeature priorBody = context.Features.Get<IHttpResponseBodyFeature>()!;
         context.Features.Set<IHttpResponseBodyFeature>(
             new StreamResponseBodyFeature(new ResponseTeeStream(priorBody.Stream, capture), priorBody));
 
         RouteDecision decision = RouteResolver.Resolve(context.Request.Path, context.Request.Headers, _registry);
+
+        // The request tee: request bytes observed as YARP reads them upstream. For
+        // injectStreamUsage-eligible backends the body is prepared specially (D11);
+        // otherwise it is teed as-is.
+        await PrepareRequestBody(context, capture, decision);
 
         try
         {
@@ -93,10 +97,145 @@ public sealed class ProxyHandler
         }
         finally
         {
+            // On an error path YARP may never read the request body (e.g. the connection
+            // was refused). Drain it now so failed rows still carry model + prompt_text
+            // from the request side (D2/F4) — request bodies are single JSON documents,
+            // so this is bounded by the capture cap, not a stream.
+            await CaptureUnreadRequestBody(context, capture);
+
             // Fire-and-forget from the request's point of view; redaction happens
             // inside BuildRecord, so plaintext secrets never reach the channel.
             _captureChannel.Enqueue(capture.BuildRecord(context, decision));
         }
+    }
+
+    private static async Task CaptureUnreadRequestBody(HttpContext context, CaptureContext capture)
+    {
+        if (capture.RequestForwardedMs is not null)
+        {
+            return; // the body was already read (and captured) on the forward path
+        }
+
+        try
+        {
+            await context.Request.Body.CopyToAsync(Stream.Null, context.RequestAborted);
+        }
+        catch (Exception ex) when (ex is IOException or OperationCanceledException or ObjectDisposedException)
+        {
+            // Client went away or the body is no longer readable — nothing more to capture.
+        }
+    }
+
+    private const string ChatCompletionsSuffix = "/chat/completions";
+
+    /// <summary>
+    /// Installs the request-body tee. For an injectStreamUsage-eligible backend (D11), the
+    /// body is buffered first so <c>stream_options.include_usage</c> can be added to a
+    /// streamed request; the stored copy is always the client's original bytes, and any
+    /// disqualifying condition forwards the body unmodified.
+    /// </summary>
+    private async Task PrepareRequestBody(HttpContext context, CaptureContext capture, RouteDecision decision)
+    {
+        if (decision.Backend is not { InjectStreamUsage: true }
+            || !decision.ForwardPath.Value!.EndsWith(ChatCompletionsSuffix, StringComparison.Ordinal)
+            || context.Request.Headers.ContentEncoding.Count > 0)
+        {
+            context.Request.Body = new RequestTeeStream(context.Request.Body, capture);
+            return;
+        }
+
+        (byte[] head, bool overCap, Stream? remainder) = await ReadCapped(context.Request.Body, _maxBodyBytes);
+
+        if (overCap)
+        {
+            // Too large to safely rewrite — forward unmodified, but keep the tee so the
+            // body is still captured (and truncated at the cap) as YARP reads it.
+            var forward = new ConcatStream(head, remainder!);
+            context.Request.Body = new RequestTeeStream(forward, capture);
+            return;
+        }
+
+        if (TryInjectUsage(head, out byte[] modified))
+        {
+            // Capture the client's original bytes; forward the modified body.
+            capture.RequestBuffer.Append(head);
+            capture.MarkRequestForwarded();
+            capture.UsageInjected = true;
+            context.Request.Body = new MemoryStream(modified, writable: false);
+            context.Request.ContentLength = modified.Length;
+        }
+        else
+        {
+            // Not eligible (non-JSON, not streamed, already has stream_options): tee the
+            // buffered original so capture and forwarding both see the same bytes.
+            context.Request.Body = new RequestTeeStream(
+                new MemoryStream(head, writable: false), capture);
+        }
+    }
+
+    /// <summary>
+    /// Reads up to <paramref name="cap"/> bytes into memory and probes for one more, so the
+    /// caller can tell an exactly/under-cap body (fully buffered) from an over-cap one
+    /// (buffered head + the untouched remainder of the stream).
+    /// </summary>
+    private static async Task<(byte[] Head, bool OverCap, Stream? Remainder)> ReadCapped(Stream body, long cap)
+    {
+        using var buffer = new MemoryStream();
+        byte[] chunk = new byte[64 * 1024];
+        while (buffer.Length < cap)
+        {
+            int want = (int)Math.Min(chunk.Length, cap - buffer.Length);
+            int read = await body.ReadAsync(chunk.AsMemory(0, want));
+            if (read == 0)
+            {
+                return (buffer.ToArray(), false, null);
+            }
+
+            buffer.Write(chunk, 0, read);
+        }
+
+        // At the cap: one more byte decides whether the body overflowed it.
+        byte[] one = new byte[1];
+        if (await body.ReadAsync(one.AsMemory(0, 1)) == 0)
+        {
+            return (buffer.ToArray(), false, null);
+        }
+
+        byte[] head = new byte[buffer.Length + 1];
+        buffer.GetBuffer().AsSpan(0, (int)buffer.Length).CopyTo(head);
+        head[^1] = one[0];
+        return (head, true, body);
+    }
+
+    /// <summary>
+    /// Adds <c>stream_options: {include_usage: true}</c> when <paramref name="body"/> is a
+    /// JSON object with <c>"stream": true</c> and no existing <c>stream_options</c>. Any
+    /// parse failure or disqualifying shape returns false — forward unmodified, no warning.
+    /// </summary>
+    private static bool TryInjectUsage(byte[] body, out byte[] modified)
+    {
+        modified = body;
+        JsonObject? obj;
+        try
+        {
+            obj = JsonNode.Parse(body) as JsonObject;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
+
+        if (obj is null
+            || obj["stream"] is not JsonValue streamValue
+            || !streamValue.TryGetValue(out bool stream) || !stream
+            || obj.ContainsKey("stream_options"))
+        {
+            return false;
+        }
+
+        obj["stream_options"] = new JsonObject { ["include_usage"] = true };
+        modified = System.Text.Encoding.UTF8.GetBytes(obj.ToJsonString());
+        return true;
     }
 
     private async Task HandleForwarderError(
