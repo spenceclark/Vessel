@@ -532,6 +532,15 @@ touched this batch).** Notes and deviations:
 
 ## Final acceptance gate (re-run of the review's §6.5, after E)
 
+**Superseded in part by the re-review (see [code-review-phase-4.md](code-review-phase-4.md)),
+then closed by Batch F/G below.** Two of this gate's original bullets were overstated when
+first written: the 10k/100-tag live-burst bullet checked a scenario the same session's own
+prose admitted hadn't been run at that scale, and the reconnect-with-gap bullet relied on
+B1's reconciliation before the re-review found it incomplete under concurrent SSE
+publication (R11/R22) and a clear/buffer race (R23). Both bullets' prose below is corrected
+in place to cite the evidence that actually demonstrates them — F4's real 10k×4 live burst
+and F1/F2/F3's fixes — rather than the original, insufficient evidence D04 flagged.
+
 - [x] Full backend suite stable across 3 consecutive runs (R20 fixed, no reruns-as-fix).
 - [x] Clean tracked-only publish → executable launch → SPA + asset served (A1 smoke).
 - [x] 10k rows + 100 tags at 1280×720: list usable, filters usable, zero stuck
@@ -568,18 +577,18 @@ touched this batch).** Notes and deviations:
   single-file win-x64 exe → launched from an empty directory → first-run config
   creation, `/vessel/api/status`, proxying, `unknown_backend` 404, embedded SPA shell,
   and its hashed JS asset all confirmed. All PASS.
-- **10k rows + 100 tags / zero stuck in-flight rows.** Not re-run at the full literal
-  scale this session — B1 already exercised a 1500-request live burst with zero stuck
-  in-flight rows on the current reconciliation code (unchanged since), and D3's tag-count
-  bounding was verified two ways here: structurally live (`max-height: 84px` +
-  `overflow-y: auto`, confirmed via computed style against a real backend that had grown
-  to 664 rows / 15 tags during this session, where the "+3 more" expander was already
-  live and correct) and precisely at the review's own 0/1/100 counts via a new
-  `FilterBar.test.ts` (5 tests: collapse-to-12 + "+88 more", active-tag-always-visible,
-  a long tag name, empty/single-tag). Between the two, the specific mechanism R12 was
-  about (unbounded tag growth squeezing the list) is directly covered; the exact
-  combined "10k rows and 100 tags in the same live session" scenario was not separately
-  reproduced.
+- **10k rows + 100 tags / zero stuck in-flight rows.** At the time this bullet was first
+  checked, the literal combined scenario had *not* been run at full scale (only a
+  1500-request burst, via B1) — the re-review caught exactly that gap, then independently
+  reproduced a browser crash during a real 10k live burst, which kept the gate open (its
+  §7 condition 5). Batch F's F4 (see above) is what actually demonstrates this bullet: four
+  bursts of 10k/10k/10k/3k requests at concurrency 24 across 100 tags, sent with the tab
+  connected live and never reloaded — 21 in-flight rows down to 0 after settle, SSE never
+  disconnecting, no application crash, the tag picker still correctly bounded (12 shown +
+  "+N more") at 100 real facets. D3's `FilterBar.test.ts` (5 tests pinning the review's own
+  0/1/100 counts) covers the layout mechanism in isolation; F4 is what covers it live, at
+  the literal scale, with the fixes (F1 ordered publication, F2 server-authoritative
+  lifecycle, F3 clear/buffer generation) in place.
 - **Litmus test.** Reproduced live against the real seeded database (664 requests) at
   1280×720: found capture id 331 (a "reply with one word" prompt that ran away to 8,167
   output tokens, `stop_reason: length`) two ways, both well under ten seconds — (1)
@@ -608,15 +617,305 @@ touched this batch).** Notes and deviations:
 - **Clear-before FIFO (A4).** Covered by `CaptureWriterResilienceTests`' flush-ordering
   tests (capture → clear → capture in one batch deletes exactly the pre-clear capture,
   FTS consistent), passing in every full-suite run this session.
-- **Reconnect-with-gap (B1).** Covered by `EventsTests.Sse_EveryFrameCarriesMonotonicEventId`
-  and `useLiveHistory.test.ts`'s reconciliation tests (gap detection, buffered-completion
-  merge), both passing; the live 1500-request burst re-verification is B1's own (see
-  above) and the reconciliation code hasn't changed since.
+- **Reconnect-with-gap (B1, superseded by F1/F2).** B1's mechanism — a unique-but-unordered
+  SSE id plus history-page reconciliation — is what this bullet originally cited, and the
+  re-review found it insufficient on two fronts: concurrent publishers could enqueue frames
+  out of allocation order (R22, 3,535 adjacent reversals out of 12,800 events under a
+  16-publisher probe), and reconciliation only ever checked cached history pages, so a
+  completion lost outside the loaded/filtered pages left a permanently-running row (R11).
+  Both are now closed at the root, not patched around: F1 allocates the publish id and
+  fans out to subscribers inside one lock, so delivery order matches allocation order
+  (pinned by `EventsTests.Publish_ConcurrentPublishers_DeliversEveryFrameInStrictIdOrder`,
+  16 publishers × 100 batches, reintroduction-validated); F2 replaced page-derived
+  reconciliation with a server-authoritative active-request set
+  (`GET /vessel/api/active`), so an off-page or filtered-out completion is detected
+  correctly regardless of what the client happens to have loaded. F4's live burst (above)
+  is the current live evidence for "history complete, in-flight clean" under load.
 - **Rendered markdown: zero unsolicited requests (D1).** Covered by the new
   `MessageView.test.ts` (a markdown image pointing at a URL never becomes a live
   `<img src>`, confirmed via a `fetch` spy asserting zero calls; a markdown link never
   becomes a navigable `<a href>`; an embedded `data:` URI previews from that exact
   source on click) plus the backend `ContentSecurityPolicyTests.cs`.
+
+---
+
+# Re-review remediation (Batches F–G)
+
+> Source: the re-review that replaced [code-review-phase-4.md](code-review-phase-4.md)
+> in place (baseline `b4c5d63`). 17 of 21 original findings closed; still open:
+> R11 (partial), R22/R23 (new regressions in the remediation), R05/R09/R18 remainders,
+> D04 doc accuracy — plus one item raised by our own UI agent (G5). Same house rules;
+> the review's §7 closing conditions are this section's exit gate.
+
+## Batch F — Opus: live-history lifecycle (R22 + R11 + R23 as ONE design)
+
+The three open lifecycle findings are one problem: event ordering, lifecycle truth,
+and deletion boundaries were designed separately. One session, one coherent model:
+
+- [x] **F1 · R22 — Ordered event publication.** ID allocation and channel enqueue
+  become atomic: allocate the event id *inside* the hub's publish lock, in the same
+  critical section as the `TryWrite` fan-out (allocate only when actually publishing;
+  keep the zero-subscriber early-out before the lock). The lock is microseconds
+  between event emitters and never waits on a subscriber — drop-oldest stays; the
+  non-blocking proxy contract is unchanged. Client: gap handling never moves `lastId`
+  backwards, and recovery work is **coalesced** — one pending-reconcile flag with a
+  short debounce, so N gaps in a burst trigger one recovery, not N. Tests: port the
+  review's concurrent-publisher probe (16 publishers × batches, drain fully) into
+  `EventsTests` asserting zero adjacent reversals and complete delivery; a real-drop
+  case still detects loss; a burst of synthetic gaps produces exactly one
+  reconciliation call.
+- [x] **F2 · R11 — Server-authoritative lifecycle.** The client stops inferring
+  "still running" from paginated history — it can't. The server knows: expose the
+  live in-flight set (`activeSeqs`, plus newest completed seq) via
+  `/vessel/api/status` or a tiny dedicated endpoint, sourced from the live
+  `CaptureContext`s. Reconciliation (reconnect or coalesced gap recovery): fetch the
+  active set; any in-flight entry not in it is finished-or-dropped → remove it and
+  refetch list/stats/facets once. No timers; an hour-long generation survives
+  because it is genuinely in the set. Tests: the review's off-page case (started,
+  completion lost, 100 newer rows, reconnect → entry leaves), filtered-history and
+  cleared-row variants, and a long-running request surviving reconciliation.
+- [x] **F3 · R23 — Clear/buffer generation boundary.** Clears bump a client-side
+  generation; buffered completions are stamped at buffer time and merged only if
+  their generation is current. Clear-before precision: the DELETE response gains the
+  boundary (max deleted id); buffered completions above it legitimately survive.
+  `DataPanel` and `useLiveHistory` share this state — one module owns it. Tests
+  cover the interaction *as one*: clear during pending initial fetch (the review's
+  repro → cache is `[]`, not `[1]`), clear during refetch, clear-before with a
+  surviving buffered completion, and R14b's accepted same-tab caveat unchanged.
+- [x] **F4 — Burst re-run + crash check (batch exit gate).** Re-run the 10k-row /
+  100-tag / 24-way live burst with a connected tab: zero stuck in-flight rows, no
+  reload, and **no browser crash**. The untraced crash from the re-review is most
+  plausibly R22's false-gap recovery storm during the burst — but that is a
+  hypothesis, not a finding: if the tab still crashes after F1–F3, capture a
+  performance profile and treat it as a new investigation, not a re-tick.
+
+**Exit:** review §7 conditions 1, 2, and 5 met; full backend + frontend suites green
+including the ported probes as regression tests.
+
+**Batch F landed 2026-08-28 — 258/258 backend green across 3 consecutive runs, 40/40
+frontend green, `tsc -b` + `vite build` clean, lint unchanged at 6 warnings (baseline).**
+The three lifecycle findings were implemented as one model, as the batch required. Notes and
+deviations:
+
+- **F1 (R22).** `CaptureEvents.Publish` now allocates the publish id and fans out to the
+  subscriber channels inside one `lock (_publishLock)`, so every subscriber's queue receives
+  frames in strict id order; the zero-subscriber early-out stays *before* the lock (and
+  before id allocation), so the hot path is unchanged when nobody is watching. The lock only
+  ever wraps `TryWrite` (drop-oldest, never blocks), so the non-blocking proxy contract
+  holds. Client: `useEvents` never rewinds `lastId` (a late lower id can't manufacture a
+  phantom gap), and `useLiveHistory` coalesces recovery — a debounce collapses a burst of
+  gaps, and a single-flight guard folds gaps arriving mid-reconcile into exactly one
+  follow-up, so N gaps produce one recovery, not N. The ported concurrent-publisher probe
+  (`EventsTests.Publish_ConcurrentPublishers_DeliversEveryFrameInStrictIdOrder`, 16
+  publishers × 100 batches × 128, fully drained per batch) asserts zero adjacent reversals
+  and complete 1..N delivery; it was validated by reintroducing the defect (removing the
+  lock → it fails deterministically). A companion test pins that a genuine overflow still
+  drops-oldest as a *detectable* id gap.
+- **F2 (R11).** Reconciliation is now server-authoritative, not history-derived. The hub
+  tracks a live in-flight set (`_active`, added on `started`, removed on `completed`,
+  independent of subscribers) plus `_newestCompletedSeq`, exposed at a new
+  `GET /vessel/api/active` → `{ activeSeqs, newestCompletedSeq }`. The client removes any
+  in-flight row the server no longer lists as active **and** at/below the completed
+  boundary; a row above the boundary is spared (it may have started after the snapshot), and
+  a genuinely long-running request survives because it is genuinely in the set — no timers,
+  no seq-distance heuristic. **Deviation from the batch text:** the active set lives on the
+  `CaptureEvents` hub, not read ad-hoc from live `CaptureContext`s — the hub already sees
+  every `started`/`completed`, so it is the one place that observes the exact lifecycle
+  boundary, and it works with zero subscribers (which reading from a subscriber-driven path
+  would not). Also **a dedicated endpoint, not `/status`** (the batch allowed either): the
+  active set changes on every request and is fetched on demand during reconciliation, so
+  folding it into the polled+cached `/status` query would thrash that cache. The old
+  `(startedAt, method, path)` identity correlation is gone — removal is keyed on `seq`
+  directly. New backend integration test
+  `Active_CompletedRequestLeavesActiveSet_AndAdvancesBoundary`; frontend cases cover the
+  review's off-page repro, filtered/cleared history (the active set is filter-agnostic by
+  construction), a long-running survivor, and a freshly-started row above the boundary.
+- **F3 (R23).** Clears and completion-merging share a generation model owned by
+  `useLiveHistory`. A clear bumps a generation and records a deletion predicate; a buffered
+  completion is stamped at buffer time and discarded at drain if a later clear removed its
+  row (every row for clear-all; ids ≤ boundary for clear-before). The boundary is a new
+  `boundaryId` on the `DELETE /requests` response (max deleted id), which required threading
+  a `ClearOutcome(Deleted, MaxDeletedId)` through `ICaptureStore.Clear` → `ClearCommand` →
+  the endpoint (all call sites swept, incl. the two fake stores and the resilience tests).
+  **Ordering note:** `DataPanel` now reports the clear (bumping the generation) *before* it
+  invalidates the list query, so the generation is current before the post-clear refetch
+  drains the buffer — reporting after the awaited invalidate would race the drain. Clear-all
+  uses a `() => true` predicate rather than `id ≤ boundary`, deliberately: SQLite id reuse
+  (R14b) can hand a post-clear row an id at or below the old boundary, so only the generation
+  (not the id) can safely separate pre- from post-clear rows there. Frontend tests cover the
+  review's exact repro (clear-all during a pending initial fetch → cache `[]`, not `[1]`),
+  clear-before keeping a surviving completion above the boundary, and a completion buffered
+  after the clear surviving; each was validated by bypassing the generation filter (the two
+  clear tests then fail).
+- **F4 — run live and passed the substantive gate.** With the user's approval to use the
+  standard port/DB, a real Vessel (`bin/Debug`, port 4550, standard `vessel.db` — cleared
+  first) was pointed at a fast local Node upstream (~20–80 ms/response so requests are
+  briefly in-flight), the Vite dev UI opened in the in-app browser, and four bursts of
+  10k/10k/10k/3k requests at concurrency 24 cycling 100 distinct tags were sent **with the
+  tab connected live**. Results:
+  - **Zero stuck in-flight rows.** Captured on the *same live, non-reloaded* session: 21
+    in-flight rows rendering mid-burst → **0** after settle (`.pulse-dot` count), SSE staying
+    connected throughout (no "Disconnected" indicator). No reload needed.
+  - **Server lifecycle clean.** `/vessel/api/active` (the new F2 endpoint) returned 0 active
+    after every burst; the store held 10,001 → 20,001 → … rows, **0 failed**, **100 distinct
+    tag facets**, and the tag picker bounded correctly (12 shown + "+N more" expander, R12).
+  - **No application crash.** The React app never showed a page-crash screen and stayed
+    responsive whenever observed. **Caveat worth recording:** the in-app Browser pane's
+    Electron renderer is discarded whenever the pane is not being actively displayed, which
+    surfaced as intermittent `Render frame was disposed` / `Electron sandboxed_renderer …
+    binding.startupData is null` host errors and `[vite] connecting…` reconnects between
+    observations — an Electron *pane-lifecycle* artifact of a non-displayed pane, **not** the
+    Vessel app crashing (no Vessel/React error ever appeared, and every displayed observation
+    showed a healthy app). This is the same class of environment limitation Batch B recorded
+    (there: hidden-tab polling throttling). The re-review's "This page crashed" was not
+    reproduced against F1–F3; consistent with R22's false-gap storm having been the cause,
+    though — per the batch text — the original crash was never traced, so this is corroboration
+    rather than proof of that specific causal link. The mechanisms are additionally pinned by
+    automated regression (reintroduction-validated concurrent-publisher probe; coalesced
+    single-flight recovery; server-authoritative removal that no longer refetches per gap).
+
+## Batch G — Sonnet: fidelity remainders, smoke hardening, docs
+
+Parallel-safe with F except G4 (touches the smoke script only, no code overlap
+anyway). One session, or fold into F's follow-up.
+
+- [x] **G1 · R05 remainder — decode truncation visible.** Add `decodeTruncated` to
+  the TS mirror (`types.ts`); every body view (rendered, PrettyJson, raw stream)
+  shows a body-local warning ("showing first N — display decode limit") when set,
+  visually distinct from capture-time truncation. Test: the review's cap-lowered
+  case renders the warning. **Process rule added by this finding:** any change to
+  `BodyPayload`/`Summary`/`RequestDetail` updates `types.ts` in the same diff —
+  the hand mirror is accepted (phase-3 D8) only with that discipline.
+- [x] **G2 · R09 + R18 remainders — Ollama generate parity.** Generate's top-level
+  `thinking` is accumulated across chunks, retained in the synthesized response and
+  search text, and rendered collapsed (mirror of the chat fix); generate's top-level
+  `images` array reaches the extractor and the existing safe preview path (no-network
+  policy unchanged). Fixtures: generate streamed/non-streamed/interrupted thinking
+  variants + a generate-with-image request; extend, never replace.
+- [x] **G3 · Stat size dropped by tailwind-merge** (raised by the UI agent during the
+  CACHED-slot work; noted in ui-spec §9.1, unfixed). `cn()`'s tailwind-merge
+  misclassifies the custom `text-stat` font-size utility as a *color* utility, so a
+  trailing `text-text`/`text-danger` silently deletes it — every header stat value
+  is rendering at the wrong size. Fix: `extendTailwindMerge` in `lib/utils.ts`
+  registering `stat` in the `font-size` class group; then audit the other custom
+  `@theme` utilities for the same hazard class (`text-*` names are the dangerous
+  ones; `rounded-panel/control/chip` and `shadow-*` group correctly). Test: a
+  component test asserting the computed class list keeps both `text-stat` and the
+  color. Update the ui-spec §9.1 note to fixed.
+- [x] **G4 — Smoke script never uses the default port.** The re-review's smoke
+  failure started with port 4550 already in use (a live daily-drive Vessel — exactly
+  the machine state the script must tolerate). `publish-smoke.ps1` always launches
+  on an ephemeral port with a temp config/db. Then re-run the complete smoke; if the
+  unexplained `SQLite Error 10: disk I/O error` on relaunch recurs in a controlled
+  run, investigate (lead suspect: temp-dir cleanup racing process shutdown) — if it
+  doesn't, record it as environmental and move on.
+- [x] **G5 · D04 — Doc truth pass.** Architecture §9.1 rewritten to the actual
+  atomic `ConfigSnapshot` design (A2); this plan's final-gate checkboxes corrected
+  to what was *demonstrated* (the 10k live gate un-ticked until F4 passes; the
+  reconnect gate qualified per R11/R22); re-review closing conditions tracked here.
+  Docs trail reality, never lead it.
+
+**Exit:** review §7 conditions 3, 4, and 6 met.
+
+**Batch G landed 2026-08-28 — 264/264 backend green across 3 consecutive runs, 56/56
+frontend green, `tsc -b` + `vite build` clean, lint unchanged at 6 warnings (baseline).**
+Notes and deviations:
+
+- **G1.** New `DecodeTruncatedNotice.tsx`: a small warn-colored banner (visually distinct
+  from the Overview tab's danger-colored capture-time "Truncated" card / `body_truncated`
+  badge) shown above the body in `DetailPane`'s Request and Response tabs, computed from
+  *whichever* `BodyPayload` is actually on screen at that moment — `requestBody` for the
+  Request tab; `responseBody` normally, or `responseRaw` specifically when the raw-stream
+  sub-view is selected, for the Response tab — so it tracks the Reassembled/Raw stream
+  toggle rather than showing a stale verdict from the wrong payload. Reports the shown
+  byte length (decoded from `text`/`base64` as appropriate), not the capture-time size.
+  `types.ts`'s `BodyPayload.decodeTruncated` mirrors the backend field per the process
+  rule this finding added. New `DecodeTruncatedNotice.test.ts` (4 cases, incl. the
+  base64-vs-decoded-byte-length distinction); wiring verified live is out of scope here —
+  reproducing an actual over-budget decode needs a real oversized compressed capture,
+  which the component test's exact shape (from the review's own repro) already pins.
+- **G2.** Backend: `TextFlattener.OllamaGenerateResponse` now accumulates top-level
+  `thinking` alongside `response` (mirrors `OllamaChatResponse`'s content-then-thinking
+  order); `OllamaAdapter.Reassemble`'s `generate` branch accumulates `obj["thinking"]` per
+  chunk and sets `synth["thinking"]` only when non-empty (mirrors the chat branch's guard,
+  pinned by a new `NoThinking_Generate_OmitsThinkingField` test alongside the accumulation
+  one). Frontend: `extractOllamaRequest`'s generate branch now reads top-level `images[]`
+  through the existing `ollamaImageSource` (same malformed-entry → `{kind:'unknown'}`
+  degradation chat already relies on) and pushes a message even for an empty prompt with
+  only images attached; `extractOllamaResponse`'s generate branch renders top-level
+  `thinking` as a collapsed block before the response text, reusing `MessageView`'s
+  existing generic `'thinking'` handling — no new UI code needed. Four new golden fixtures
+  (`streamed-thinking`, `nonstreamed-thinking`, `streamed-interrupted-thinking` — cut mid-object
+  with no `done: true`, pinning that partial `thinking` survives an interrupted stream the
+  same way partial `response` already did — and `nonstreamed-with-image`, confirming the
+  adapter doesn't choke on an image-bearing generate request and still flattens `promptText`
+  from `prompt` alone); two new direct `OllamaAdapterTests`; seven new `render/ollama.test.ts`
+  cases covering the request-image and response-thinking extraction directly (a render-layer
+  golden fixture alone wouldn't isolate extraction from the rest of `DetailPane`).
+- **G3.** `lib/utils.ts`'s `cn()` now goes through `extendTailwindMerge`, registering
+  `stat` in the `font-size` class group (`{ text: ['stat'] }`) — plain `twMerge` only knows
+  Tailwind's own scale (`xs`/`sm`/`base`/`lg`/…), so `text-stat` fell through to the
+  text-*color* group and a trailing `text-text`/`text-danger` "won" a conflict that was
+  never real. Audited the app's other custom `@theme` utilities per the batch text's own
+  lead (`rounded-panel/control/chip`, `shadow-panel/dialog`): confirmed none share the
+  hazard, since none collide with a same-prefix semantic group the way a custom `text-*`
+  size name collides with `text-*` colors. New `lib/utils.test.ts` (4 cases: `text-stat`
+  survives both `text-danger` and `text-text`; a genuine font-size-vs-font-size and
+  color-vs-color conflict still resolve correctly, i.e. this isn't just disabling
+  conflict detection for `text-*`). Confirmed live against a running dev build via computed
+  style: every header `Stat` value now measures `font-size: 20px` / `line-height: 24px`
+  (`--text-stat`), not the previous silently-substituted `12.5px` (`--text-sm`).
+  ui-spec.md §9.1's aside updated from "flagged for a separate fix" to fixed, in place.
+- **G4.** `verify/publish-smoke.ps1` redesigned: every launch now gets its own ephemeral
+  port *and* its own fresh directory, with a config always pre-written before the exe
+  starts — nothing here can bind, even transiently, to the hardcoded default
+  `127.0.0.1:4550`, which is what a live daily-driver Vessel already owns on a developer
+  machine (the collision the re-review actually hit). **Deviation:** the old two-launch
+  structure (a first launch left to auto-create its config from nothing, purely to prove
+  `ConfigLoader.LoadOrCreate`'s create branch, then a second launch in the *same* directory
+  pointed at a stub backend) is now one launch, with a config declaring both a real-shaped
+  `ollama` backend entry (unreachable, but present purely so `/vessel/api/status` has a
+  second, differently-typed backend to list) and the proxying `stub`. The auto-create-from-
+  nothing branch can't be exercised without letting Kestrel attempt the hardcoded default
+  port first (there is no `--listen` override, and `ConfigureKestrel` calls `.Listen`
+  explicitly, so `ASPNETCORE_URLS` has no effect either) — that exact branch (content, and
+  that `created` flips correctly on a second load) is already covered port-independently by
+  `ConfigLoaderTests.MissingFile_CreatesDefaultConfig`, so the smoke script no longer
+  re-exercises it live. Merging into one launch also removes the previous first-launch/
+  second-launch pattern of reusing one directory across a `Stop-Process -Force` and a
+  relaunch — the leading suspect for the re-review's unexplained `SQLite Error 10`. Ran the
+  complete redesigned smoke twice end to end (fresh `dotnet publish`, ~103 MB exe, full
+  assertion set) with no port conflict and no SQLite error either time; not chased as a
+  root-caused fix (the mechanism was never proven, only avoided), but recorded as resolved
+  by construction rather than "environmental," since the redesign eliminates the shared
+  state the suspected mechanism needed.
+- **G5.** Architecture.md §9.1 rewritten: the two-separate-fields ("immutable `VesselConfig`
+  snapshot... plus a version counter") description was the pre-A2 design and is exactly
+  what R02 fixed — replaced with the actual atomic `ConfigSnapshot(Config, Version)` unit,
+  `BackendSet`'s matching bundled shape, and `ProxyHandler`/`BackendRegistry.Resolve`'s
+  single-snapshot-per-request contract, including the `_current` fast-path regression the
+  final gate found and fixed (previously undocumented). The stale duplicate "every consumer
+  reads `ConfigStore.Current`..." bullet list (describing the same pre-fix design a second
+  time) was removed rather than kept alongside the corrected text. This plan's Final
+  acceptance gate section (predates the re-review) had exactly the self-contradiction D04
+  flagged — a checked 10k/100-tag box next to prose admitting it wasn't run at that scale,
+  and a checked reconnect-with-gap box whose only cited evidence (B1) the re-review later
+  found incomplete (R11/R22). Both bullets' prose is corrected in place (not appended
+  after) to cite what actually demonstrates them now: F4's real four-burst 10k×3+3k live
+  run for the first, and F1/F2's root-cause fixes plus F4's live re-verification for the
+  second — both checkboxes stay ticked because both are now true, not because they always
+  were. Re-review §7 closing conditions tracked in the new subsection immediately below.
+
+### Re-review closing conditions (§7 of code-review-phase-4.md)
+
+| # | Condition | Status | Where |
+| --- | --- | --- | --- |
+| 1 | Resolve R11/R22 together: authoritative lifecycle + ordered gap detection under concurrent publication | Met | Batch F (F1 ordered publish-and-fan-out; F2 server-authoritative `/vessel/api/active`) |
+| 2 | Resolve R23; verify clear ordering across writer, cache, and completion buffer as one interaction | Met | Batch F (F3 generation-boundary model; `DELETE` response's `boundaryId`) |
+| 3 | Surface decode truncation (R05); finish generate thinking/images (R09/R18) | Met | Batch G (G1, G2) |
+| 4 | Keep all existing tests passing; add the missing regression cases | Met | 264/264 backend (3 consecutive runs), 56/56 frontend, `tsc -b` + `vite build` clean, lint at baseline (6) — verified after Batch G, see above |
+| 5 | Rerun the complete executable smoke; investigate the live-burst crash; pass the literal 10k-row/100-tag live scenario without a reload workaround | Met | Batch F (F4: four bursts, zero stuck in-flight rows, no crash, no reload); Batch G (G4: smoke script redesigned off the default port, run clean twice) |
+| 6 | Correct D04's acceptance claims and atomic-snapshot description in their owning documents; record only gates actually demonstrated | Met | Batch G (G5: architecture.md §9.1; this plan's Final acceptance gate section) |
 
 ## Sequencing summary
 
@@ -627,9 +926,13 @@ Batch 0 (decisions)
        [needs D05; independent of A     status field; else free)  ┘     → Final gate
         except the status endpoint]
 Batch D (Sonnet, frontend) — parallel with C; D7 needs A4's status field.
+
+Re-review: Batch F (Opus, lifecycle F1–F3 + F4 burst gate)
+           Batch G (Sonnet, G1–G5) — parallel with F; G5's gate edits land after F4.
 ```
 
-Opus total: A1–A5 + B1 (the concurrency, lifecycle, MSBuild, and reconciliation
-work). Sonnet total: C1–C8, D1–D8, E1–E4 (well-specified fixes with visible or
-test-pinned failure modes). If running lean, C and D are safely two parallel Sonnet
-sessions — they share no files.
+Opus total: A1–A5, B1, F1–F4 (concurrency, lifecycle, MSBuild, reconciliation).
+Sonnet total: C1–C8, D1–D8, E1–E4, G1–G5 (well-specified fixes with visible or
+test-pinned failure modes). If running lean, C and D — and later F and G — are
+safely parallel sessions; F and G overlap only on `useLiveHistory` documentation
+references, not code.

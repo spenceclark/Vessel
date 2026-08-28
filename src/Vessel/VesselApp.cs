@@ -106,6 +106,7 @@ public static class VesselApp
         // Everything Vessel-owned lives under /vessel/ — mapped before the catch-all,
         // never proxied (D7).
         app.MapGet("/vessel/api/status", (RequestDelegate)StatusEndpoint.Handle);
+        app.MapGet("/vessel/api/active", (RequestDelegate)ActiveRequestsEndpoint.Handle);
         app.MapGet("/vessel/api/requests", (RequestDelegate)RequestsEndpoints.List);
         app.MapDelete("/vessel/api/requests", (RequestDelegate)RequestsEndpoints.Delete);
         app.MapGet("/vessel/api/requests/facets", (RequestDelegate)FacetsEndpoint.Handle);

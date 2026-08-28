@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text.Json;
+using System.Threading.Channels;
+using Vessel.Capture;
 using Xunit;
 
 namespace Vessel.Tests;
@@ -123,8 +125,9 @@ public class EventsTests
 
         // The scoping the UI relies on is only correct if these agree.
         Assert.Equal(startedSessionId, row.GetProperty("sessionId").GetInt64());
-        // ...and the same startedAt string is what correlates an in-flight entry to its
-        // stored row during reconciliation (R11) — seq is not persisted.
+        // ...and the in-flight row must show the same start time as its stored row (the
+        // detail pane hands over from the live entry to the row on completion). Reconciliation
+        // itself is now server-authoritative by seq (R11/F2, GET /active), not a startedAt match.
         Assert.Equal(
             startedDoc.RootElement.GetProperty("startedAt").GetString(),
             row.GetProperty("startedAt").GetString());
@@ -240,6 +243,138 @@ public class EventsTests
         int firstId = lines.FindIndex(l => l.StartsWith("id:", StringComparison.Ordinal));
         int firstEvent = lines.FindIndex(l => l.StartsWith("event:", StringComparison.Ordinal));
         Assert.True(firstId < firstEvent, "id: must come before event: within a frame");
+    }
+
+    // R11/F2 — GET /vessel/api/active is the server-authoritative lifecycle source the
+    // client reconciles against. A completed proxied request must leave the active set and
+    // advance the completed-seq boundary, so a client can tell a finished request from a
+    // running one without inspecting paginated history at all.
+    [Fact]
+    public async Task Active_CompletedRequestLeavesActiveSet_AndAdvancesBoundary()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        using HttpResponseMessage r = await client.GetAsync($"{vessel.BaseUrl}/echo?active", CT);
+        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+
+        // The completion is emitted by the writer after insert, so poll until the boundary
+        // has advanced. Once it has for our single request, the active set must be empty.
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
+        long newestCompleted = 0;
+        int activeCount = -1;
+        while (!cts.IsCancellationRequested)
+        {
+            using HttpResponseMessage active = await client.GetAsync($"{vessel.BaseUrl}/vessel/api/active", cts.Token);
+            using JsonDocument doc = JsonDocument.Parse(await active.Content.ReadAsStringAsync(cts.Token));
+            newestCompleted = doc.RootElement.GetProperty("newestCompletedSeq").GetInt64();
+            activeCount = doc.RootElement.GetProperty("activeSeqs").GetArrayLength();
+            if (newestCompleted >= 1)
+            {
+                break;
+            }
+
+            await Task.Delay(25, cts.Token);
+        }
+
+        Assert.True(newestCompleted >= 1, "a completed request must advance newestCompletedSeq");
+        Assert.Equal(0, activeCount); // no traffic is in flight, so nothing remains active
+    }
+
+    // R22 — the review's concurrent-publisher probe, ported as a regression test. An atomic
+    // id counter makes ids *unique* but not *ordered*: before the publish lock, two threads
+    // could allocate ids N and N+1 and enqueue them reversed, and a client reads a reversal
+    // as frame loss. Each batch stays under the 256 subscriber capacity and is fully drained
+    // before the next, so no frame is legitimately dropped — every reversal here would be a
+    // real ordering defect. The review saw 3,535 adjacent reversals across 12,800 events.
+    [Fact]
+    public async Task Publish_ConcurrentPublishers_DeliversEveryFrameInStrictIdOrder()
+    {
+        var hub = new CaptureEvents();
+        using CaptureSubscription subscription = hub.Subscribe();
+        ChannelReader<SseEvent> reader = subscription.Reader;
+
+        const int publishers = 16;
+        const int batches = 100;
+        const int perBatch = 128; // < 256 capacity, so a fully-drained batch never drops
+        const int perPublisher = perBatch / publishers;
+
+        var ids = new List<long>(batches * perBatch);
+        long seq = 0;
+
+        for (int b = 0; b < batches; b++)
+        {
+            var tasks = new Task[publishers];
+            for (int p = 0; p < publishers; p++)
+            {
+                tasks[p] = Task.Run(
+                    () =>
+                    {
+                        for (int k = 0; k < perPublisher; k++)
+                        {
+                            hub.Completed(Interlocked.Increment(ref seq), null);
+                        }
+                    },
+                    CT);
+            }
+
+            await Task.WhenAll(tasks);
+
+            // Drain this batch before the next so the bounded queue never overflows.
+            for (int i = 0; i < perBatch; i++)
+            {
+                SseEvent evt = await reader.ReadAsync(CT);
+                ids.Add(evt.Id);
+            }
+        }
+
+        Assert.Equal(batches * perBatch, ids.Count);
+
+        // Strictly increasing = zero adjacent reversals; equal to 1..N = complete delivery,
+        // no gaps. Both properties in one assertion, and both fail without the publish lock.
+        int reversals = 0;
+        for (int i = 1; i < ids.Count; i++)
+        {
+            if (ids[i] <= ids[i - 1])
+            {
+                reversals++;
+            }
+        }
+
+        Assert.Equal(0, reversals);
+        Assert.Equal(Enumerable.Range(1, ids.Count).Select(x => (long)x), ids);
+    }
+
+    // R22 — the complement: a genuine overflow (nobody draining, past the 256 capacity) still
+    // drops oldest, and that loss stays *detectable* — surviving ids are ordered but start
+    // past 1, exactly the id gap the client keys reconciliation off.
+    [Fact]
+    public void Publish_OverflowingCapacity_DropsOldest_AsADetectableIdGap()
+    {
+        var hub = new CaptureEvents();
+        using CaptureSubscription subscription = hub.Subscribe();
+        ChannelReader<SseEvent> reader = subscription.Reader;
+
+        const int total = 400; // > 256 capacity, and nothing is reading, so oldest frames drop
+        for (int i = 1; i <= total; i++)
+        {
+            hub.Completed(i, null);
+        }
+
+        var ids = new List<long>();
+        while (reader.TryRead(out SseEvent? evt))
+        {
+            ids.Add(evt.Id);
+        }
+
+        Assert.InRange(ids.Count, 1, total - 1); // some, but not all, survived
+        for (int i = 1; i < ids.Count; i++)
+        {
+            Assert.True(ids[i] > ids[i - 1], "surviving frames remain in id order");
+        }
+
+        Assert.True(ids[0] > 1, "oldest frames were dropped, so the id sequence starts past 1 — a detectable gap");
     }
 
     // U6: a subscriber that never reads its stream must never back-pressure the request

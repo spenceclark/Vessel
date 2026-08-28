@@ -2,6 +2,7 @@ import { useState, type ComponentProps, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ImageSource, RenderBlock, RenderedView, RenderMessage } from '@/render'
+import { tryPrettyJson } from '@/render/prettyJson'
 import { Badge } from '@/components/ui/badge'
 import { ToolCallCard } from '@/components/ToolCallCard'
 
@@ -65,10 +66,15 @@ function Card({ role, children }: { role: string; children: ReactNode }) {
 
 function Block({ block }: { block: RenderBlock }) {
   switch (block.kind) {
-    case 'markdown':
-      return <ClampedMarkdown text={block.text} />
-    case 'text':
+    case 'markdown': {
+      const pretty = tryPrettyJson(block.text)
+      return pretty !== null ? <JsonBlock text={pretty} /> : <ClampedMarkdown text={block.text} />
+    }
+    case 'text': {
+      const pretty = tryPrettyJson(block.text)
+      if (pretty !== null) return <JsonBlock text={pretty} />
       return <pre className="whitespace-pre-wrap break-words font-mono text-base text-text">{block.text}</pre>
+    }
     case 'thinking':
       return (
         <details className="rounded-control border border-border bg-surface-2 p-2 text-xs">
@@ -157,6 +163,15 @@ function MarkdownLink({ href, children }: ComponentProps<'a'>) {
     <span className="underline decoration-dotted decoration-text-muted" title={href}>
       {children}
     </span>
+  )
+}
+
+/** §6 code/JSON block look: surface-2, border, radius-control, mono sm, internal scroll. */
+function JsonBlock({ text }: { text: string }) {
+  return (
+    <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-control border border-border bg-surface-2 p-3 font-mono text-sm text-text">
+      {text}
+    </pre>
   )
 }
 

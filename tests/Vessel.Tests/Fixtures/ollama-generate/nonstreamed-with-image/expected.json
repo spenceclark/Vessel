@@ -1,0 +1,14 @@
+{
+  "format": "ollama-generate",
+  "model": "llava",
+  "tokensIn": 12,
+  "tokensOut": 5,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": "stop",
+  "tokPerSec": 50.0,
+  "warnings": [],
+  "promptText": "user: What is in this image?",
+  "responseText": "A single red pixel."
+}

@@ -87,6 +87,7 @@ public sealed class OllamaAdapter(bool generate) : IFormatAdapter
             if (generate)
             {
                 content.Append(JsonUtil.Str(obj["response"]));
+                thinking.Append(JsonUtil.Str(obj["thinking"]));
             }
             else
             {
@@ -119,6 +120,10 @@ public sealed class OllamaAdapter(bool generate) : IFormatAdapter
         if (generate)
         {
             synth["response"] = content.ToString();
+            if (thinking.Length > 0)
+            {
+                synth["thinking"] = thinking.ToString();
+            }
         }
         else
         {

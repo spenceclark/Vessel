@@ -498,26 +498,58 @@ values (`content_filter`, `refusal`, `error`) rather than a normal completion
     value (no separate mono treatment; none of the others have one either).
   - When `tokensEstimated`, prefix both values with `~` (the §8.6 estimate marker) —
     totals mixing exact and estimated rows must not present as exact.
-  - **CACHED** appears as a third slot only when read+write > 0 in scope — the
-    conditional-slot exception to §5.2's em-dash rule is deliberate: header space
-    is the scarcest in the app, and for pure-Ollama sessions (the primary user) a
-    permanent "—" slot is noise. In the slot, `read` and `write` render as
-    `12.4k r · 310 w` with the letters muted; omit a zero half.
+  - ~~**CACHED** as a combined `12.4k r · 310 w` slot~~ **Amended after live use**
+    (the combined two-value slot broke the header's one-label-one-value rhythm,
+    rendered oversized, and the bare `r`/`w` letters read as cryptic): cache totals
+    are two ordinary conditional slots, **CACHED READ** and **CACHED WRITE** — each
+    the standard label-over-value `Stat` at the standard `stat` size, no suffix
+    letters, each shown only when its own value > 0 in scope. The conditional-slot
+    exception to §5.2's em-dash rule stands and is deliberate: header space is the
+    scarcest in the app, and for pure-Ollama sessions (the primary user) permanent
+    "—" slots are noise. (Note the labels are READ/WRITE, not IN/OUT — cache hits
+    vs cache creation are a different axis from tokens in/out.)
   - Zero rows in scope → `0`, not `—` (the session exists; its total is genuinely
     zero — different from a metric that wasn't measured).
 
-  Verified live: an Anthropic-shaped response with `cache_read_input_tokens: 12400`
-  and `cache_creation_input_tokens: 310` renders the CACHED slot as exactly
-  `12.4k r · 310 w`; a response with no cache fields omits the slot entirely; a
-  response with no `usage` object at all (forcing estimation) renders both totals
-  `~`-prefixed.
-- **Rendered view: pretty-print JSON-only text blocks (review TODO, not yet
-  implemented)**: structured-output workloads (Responses API `text.format`
-  json-schema, "reply in JSON" prompting) produce assistant messages whose entire
-  text is one line of JSON — faithful, but unreadable crammed into a markdown block.
-  In the message-view extractors (all formats, request and response sides): when a
-  text/markdown block's trimmed content parses as a JSON object or array, render it
-  as a code block (§6 code/JSON look) pretty-printed with 2-space indent instead of
-  markdown. Whole-block only — never rewrite JSON embedded *within* prose, and the
-  Raw JSON toggle still shows the untouched wire text. Presentation only: no change
-  to stored data, `response_text` flattening, or FTS.
+  Verified live (pre-amendment behavior): Anthropic-shaped cache fields populated
+  the combined slot; no cache fields omitted it; a usage-less response rendered
+  both totals `~`-prefixed. The estimate-prefix and omission behaviors carry over
+  unchanged to the split slots.
+
+  **Split implemented and verified.** `StatsBar`'s combined `CachedStat` was removed;
+  **Cached read**/**Cached write** are now two ordinary `<Stat>` slots (byte-identical
+  markup to Tokens in/out, each independently gated on its own value > 0), so there is
+  no separate sizing/typography to get wrong — confirmed against a live session with
+  both fields present (`CACHED READ ~410.1k` / `CACHED WRITE ~29.3k`, `~`-prefixed,
+  each preceded by its own divider) in both themes: computed styles for the value/label
+  spans matched `--text`/`--text-muted` exactly against the token table in §2.1 (dark
+  `#e6eaf0`/`#6b7684`, light `#171c23`/`#8b95a1`), and the panel background matched
+  `--canvas` in both. (Aside, not part of this change: `Stat`'s `text-stat` class was
+  silently dropped by `cn()`'s tailwind-merge — it treated `text-stat` as conflicting
+  with the trailing `text-text`/`text-danger` color utility and dropped it, so every
+  `Stat` value in the header, not just these two, rendered at the `sm` text size rather
+  than `stat` per §3. **Fixed (G3):** `lib/utils.ts`'s `cn()` now uses
+  `extendTailwindMerge` registering `stat` in the `font-size` class group, so `text-stat`
+  is recognized as a size and no longer collides with the trailing color utility. Pinned
+  by `lib/utils.test.ts`.)
+- **Rendered view: pretty-print JSON-only text blocks (review TODO, implemented)**:
+  structured-output workloads (Responses API `text.format` json-schema, "reply in
+  JSON" prompting) produce assistant messages whose entire text is one line of JSON —
+  faithful, but unreadable crammed into a markdown block. In `MessageView`'s block
+  renderer (all formats, request and response sides, both `markdown`- and `text`-kind
+  blocks): when a block's trimmed content parses as a JSON object or array, it renders
+  as a code block (§6 code/JSON look: `surface-2`, border, `radius-control`, mono `sm`,
+  12px padding, `max-h-[60vh]` internal scroll) pretty-printed with 2-space indent,
+  instead of through `ReactMarkdown`. Whole-block only — a bare JSON primitive
+  (`"hello"`, `42`, `true`, `null`) or JSON embedded partway through prose falls
+  through to ordinary markdown unchanged; malformed JSON falls through too. Extraction,
+  `response_text` flattening, FTS, and the Raw JSON toggle are all untouched —
+  presentation-only, applied in the view layer after extraction.
+
+  Verified: 14 `MessageView.test.ts` cases pin `tryPrettyJson`'s exact boundary (whole
+  object/array → pretty-printed; primitives, malformed JSON, and JSON-within-prose all
+  rejected; surrounding whitespace tolerated) and the component-level behavior (a
+  JSON-only block renders a `<pre>` with no `.md` wrapper; prose containing JSON still
+  renders through `ReactMarkdown`). The code-block styling was confirmed token-correct
+  in both themes (surface/border/text colors exactly matching §2.1's dark and light
+  values; `max-height: 432px` = 60vh of a 720px viewport; mono `sm` font).

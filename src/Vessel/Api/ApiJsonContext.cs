@@ -13,6 +13,7 @@ namespace Vessel.Api;
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true)]
 [JsonSerializable(typeof(ErrorPayload))]
 [JsonSerializable(typeof(StatusPayload))]
+[JsonSerializable(typeof(ActiveRequestsPayload))]
 [JsonSerializable(typeof(RequestListResponse))]
 [JsonSerializable(typeof(RequestDetail))]
 [JsonSerializable(typeof(StatsResponse))]
@@ -29,5 +30,11 @@ public sealed partial class ApiJsonContext : JsonSerializerContext;
 /// <summary>D3 — optional <c>POST /sessions</c> request body.</summary>
 public sealed record CreateSessionRequest(string? Name);
 
-/// <summary>D6 — <c>DELETE /requests</c> response.</summary>
-public sealed record ClearResponse(int Deleted);
+/// <summary>
+/// D6 — <c>DELETE /requests</c> response. <c>BoundaryId</c> (R23) is the highest deleted id,
+/// so the client can drop buffered completions the clear invalidated while keeping ones that
+/// finished above it; null when nothing matched.
+/// </summary>
+public sealed record ClearResponse(
+    int Deleted,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? BoundaryId);

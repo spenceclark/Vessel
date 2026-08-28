@@ -75,7 +75,12 @@ export function useEvents(handlers: EventHandlers) {
           handlersRef.current.onGap(id - lastId - 1)
         }
 
-        lastId = id
+        // R22 — only ever advance. The server now publishes ids in order (allocation and
+        // fan-out share a lock), but a defensive floor here means a late lower id can never
+        // rewind the watermark and manufacture a phantom gap on the *next* frame.
+        if (lastId === null || id > lastId) {
+          lastId = id
+        }
       }
 
       dispatch(JSON.parse(event.data) as T)

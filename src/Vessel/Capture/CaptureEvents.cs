@@ -34,7 +34,26 @@ public sealed class CaptureEvents
 
     private readonly ConcurrentDictionary<long, Channel<SseEvent>> _subscribers = new();
     private long _nextSubscriberId;
+
+    // R22 — id allocation and the channel fan-out happen together under this lock, so every
+    // subscriber observes ids in strictly increasing order. An atomic counter alone makes ids
+    // *unique* but not *ordered*: two publishers could allocate N and N+1 and enqueue them
+    // reversed, which the client reads as frame loss and answers with a needless
+    // reconciliation for every reversal — a storm during the exact burst reconciliation is
+    // meant to recover from. The lock is held for microseconds and never waits on a
+    // subscriber (drop-oldest's TryWrite never blocks), so the non-blocking proxy contract is
+    // unchanged.
+    private readonly object _publishLock = new();
     private long _publishId;
+
+    // R11/F2 — the server-authoritative in-flight set. A seq is added when its request starts
+    // and removed when it completes (or is dropped), independent of whether anyone is
+    // subscribed to the SSE feed. Reconciliation reads this to decide, authoritatively, which
+    // client-side in-flight rows are genuinely still running versus finished-or-lost — the
+    // client cannot infer that from paginated history alone (a completion off the loaded
+    // pages, filtered out, or for a since-cleared row is simply invisible there).
+    private readonly ConcurrentDictionary<long, byte> _active = new();
+    private long _newestCompletedSeq;
 
     public CaptureSubscription Subscribe()
     {
@@ -52,6 +71,18 @@ public sealed class CaptureEvents
     internal void Unsubscribe(long id) => _subscribers.TryRemove(id, out _);
 
     /// <summary>
+    /// R11/F2 — a snapshot of the requests the server currently considers in-flight, plus the
+    /// newest seq that has completed. Reconciliation removes a client-side in-flight row only
+    /// when its seq is absent from <see cref="ActiveRequests.ActiveSeqs"/> <em>and</em> at or
+    /// below <see cref="ActiveRequests.NewestCompletedSeq"/> — the boundary guards a request
+    /// that started after this snapshot was taken (its <c>started</c> frame can reach the
+    /// client before the next reconciliation observes it as active) from being expired as if
+    /// it had finished.
+    /// </summary>
+    public ActiveRequests GetActiveRequests() =>
+        new(_active.Keys.ToArray(), Interlocked.Read(ref _newestCompletedSeq));
+
+    /// <summary>
     /// Emitted at handler entry, once the backend/tags are resolved (request path).
     /// <paramref name="sessionId"/> is known here (D05) so the UI can scope in-flight rows
     /// to the viewed session instead of showing every session's live traffic.
@@ -59,6 +90,12 @@ public sealed class CaptureEvents
     public void Started(
         long seq, string startedAt, long sessionId, string method, string path, string backend, string[] tags)
     {
+        // Register before publishing (and unconditionally, regardless of subscribers): a
+        // client that receives this `started` frame must be able to trust that the server had
+        // the seq in its active set at that moment, so the only reason a later reconciliation
+        // finds it absent is a genuine completion (R11/F2).
+        _active[seq] = 0;
+
         if (_subscribers.IsEmpty)
         {
             return;
@@ -106,6 +143,12 @@ public sealed class CaptureEvents
     /// </summary>
     public void Completed(long seq, Summary? row)
     {
+        // Leave the active set and advance the completed watermark unconditionally (a drop
+        // still calls this with row == null), so reconciliation sees the request as finished
+        // even for a client that was never subscribed when it ran (R11/F2).
+        _active.TryRemove(seq, out _);
+        AdvanceNewestCompleted(seq);
+
         if (_subscribers.IsEmpty)
         {
             return;
@@ -115,18 +158,45 @@ public sealed class CaptureEvents
             new CompletedEvent(seq, row), EventsJsonContext.Default.CompletedEvent));
     }
 
+    private void AdvanceNewestCompleted(long seq)
+    {
+        long current = Interlocked.Read(ref _newestCompletedSeq);
+        while (seq > current)
+        {
+            long observed = Interlocked.CompareExchange(ref _newestCompletedSeq, seq, current);
+            if (observed == current)
+            {
+                break;
+            }
+
+            current = observed;
+        }
+    }
+
     private void Publish(string name, string json)
     {
-        // One id per published frame, shared by every subscriber: all subscribers receive
-        // the same fan-out, so a per-subscriber gap in this sequence means that subscriber's
-        // queue dropped frames (R11).
-        var evt = new SseEvent(Interlocked.Increment(ref _publishId), name, json);
-        foreach (Channel<SseEvent> channel in _subscribers.Values)
+        // R22 — allocate the id and fan out in one critical section, so every subscriber's
+        // queue receives frames in id order. One id per published frame, shared by every
+        // subscriber: all subscribers receive the same fan-out, so a per-subscriber gap in
+        // this sequence means that subscriber's queue dropped frames (R11).
+        lock (_publishLock)
         {
-            channel.Writer.TryWrite(evt); // drop-oldest mode never blocks
+            var evt = new SseEvent(Interlocked.Increment(ref _publishId), name, json);
+            foreach (Channel<SseEvent> channel in _subscribers.Values)
+            {
+                channel.Writer.TryWrite(evt); // drop-oldest mode never blocks
+            }
         }
     }
 }
+
+/// <summary>
+/// R11/F2 — a point-in-time view of the server's in-flight requests for reconciliation.
+/// <paramref name="ActiveSeqs"/> is the set of request seqs currently running;
+/// <paramref name="NewestCompletedSeq"/> is the highest seq that has finished, used as the
+/// boundary below which an absent seq is definitely finished rather than just newly started.
+/// </summary>
+public sealed record ActiveRequests(long[] ActiveSeqs, long NewestCompletedSeq);
 
 /// <summary>One SSE connection's subscription; disposing unregisters it from the hub.</summary>
 public sealed class CaptureSubscription : IDisposable

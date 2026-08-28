@@ -2,8 +2,9 @@
 .SYNOPSIS
 Single-file publish smoke test (CI-runnable): publishes a self-contained single-file
 win-x64 build **from a clean source copy carrying no build outputs**, runs the produced
-exe from an empty directory, and asserts first-run config creation, /vessel/api/status,
-proxying, the unknown-backend error path, and the embedded SPA + its hashed asset.
+exe from a fresh directory on an ephemeral port, and asserts /vessel/api/status (listing
+both a real-shaped ollama backend and a proxying stub), proxying, the unknown-backend
+error path, and the embedded SPA + its hashed asset.
 
 R01: publishing from the working tree let a stale frontend/dist mask a broken build
 order — the gate passed while a genuinely clean publish embedded nothing. The copy is
@@ -12,6 +13,12 @@ untracked-but-not-ignored ones: everything a fresh clone would compile, minus th
 ignored build outputs (frontend/dist, node_modules, bin, obj). Untracked-not-ignored
 files are included deliberately so the check works on a working tree with uncommitted
 work, which the house rules require (AGENTS.md: never commit).
+
+G4: the launched exe is always given a pre-written config on an ephemeral port — it never
+depends on, or transiently binds, the hardcoded default 127.0.0.1:4550, which a live
+daily-driver Vessel may already own on the machine running this script. See the comment
+above the launch below for what that trades away and where the traded-away coverage
+still lives.
 
 .EXAMPLE
 ./publish-smoke.ps1            # untrimmed (the shipping configuration)
@@ -143,6 +150,21 @@ Write-Host "PASS: published assembly embeds the frontend (vessel-ui/index.html +
 
 # --- Run from an empty directory ------------------------------------------------------
 
+# G4: this script must never let the published exe bind Kestrel to the hardcoded default
+# 127.0.0.1:4550 - that's a live daily-driver Vessel's own port on a developer machine,
+# and a prior re-review hit exactly that collision (plus, suspected but unconfirmed, a
+# SQLite disk I/O error on a second launch reusing a directory a force-killed first launch
+# had just written into). Every launch below gets its own ephemeral port *and* its own
+# directory, pre-written with a config rather than left absent, so nothing here ever
+# depends on - or even transiently touches - 4550 or a previous launch's leftover state.
+#
+# The one thing that trades away: the exe never actually exercises ConfigLoader.
+# LoadOrCreate's "no file exists yet, write the real defaults" branch live, because doing
+# so would mean starting Kestrel on that literal hardcoded default before this script gets
+# a say. That exact branch (content, and that `created` flips correctly on a second load)
+# is covered port-independently by ConfigLoaderTests.MissingFile_CreatesDefaultConfig; the
+# ollama backend entry below is hand-written to the same shape purely so status has a
+# second, differently-typed backend to list alongside the proxying stub.
 $work = Join-Path ([IO.Path]::GetTempPath()) ("vessel-smoke-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
 Copy-Item $exe (Join-Path $work "Vessel.exe")
@@ -152,41 +174,18 @@ $stubListener = $null
 $failures = 0
 
 try {
-    # First-run: config is created next to the exe with the Ollama default. Use --config
-    # so the smoke test doesn't depend on port 4550 (or a local Ollama) being free.
     $port = Get-FreePort
     $stubPort = Get-FreePort
     $configPath = Join-Path $work "vessel.json"
 
-    $vesselProc = Start-Process -FilePath (Join-Path $work "Vessel.exe") -WorkingDirectory $work -PassThru `
-        -RedirectStandardOutput (Join-Path $work "stdout.log") -RedirectStandardError (Join-Path $work "stderr.log") `
-        -ArgumentList @("--config", "`"$configPath`"") -WindowStyle Hidden
-
-    Start-Sleep -Seconds 2
-    if (-not (Test-Path $configPath)) {
-        Write-Host "FAIL: first run did not create vessel.json" -ForegroundColor Red
-        $failures++
-    }
-    else {
-        $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
-        if ($cfg.defaultBackend -ne "ollama" -or $cfg.backends.ollama.baseUrl -ne "http://localhost:11434") {
-            Write-Host "FAIL: default config content unexpected: $(Get-Content $configPath -Raw)" -ForegroundColor Red
-            $failures++
-        }
-        else {
-            Write-Host "PASS: first run created default config (ollama backend)" -ForegroundColor Green
-        }
-    }
-
-    if (-not $vesselProc.HasExited) { Stop-Process -Id $vesselProc.Id -Force }
-    $vesselProc = $null
-
-    # Real run: default backend pointed at a local HttpListener stub, on a free port.
     Set-Content -Path $configPath -Encoding utf8 -Value @"
 {
   "listen": "127.0.0.1:$port",
   "defaultBackend": "stub",
-  "backends": { "stub": { "baseUrl": "http://127.0.0.1:$stubPort" } }
+  "backends": {
+    "ollama": { "baseUrl": "http://localhost:11434", "type": "ollama" },
+    "stub": { "baseUrl": "http://127.0.0.1:$stubPort" }
+  }
 }
 "@
 
@@ -195,17 +194,17 @@ try {
     $stubListener.Start()
 
     $vesselProc = Start-Process -FilePath (Join-Path $work "Vessel.exe") -WorkingDirectory $work -PassThru `
-        -RedirectStandardOutput (Join-Path $work "stdout2.log") -RedirectStandardError (Join-Path $work "stderr2.log") `
+        -RedirectStandardOutput (Join-Path $work "stdout.log") -RedirectStandardError (Join-Path $work "stderr.log") `
         -ArgumentList @("--config", "`"$configPath`"") -WindowStyle Hidden
 
     $baseUrl = "http://127.0.0.1:$port"
     $statusBody = Wait-ForStatus -BaseUrl $baseUrl
-    if ($statusBody -notmatch '"stub"') {
-        Write-Host "FAIL: /vessel/api/status does not list the stub backend: $statusBody" -ForegroundColor Red
+    if ($statusBody -notmatch '"stub"' -or $statusBody -notmatch '"ollama"') {
+        Write-Host "FAIL: /vessel/api/status does not list both configured backends: $statusBody" -ForegroundColor Red
         $failures++
     }
     else {
-        Write-Host "PASS: /vessel/api/status responds and lists backends" -ForegroundColor Green
+        Write-Host "PASS: /vessel/api/status responds and lists backends, on an ephemeral port" -ForegroundColor Green
     }
 
     # Proxying: request via Vessel must reach the stub and the stub's response must

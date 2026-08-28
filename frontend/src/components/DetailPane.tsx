@@ -9,6 +9,7 @@ import { PrettyJson } from '@/components/PrettyJson'
 import { MessageView } from '@/components/MessageView'
 import { RenderErrorBoundary } from '@/components/RenderErrorBoundary'
 import { ErrorState } from '@/components/ui/ErrorState'
+import { DecodeTruncatedNotice } from '@/components/DecodeTruncatedNotice'
 import { renderRequest, renderResponse } from '@/render'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatMs, formatTimestamp, formatTokPerSec, formatTokenCount } from '@/lib/format'
@@ -74,6 +75,10 @@ export function DetailPane({ id }: { id: number | null }) {
 
   const detail = query.data
   const isError = detail.error != null || (detail.statusCode ?? 0) >= 400
+  // The raw-stream toggle only swaps in responseRaw when it's actually being viewed;
+  // rendered mode always reads from responseBody (what MessageView is extracted from).
+  const responseBodyShown =
+    responseDisplay === 'raw' && responseView === 'raw' ? detail.responseRaw : detail.responseBody
 
   return (
     <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} className="flex h-full flex-col">
@@ -93,6 +98,7 @@ export function DetailPane({ id }: { id: number | null }) {
 
         <TabsContent value="request">
           {requestRendered && <ViewModeToggle mode={requestDisplay} onChange={setRequestDisplay} />}
+          <DecodeTruncatedNotice body={detail.requestBody} />
           {requestDisplay === 'rendered' && requestRendered ? (
             <RenderErrorBoundary key={id} fallback={<PrettyJson body={detail.requestBody} emptyLabel="No request body" />}>
               <MessageView view={requestRendered} />
@@ -104,6 +110,7 @@ export function DetailPane({ id }: { id: number | null }) {
 
         <TabsContent value="response">
           {responseRendered && <ViewModeToggle mode={responseDisplay} onChange={setResponseDisplay} />}
+          <DecodeTruncatedNotice body={responseBodyShown} />
           {responseDisplay === 'rendered' && responseRendered ? (
             <RenderErrorBoundary key={id} fallback={<PrettyJson body={detail.responseBody} emptyLabel="No response body" />}>
               <MessageView view={responseRendered} />
@@ -135,10 +142,7 @@ export function DetailPane({ id }: { id: number | null }) {
                   </button>
                 </div>
               )}
-              <PrettyJson
-                body={responseView === 'raw' && detail.streamed ? detail.responseRaw : detail.responseBody}
-                emptyLabel="No response body"
-              />
+              <PrettyJson body={responseBodyShown} emptyLabel="No response body" />
             </>
           )}
         </TabsContent>

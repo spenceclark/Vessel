@@ -1,0 +1,3 @@
+{"model":"qwen2.5:1.5b","response":"","thinking":"Scattering ","done":false}
+{"model":"qwen2.5:1.5b","response":"","thinking":"of light.","done":false}
+{"model":"qwen2.5:1.5b","response":"Rayleigh scattering.","done_reason":"stop","done":true,"total_duration":400000000,"load_duration":20000000,"prompt_eval_count":10,"prompt_eval_duration":60000000,"eval_count":5,"eval_duration":100000000}

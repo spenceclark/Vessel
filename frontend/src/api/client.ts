@@ -1,4 +1,5 @@
 import type {
+  ActiveRequestsResponse,
   ClearResponse,
   ConfigApplyResult,
   ConfigGetResponse,
@@ -72,6 +73,9 @@ function applyFilterParams(params: URLSearchParams, filters?: RequestFilters) {
 
 export const api = {
   getStatus: () => request<StatusPayload>('/status'),
+
+  /** R11/F2 — the server's live in-flight set, fetched on demand during reconciliation. */
+  getActiveRequests: () => request<ActiveRequestsResponse>('/active'),
 
   listRequests: ({ limit, before, session, filters }: ListRequestsParams = {}) => {
     const params = new URLSearchParams()

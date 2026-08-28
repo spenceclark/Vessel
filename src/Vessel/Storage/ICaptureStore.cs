@@ -25,7 +25,16 @@ public interface ICaptureStore
     /// <summary>
     /// D6 — deletes <c>requests</c> rows (and their FTS rows) matching
     /// <paramref name="beforeIso"/>, or every row when null. Returns the number of
-    /// <c>requests</c> rows deleted.
+    /// <c>requests</c> rows deleted and the highest id among them (R23: the client uses that
+    /// boundary to discard buffered completions the clear invalidated while keeping ones that
+    /// finished above it).
     /// </summary>
-    int Clear(string? beforeIso);
+    ClearOutcome Clear(string? beforeIso);
 }
+
+/// <summary>
+/// R23 — the result of a clear. <paramref name="MaxDeletedId"/> is the highest <c>requests</c>
+/// id that was deleted (null when nothing matched), the deletion boundary a clear-before
+/// hands the client so a completion buffered for a row above it survives.
+/// </summary>
+public readonly record struct ClearOutcome(int Deleted, long? MaxDeletedId);

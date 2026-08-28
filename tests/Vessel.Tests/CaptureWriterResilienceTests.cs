@@ -62,7 +62,7 @@ public class CaptureWriterResilienceTests
         public SessionInfo CreateSession(string? name) =>
             new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name);
 
-        public int Clear(string? beforeIso) => 0;
+        public ClearOutcome Clear(string? beforeIso) => new(0, null);
 
         public int SnapshotAttempts()
         {
@@ -191,7 +191,7 @@ public class CaptureWriterResilienceTests
 
         await WaitFor(() => channel.IsStopped);
 
-        var clear = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clear = new TaskCompletionSource<ClearOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
         channel.Enqueue(new ClearCommand(null, clear));
         var session = new TaskCompletionSource<SessionInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
         channel.Enqueue(new CreateSessionCommand("after", session));
@@ -232,7 +232,7 @@ public class CaptureWriterResilienceTests
 
         Assert.False(channel.IsStopped); // one failure short
 
-        var clear = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clear = new TaskCompletionSource<ClearOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
         channel.Enqueue(TestCapture.Record("/fail-final"));
         channel.Enqueue(new ClearCommand(null, clear));
 
@@ -255,18 +255,18 @@ public class CaptureWriterResilienceTests
 
         // One batch, in this order: capture, clear, capture.
         channel.Enqueue(TestCapture.Record("/before-clear"));
-        var clear = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clear = new TaskCompletionSource<ClearOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
         channel.Enqueue(new ClearCommand(null, clear));
         channel.Enqueue(TestCapture.Record("/after-clear"));
 
         await writer.StartAsync(TestContext.Current.CancellationToken);
 
-        int deleted = await clear.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        ClearOutcome outcome = await clear.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await WaitFor(() => store.Operations.Contains("insert:/after-clear"));
         await writer.StopAsync(TestContext.Current.CancellationToken);
 
         // Exactly the earlier capture was visible to the clear, and the later one was not.
-        Assert.Equal(1, deleted);
+        Assert.Equal(1, outcome.Deleted);
         Assert.Equal(
             ["insert:/before-clear", "clear", "insert:/after-clear"],
             store.Operations);
@@ -315,14 +315,14 @@ public class CaptureWriterResilienceTests
         public SessionInfo CreateSession(string? name) =>
             new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name);
 
-        public int Clear(string? beforeIso)
+        public ClearOutcome Clear(string? beforeIso)
         {
             lock (_lock)
             {
                 _operations.Add("clear");
                 int deleted = _live.Count;
                 _live.Clear();
-                return deleted;
+                return new ClearOutcome(deleted, deleted == 0 ? null : deleted);
             }
         }
     }

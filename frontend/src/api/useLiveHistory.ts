@@ -7,38 +7,51 @@ import {
   type SessionScope,
   type Summary,
 } from './types'
+import { api } from './client'
 import { REQUESTS_QUERY_ROOT, requestsQueryKey } from './queryKeys'
 import { useEvents, type InFlightRequest } from './useEvents'
 
 /**
- * R10/R11/D05 — one reconciliation model for live rows, rather than three independent
- * patches. Three things had to hold together:
+ * R10/R11/R22/R23/D05 — one reconciliation model for live rows, rather than independent
+ * patches. The pieces have to hold together:
  *
- * 1. **A completion must never be lost across a fetch boundary.** The previous code
- *    assumed `invalidateQueries` queues a refetch behind an in-flight one. With this
- *    TanStack Query version an *initial* fetch (no cached data) reuses the existing
- *    promise instead, so a completion arriving during initial load was dropped and never
- *    reappeared without a manual reload. Completions arriving while any list fetch is
- *    unsettled are therefore **buffered** and merged once fetching settles — the merge
- *    dedupes by id, so it is harmless when the fetch's own snapshot already contained the
- *    row.
- * 2. **Lost events must be recoverable.** Subscriber queues drop oldest by design, and
- *    the client only removed an in-flight row on `completed` — so a dropped completion
- *    left a row running forever (the review saw 21 of them, with 53-second timers, after
- *    a 10k burst). The server now stamps every SSE frame with a monotonic publish id, so
- *    a gap is *detectable*; a gap, or a reconnect, triggers authoritative reconciliation:
- *    refetch history + stats + facets together, then drop in-flight entries the refreshed
- *    history accounts for. Entries it does not account for are left alone — a genuinely
- *    long-running request must never be expired by a timer or a distance heuristic.
- * 3. **In-flight rows obey session scope and nothing else** (D05). `started` now carries
- *    `sessionId`, so scoping is accurate rather than guessed. Other filters can't be
- *    applied to a row that has no final status or model yet, so the list collapses them
- *    to a count instead of pretending to filter them.
+ * 1. **A completion must never be lost across a fetch boundary** (R10). An *initial* list
+ *    fetch (no cached data) reuses its existing promise instead of queueing a fresh one, so
+ *    a completion arriving while it is unsettled would be dropped. Completions arriving while
+ *    any list fetch is unsettled are therefore **buffered** and merged once fetching settles.
+ * 2. **Lifecycle truth is server-authoritative** (R11/F2). The client cannot infer "still
+ *    running" from paginated history — a completion off the loaded pages, filtered out, or
+ *    for a since-cleared row is simply invisible there. Reconciliation instead asks the
+ *    server for its live in-flight set (`GET /active`) and removes any in-flight row the
+ *    server no longer lists as active (below the completed-seq boundary, so a request that
+ *    started after the snapshot is never expired). A genuinely long-running request survives
+ *    because it is genuinely in the set — never expired by a timer or a distance heuristic.
+ * 3. **Loss detection is ordered, and recovery is coalesced** (R22/F1). The server publishes
+ *    SSE ids under a lock, so a gap means real loss rather than a reordering; the client
+ *    never rewinds its watermark, and a burst of gaps collapses (debounced, single-flight)
+ *    into one recovery instead of a reconciliation storm.
+ * 4. **Clearing and completion-merging share a generation boundary** (R23/F3). A clear bumps
+ *    a generation; a buffered completion is stamped at buffer time and dropped at drain if a
+ *    later clear deleted its row (all rows for clear-all; ids at or below the boundary for
+ *    clear-before), so a completion can never restore a row the user just cleared.
+ * 5. **In-flight rows obey session scope and nothing else** (D05). `started` carries
+ *    `sessionId`; other filters can't apply to a row with no final status/model, so the list
+ *    collapses them to a count.
  */
 
-/** In-flight entries are correlated to stored rows by this, because `seq` is not persisted. */
-function identityOf(value: { startedAt: string; method: string; path: string }): string {
-  return `${value.startedAt}|${value.method}|${value.path}`
+/** How long to wait after the first gap before reconciling, so a burst coalesces into one run. */
+const RECONCILE_DEBOUNCE_MS = 150
+
+/** One clear's effect on the completion buffer: the generation it produced and which rows it removed. */
+interface ClearBoundary {
+  generation: number
+  deletes: (row: Summary) => boolean
+}
+
+/** A completion held while a list fetch is unsettled, stamped with the generation at buffer time. */
+interface BufferedCompletion {
+  row: Summary
+  generation: number
 }
 
 export interface LiveHistory {
@@ -48,6 +61,12 @@ export interface LiveHistory {
   /** Completions that arrived while a filter was active, so the list is knowingly stale. */
   newSinceFilter: number
   clearNewSinceFilter: () => void
+  /**
+   * R23/F3 — call after a successful clear (with the DELETE response's boundary id, or null
+   * for clear-all) so completions buffered before it are discarded rather than restoring
+   * cleared rows.
+   */
+  notifyCleared: (scope: { all: true } | { before: string }, boundaryId: number | null) => void
 }
 
 export function useLiveHistory({
@@ -75,7 +94,12 @@ export function useLiveHistory({
     onCompletedRef.current = onCompleted
   })
 
-  const pendingRef = useRef<Summary[]>([])
+  // R23/F3 — clears bump this; buffered completions are stamped with it and dropped at drain
+  // if a later clear removed their row. `clearsRef` holds the boundaries still relevant to
+  // buffered completions (reset once the buffer drains, or when a clear finds it empty).
+  const generationRef = useRef(0)
+  const clearsRef = useRef<ClearBoundary[]>([])
+  const pendingRef = useRef<BufferedCompletion[]>([])
   const listFetching = useIsFetching({ queryKey: REQUESTS_QUERY_ROOT })
 
   // Scoped to the view it was counted for, so switching scope/filters resets it without an
@@ -121,40 +145,37 @@ export function useLiveHistory({
     if (listFetching > 0 || pendingRef.current.length === 0) return
     const buffered = pendingRef.current
     pendingRef.current = []
-    for (const row of buffered) {
-      mergeRow(row)
+    // The buffer is now empty, so no pending completion references these boundaries anymore.
+    const clears = clearsRef.current
+    clearsRef.current = []
+    for (const { row, generation } of buffered) {
+      // R23 — discard a completion any clear that landed *after* it was buffered removed.
+      const invalidated = clears.some((c) => c.generation > generation && c.deletes(row))
+      if (!invalidated) mergeRow(row)
     }
   }, [listFetching, mergeRow])
 
   /**
-   * R11 — the authoritative path. Refetch history, stats and facets together (facets were
-   * previously never refreshed on reconnect), then drop in-flight entries the refreshed
-   * history now accounts for. Anything still unaccounted for stays: it is either genuinely
-   * running or will be reconciled by the next refresh.
+   * R11/F2 — the authoritative path. Ask the server which requests are genuinely still in
+   * flight, drop any in-flight row it no longer lists (and that is old enough to have been
+   * accounted for), then refetch history, stats and facets together so completed rows land.
    */
   const reconcile = useCallback(async () => {
-    await Promise.all([
-      queryClient.refetchQueries({ queryKey: REQUESTS_QUERY_ROOT }),
-      queryClient.invalidateQueries({ queryKey: ['stats'] }),
-      queryClient.invalidateQueries({ queryKey: ['facets'] }),
-    ])
-
-    const known = new Set<string>()
-    for (const [, data] of queryClient.getQueriesData<InfiniteData<RequestListResponse, number | undefined>>({
-      queryKey: REQUESTS_QUERY_ROOT,
-    })) {
-      for (const page of data?.pages ?? []) {
-        for (const row of page.rows) {
-          known.add(identityOf(row))
-        }
-      }
+    let active
+    try {
+      active = await api.getActiveRequests()
+    } catch {
+      return // transient; the next gap or reconnect retries
     }
 
+    const activeSet = new Set(active.activeSeqs)
     setInFlightMap((prev) => {
       let changed = false
       const next = new Map(prev)
-      for (const [seq, item] of prev) {
-        if (known.has(identityOf(item))) {
+      for (const seq of prev.keys()) {
+        // Absent from the server's active set and at/below the completed boundary: finished
+        // or dropped. A seq above the boundary may just have started after the snapshot.
+        if (!activeSet.has(seq) && seq <= active.newestCompletedSeq) {
           next.delete(seq)
           changed = true
         }
@@ -162,7 +183,49 @@ export function useLiveHistory({
 
       return changed ? next : prev
     })
+
+    await Promise.all([
+      queryClient.refetchQueries({ queryKey: REQUESTS_QUERY_ROOT }),
+      queryClient.invalidateQueries({ queryKey: ['stats'] }),
+      queryClient.invalidateQueries({ queryKey: ['facets'] }),
+    ])
   }, [queryClient])
+
+  // R22/F1 — coalesce recovery: a burst of gaps produces one reconciliation, not one per
+  // gap. A debounce collapses the burst; a single-flight guard folds gaps that arrive during
+  // a run into exactly one follow-up, so overlapping reconciliations never pile up.
+  const reconcileTimerRef = useRef<number | null>(null)
+  const reconcilingRef = useRef(false)
+  const reconcileQueuedRef = useRef(false)
+  const scheduleReconcile = useCallback(() => {
+    if (reconcileTimerRef.current !== null) return
+    reconcileTimerRef.current = window.setTimeout(() => {
+      reconcileTimerRef.current = null
+      if (reconcilingRef.current) {
+        reconcileQueuedRef.current = true
+        return
+      }
+
+      reconcilingRef.current = true
+      void (async () => {
+        try {
+          do {
+            reconcileQueuedRef.current = false
+            await reconcile()
+          } while (reconcileQueuedRef.current)
+        } finally {
+          reconcilingRef.current = false
+        }
+      })()
+    }, RECONCILE_DEBOUNCE_MS)
+  }, [reconcile])
+
+  useEffect(
+    () => () => {
+      if (reconcileTimerRef.current !== null) window.clearTimeout(reconcileTimerRef.current)
+    },
+    [],
+  )
 
   const { connected } = useEvents({
     onStarted: (data) => {
@@ -217,22 +280,39 @@ export function useLiveHistory({
       }
 
       // R10 — a list fetch is in flight, and it may be about to resolve with a snapshot
-      // taken before this row existed. Hold the row and merge it after settlement rather
-      // than writing into a cache that is about to be replaced.
+      // taken before this row existed. Hold the row (stamped with the current generation,
+      // R23) and merge it after settlement rather than writing into a cache about to be
+      // replaced.
       if (queryClient.isFetching({ queryKey: REQUESTS_QUERY_ROOT }) > 0) {
-        pendingRef.current.push(data.row)
+        pendingRef.current.push({ row: data.row, generation: generationRef.current })
         return
       }
 
       mergeRow(data.row)
     },
     onGap: () => {
-      void reconcile()
+      scheduleReconcile()
     },
     onReconnect: () => {
-      void reconcile()
+      scheduleReconcile()
     },
   })
+
+  const notifyCleared = useCallback(
+    (clearedScope: { all: true } | { before: string }, boundaryId: number | null) => {
+      const generation = generationRef.current + 1
+      generationRef.current = generation
+      const deletes: ClearBoundary['deletes'] =
+        'all' in clearedScope
+          ? () => true
+          : (row) => boundaryId !== null && row.id <= boundaryId
+      // With nothing buffered, older boundaries can't affect any pending completion — keep
+      // only this one so the list doesn't accumulate across idle clears.
+      const boundary: ClearBoundary = { generation, deletes }
+      clearsRef.current = pendingRef.current.length === 0 ? [boundary] : [...clearsRef.current, boundary]
+    },
+    [],
+  )
 
   // D05 — in-flight rows are scoped to the viewed session and nothing else.
   const inFlight = Array.from(inFlightMap.values()).filter(
@@ -244,6 +324,7 @@ export function useLiveHistory({
     connected,
     newSinceFilter,
     clearNewSinceFilter: useCallback(() => setNewSince({ signature: '', count: 0 }), []),
+    notifyCleared,
   }
 }
 

@@ -1,0 +1,27 @@
+{
+  "format": "ollama-generate",
+  "model": "qwen2.5:1.5b",
+  "tokensIn": 10,
+  "tokensOut": 5,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": "stop",
+  "tokPerSec": 50.0,
+  "warnings": [],
+  "promptText": "user: Why is the sky blue?",
+  "responseText": "Rayleigh scattering.\nScattering of light.",
+  "responseBody": {
+    "model": "qwen2.5:1.5b",
+    "response": "Rayleigh scattering.",
+    "thinking": "Scattering of light.",
+    "done_reason": "stop",
+    "done": true,
+    "total_duration": 400000000,
+    "load_duration": 20000000,
+    "prompt_eval_count": 10,
+    "prompt_eval_duration": 60000000,
+    "eval_count": 5,
+    "eval_duration": 100000000
+  }
+}

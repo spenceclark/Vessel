@@ -23,6 +23,6 @@ public sealed record CreateSessionCommand(string? Name, TaskCompletionSource<Ses
 /// D6 — <c>DELETE /requests</c> enqueues this: <see cref="BeforeIso"/> null means "clear
 /// all", otherwise an ISO-8601 UTC timestamp ("clear before"). Runs on the writer thread,
 /// like <see cref="CreateSessionCommand"/>; <see cref="Completion"/> carries the number of
-/// <c>requests</c> rows deleted.
+/// <c>requests</c> rows deleted and the deletion boundary (R23).
 /// </summary>
-public sealed record ClearCommand(string? BeforeIso, TaskCompletionSource<int> Completion) : CaptureWork;
+public sealed record ClearCommand(string? BeforeIso, TaskCompletionSource<ClearOutcome> Completion) : CaptureWork;

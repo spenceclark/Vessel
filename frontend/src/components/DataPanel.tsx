@@ -11,7 +11,11 @@ const CONFIRM_WORD = 'DELETE'
  * action is behind a typed-confirmation step (type "DELETE" to enable Confirm) rather
  * than a single click.
  */
-export function DataPanel({ onCleared }: { onCleared?: (scope: { all: true } | { before: string }) => void }) {
+export function DataPanel({
+  onCleared,
+}: {
+  onCleared?: (scope: { all: true } | { before: string }, boundaryId: number | null) => void
+}) {
   const queryClient = useQueryClient()
   const [mode, setMode] = useState<'idle' | 'all' | 'before'>('idle')
   const [beforeDate, setBeforeDate] = useState('')
@@ -30,14 +34,16 @@ export function DataPanel({ onCleared }: { onCleared?: (scope: { all: true } | {
     try {
       const result = await api.deleteRequests(scope)
       setMessage(`Deleted ${result.deleted} request${result.deleted === 1 ? '' : 's'}.`)
+      // R14a/R23 — report the clear *before* invalidating, so the live-history generation is
+      // bumped before the refetch below settles and drains its completion buffer (a buffered
+      // completion for a cleared row must not survive that drain). The selected row's own
+      // cache and selection are the caller's concern (App owns both).
+      onCleared?.(scope, result.boundaryId ?? null)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['requests'] }),
         queryClient.invalidateQueries({ queryKey: ['stats'] }),
         queryClient.invalidateQueries({ queryKey: ['facets'] }),
       ])
-      // R14a — the selected row's own cache and, if the clear reached it, its selection
-      // are the caller's concern (App owns both); this only reports what happened.
-      onCleared?.(scope)
       reset()
     } catch (err) {
       setMessage(err instanceof ApiError ? err.message : 'Failed to clear requests.')

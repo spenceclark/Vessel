@@ -24,8 +24,20 @@ export function extractOllamaRequest(detail: RequestDetail): RenderedView | null
 
     const messages: RenderMessage[] = []
     if (detail.format === 'ollama-generate') {
+      const blocks: RenderBlock[] = []
       if (typeof req.prompt === 'string' && req.prompt) {
-        messages.push({ role: 'user', blocks: [{ kind: 'markdown', text: req.prompt }] })
+        blocks.push({ kind: 'markdown', text: req.prompt })
+      }
+      // R18 remainder — generate's vision requests carry the same top-level `images: [<base64>,
+      // ...]` shape chat's per-message `images` already handles; an image-only request (empty
+      // prompt) must still produce a message so the preview path is reachable.
+      if (Array.isArray(req.images)) {
+        for (const image of req.images) {
+          blocks.push({ kind: 'image', label: 'image', source: ollamaImageSource(image) })
+        }
+      }
+      if (blocks.length > 0) {
+        messages.push({ role: 'user', blocks })
       }
     } else {
       for (const m of Array.isArray(req.messages) ? req.messages : []) {
@@ -47,6 +59,9 @@ export function extractOllamaResponse(detail: RequestDetail): RenderedView | nul
 
     const blocks: RenderBlock[] = []
     if (detail.format === 'ollama-generate') {
+      // R09 remainder — generate's `thinking` is a top-level field (chat nests it under
+      // `message`), same collapsed treatment as chat's.
+      if (typeof resp.thinking === 'string' && resp.thinking) blocks.push({ kind: 'thinking', text: resp.thinking })
       if (typeof resp.response === 'string' && resp.response) blocks.push({ kind: 'markdown', text: resp.response })
     } else {
       const msg = resp.message

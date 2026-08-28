@@ -25,7 +25,7 @@ export function StatsBar({
   currentSessionId: number | null
   onScopeChange: (scope: SessionScope) => void
   onReset: () => Promise<void>
-  onDataCleared?: (scope: { all: true } | { before: string }) => void
+  onDataCleared?: (scope: { all: true } | { before: string }, boundaryId: number | null) => void
   /** D8 (review §4 risk) — the SSE connection state `useEvents` already tracked but no one displayed. */
   connected: boolean
 }) {
@@ -93,10 +93,16 @@ export function StatsBar({
           label="Tokens out"
           value={stats ? formatCompactTokenCount(stats.tokensOut, stats.tokensEstimated) : '—'}
         />
-        {stats && stats.tokensCachedRead + stats.tokensCachedWrite > 0 && (
+        {stats && stats.tokensCachedRead > 0 && (
           <>
             <Divider />
-            <CachedStat read={stats.tokensCachedRead} write={stats.tokensCachedWrite} />
+            <Stat label="Cached read" value={formatCompactTokenCount(stats.tokensCachedRead, stats.tokensEstimated)} />
+          </>
+        )}
+        {stats && stats.tokensCachedWrite > 0 && (
+          <>
+            <Divider />
+            <Stat label="Cached write" value={formatCompactTokenCount(stats.tokensCachedWrite, stats.tokensEstimated)} />
           </>
         )}
       </div>
@@ -177,35 +183,6 @@ function Stat({ label, value, danger }: { label: string; value: string; danger?:
     <div className="flex flex-col gap-0.5">
       <span className="text-xs font-[550] uppercase tracking-[0.06em] text-text-muted">{label}</span>
       <span className={cn('text-stat font-semibold tabular-nums', danger ? 'text-danger' : 'text-text')}>{value}</span>
-    </div>
-  )
-}
-
-/**
- * ui-spec.md §9.1 — conditional slot (only rendered when read+write > 0 in scope):
- * "12.4k r · 310 w", the unit letters muted so the digits carry the emphasis. A zero
- * half is omitted rather than shown as "0 r"/"0 w" — nothing to report on that side.
- */
-function CachedStat({ read, write }: { read: number; write: number }) {
-  const parts: string[] = []
-  if (read > 0) parts.push(`${formatCompactTokenCount(read, false)} r`)
-  if (write > 0) parts.push(`${formatCompactTokenCount(write, false)} w`)
-
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-xs font-[550] uppercase tracking-[0.06em] text-text-muted">Cached</span>
-      <span className="text-stat font-semibold tabular-nums text-text">
-        {parts.map((part, i) => {
-          const [value, unit] = part.split(' ')
-          return (
-            <span key={i}>
-              {i > 0 && <span className="text-text-muted"> · </span>}
-              {value}
-              <span className="text-text-muted">{' ' + unit}</span>
-            </span>
-          )
-        })}
-      </span>
     </div>
   )
 }

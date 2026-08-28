@@ -38,6 +38,8 @@ export interface RequestListResponse {
 export interface BodyPayload {
   text?: string
   base64?: string
+  /** R05 remainder — this body is a prefix: display-time decoding hit the capture budget. Distinct from capture-time `truncated` (Summary.truncated / the `body_truncated` warning code). */
+  decodeTruncated?: boolean
 }
 
 export type HeaderMap = Record<string, string[]>
@@ -132,6 +134,18 @@ export interface FacetsResponse {
 
 export interface ClearResponse {
   deleted: number
+  /** R23 — the highest deleted id, so a buffered completion above it survives a clear-before; omitted when nothing matched. */
+  boundaryId?: number
+}
+
+/**
+ * R11/F2 — the server's authoritative in-flight set. Reconciliation removes any client-side
+ * in-flight row whose seq is absent here and at or below `newestCompletedSeq`; the boundary
+ * spares a request that started after this snapshot was taken.
+ */
+export interface ActiveRequestsResponse {
+  activeSeqs: number[]
+  newestCompletedSeq: number
 }
 
 export interface BackendConfigDto {

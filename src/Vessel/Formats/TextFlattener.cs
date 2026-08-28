@@ -250,11 +250,14 @@ public static class TextFlattener
         return NullIfEmpty(sb);
     }
 
-    /// <summary>Flattens an Ollama generate response object's <c>response</c> text.</summary>
+    /// <summary>Flattens an Ollama generate response object's top-level <c>response</c> + <c>thinking</c>.</summary>
     public static string? OllamaGenerateResponse(JsonNode? responseObject)
     {
-        string? text = JsonUtil.Str(JsonUtil.Object(responseObject)?["response"]);
-        return string.IsNullOrEmpty(text) ? null : text;
+        JsonObject? obj = JsonUtil.Object(responseObject);
+        var sb = new StringBuilder();
+        Append(sb, JsonUtil.Str(obj?["response"]));
+        Append(sb, JsonUtil.Str(obj?["thinking"]));
+        return NullIfEmpty(sb);
     }
 
     private static void AppendMessage(StringBuilder sb, JsonNode? message)

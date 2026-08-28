@@ -1,0 +1,19 @@
+{
+  "format": "ollama-generate",
+  "model": "qwen2.5:1.5b",
+  "tokensIn": 9,
+  "tokensOut": 10,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": true,
+  "stopReason": null,
+  "warnings": ["tokens_estimated", "stream_incomplete"],
+  "promptText": "user: Tell me a story about the sea.",
+  "responseText": "Once upon a time\nThinking about the sea",
+  "responseBody": {
+    "model": "qwen2.5:1.5b",
+    "done": false,
+    "response": "Once upon a time",
+    "thinking": "Thinking about the sea"
+  }
+}

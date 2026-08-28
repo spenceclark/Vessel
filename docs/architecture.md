@@ -393,12 +393,52 @@ editable in the UI:
 
 ### 9.1 Live apply (Phase 4)
 
-`GET`/`PUT /vessel/api/config` are backed by a `ConfigStore` singleton: an immutable
-`VesselConfig` snapshot behind `Volatile.Read`, plus a version counter bumped on every
-successful `PUT`. `PUT` validates the candidate with the exact same rules `ConfigLoader`
-applies at startup (a bad config → `400` with the human validation message, nothing
-persisted or applied), then writes `vessel.json`, swaps the snapshot, and bumps the
-version — serialized under a lock, last write wins (single user, single machine).
+`GET`/`PUT /vessel/api/config` are backed by a `ConfigStore` singleton: a single
+`ConfigSnapshot(VesselConfig Config, int Version)` record — config and its revision number
+published together as *one* immutable reference, behind a single `Volatile.Read`/`Write`.
+`PUT` validates the candidate with the exact same rules `ConfigLoader` applies at startup
+(a bad config → `400` with the human validation message, nothing persisted or applied),
+then writes `vessel.json` and swaps in a new `ConfigSnapshot` carrying both the new config
+and the bumped version — serialized under a lock, last write wins (single user, single
+machine).
+
+**Finding (code review R02, resolved) — config and version must be one reference, not
+two.** An earlier design published the config and a version counter as separate fields.
+A `PUT` landing between a consumer's two reads could label a map built from revision N as
+revision N+1, and the consumer would then treat that stale map as current until the *next*
+`PUT` — routing (and that request's timeouts/body-size limits) could stay silently wrong
+indefinitely. Publishing both in one `ConfigSnapshot` reference makes that interleaving
+unrepresentable: there is no way to observe the version without the config it actually
+belongs to. Every derived cache follows the same rule — it's built from, and keyed by
+reference to, one specific `ConfigSnapshot`, never from a version number compared
+separately from the config that produced it:
+
+- `BackendRegistry.Resolve(ConfigSnapshot)` returns the `BackendSet` (name → backend map
+  plus the resolved default, also one bundled value so those two can't disagree either)
+  for *exactly* the snapshot passed in — not "whatever's newest by the time a rebuild lock
+  is free." A caller that resolves routing and per-request limits from the same snapshot
+  (below) is guaranteed both come from the same revision. An internal `_current` fast-path
+  cache still only ever advances to a newer snapshot opportunistically, as a read-through
+  optimization for callers with no request-scoped snapshot of their own (`Latest`, used by
+  `/vessel/api/status` and the startup banner) — it never regresses to an older entry, and
+  it never substitutes for the snapshot a caller explicitly asked to resolve.
+- `ProxyHandler.Handle` reads `ConfigStore.Snapshot` exactly once per request and uses that
+  same reference for both `BackendRegistry.Resolve` (routing, via `RouteResolver.Resolve`,
+  which takes an already-resolved `BackendSet` rather than the registry) and this request's
+  `Capture.MaxBodyMb`/`Timeouts.ActivitySeconds` — so a `PUT` racing mid-request can never
+  apply revision N's limits to revision N+1's backend or vice versa.
+- `FormatEnricher` re-derives its backend-type map and slow-TTFT threshold when the
+  snapshot reference it was built from is no longer the store's current one.
+- The writer (`SqliteCaptureStore.EnforceRetention`) re-reads retention caps every batch
+  from the current snapshot, so a tightened cap takes effect on the next flush, not the
+  next restart.
+
+`ConfigSnapshotConcurrencyTests` pins this under load (interleaved `PUT` + resolve loops
+asserting a lookup never returns backends from a revision other than the snapshot it was
+resolved against); a regression where the registry's rebuild path substituted "whatever
+was newest" for the caller's requested snapshot was caught by this exact test failing
+deterministically across repeated full-suite runs, and fixed in `BackendRegistry.Resolve`
+as described above.
 
 **Finding (code review R16, resolved).** `restartRequired` compared the PUT candidate's
 `listen` against whatever was *last saved*, not against the address Kestrel is actually
@@ -412,21 +452,6 @@ that fixed point instead. `GET /vessel/api/config` now returns
 `{ config, restartRequired }` (not a bare `VesselConfig`) so the settings panel shows the
 still-pending state on reopen, not just immediately after a `PUT` — the previous shape
 only surfaced it as ephemeral component state that a panel close/reopen lost.
-
-Every consumer that used to cache values from `VesselConfig` at construction now either
-reads `ConfigStore.Current` per-request/per-batch, or rebuilds its derived state lazily
-when the version has advanced since it last looked:
-
-- `BackendRegistry` rebuilds its name → backend map on the next access after the version
-  changes — add/edit/remove a backend, or change the default, and the very next request
-  sees it.
-- `ProxyHandler` reads `Capture.MaxBodyMb` and `Timeouts.ActivitySeconds` fresh at the top
-  of every request (one snapshot read, used consistently for that request even if a `PUT`
-  races concurrently).
-- `FormatEnricher` re-derives its backend-type map and slow-TTFT threshold on version
-  change.
-- The writer (`SqliteCaptureStore.EnforceRetention`) re-reads retention caps on every
-  batch, so a tightened cap takes effect on the next flush, not the next restart.
 
 **`listen` is the one field that doesn't apply live** — `PUT` still validates and persists
 it, and the response reports `restartRequired: ["listen"]` so the UI can banner it; Kestrel

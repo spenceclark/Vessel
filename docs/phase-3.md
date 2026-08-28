@@ -96,6 +96,13 @@ All read queries are indexed (`id` cursor, `session_id`); no query may scan bodi
   nobody will resolve; both also honour client cancellation. `GET /vessel/api/status`
   gains `capture: { recording: bool, stoppedReason?: string }` so that state is
   observable (the UI banner is a separate frontend item).
+- **Re-review addition** (Batch F, R23): `DELETE /requests` response gains
+  `boundaryId?: number` — the highest deleted id (omitted when nothing matched). It is
+  the deletion boundary the client uses to reconcile a clear against buffered live
+  completions: a completion buffered during an unsettled list fetch is discarded if the
+  clear removed its row (every row for clear-all, ids `≤ boundaryId` for clear-before) and
+  kept otherwise, so a clear can never be undone by a completion that was mid-flight when
+  it ran.
 - Errors follow the Phase 0 convention (`X-Vessel-Error` + `{"error":{...}}`).
 
 ### D4 — Sessions: current-session id is stamped at capture time
@@ -132,20 +139,41 @@ so the API can respond with it. No second write connection, no lock dance.
   (duplicates resolved in favor of REST rows).
 - Request-path emit cost is a non-blocking `TryWrite` per subscriber; zero subscribers
   = near-zero cost. `/vessel/*` traffic never emits events (it is never captured).
-- **Post-Phase-4 addition** (code review R11/D05, implemented):
+- **Post-Phase-4 addition** (code review R11/R22/D05, implemented):
   - Every frame carries the hub's monotonic publish sequence as the SSE **`id:`** field.
     Dropping oldest is deliberate, but it was previously *undetectable*: a lost
     `completed` left an in-flight row running forever with no signal. A client seeing the
-    id jump knows it missed frames and reconciles (refetch list + stats + facets, then
-    drop in-flight entries the refreshed history accounts for). The id is deliberately
-    **not** the request `seq` — `seq` is assigned at request *start*, so a legitimately
-    long-running request trails the newest `seq` arbitrarily far, and any distance
-    heuristic on it would expire real in-flight requests.
+    id jump knows it missed frames and reconciles. The id is deliberately **not** the
+    request `seq` — `seq` is assigned at request *start*, so a legitimately long-running
+    request trails the newest `seq` arbitrarily far, and any distance heuristic on it
+    would expire real in-flight requests.
+  - **Re-review (Batch F, R22): publish is ordered.** The id is allocated *inside* the
+    hub's publish lock, in the same critical section as the channel fan-out, so every
+    subscriber observes ids strictly increasing. An atomic counter alone made ids unique
+    but not ordered — two publishers could allocate `N`/`N+1` and enqueue them reversed,
+    which the client reads as loss and answers with a needless reconciliation per reversal
+    (the review measured 3,535 reversals in 12,800 events). The client also never rewinds
+    its id watermark, and coalesces a burst of gaps (debounced, single-flight) into one
+    reconciliation rather than one per gap.
+  - **Re-review (Batch F, R11): reconciliation is server-authoritative**, not
+    history-derived. The old approach dropped in-flight entries the *refreshed history
+    pages* accounted for — but a completion off the loaded pages, filtered out, or for a
+    since-cleared row is invisible there, so those rows never cleared. Reconciliation now
+    fetches `GET /vessel/api/active` (below) and removes any in-flight row the server no
+    longer lists as active; a genuinely long-running request survives because it is
+    genuinely in the set (never expired by a timer). It then refetches list + stats +
+    facets once. The `(startedAt, method, path)` identity correlation the old path used is
+    gone — removal is keyed directly on `seq`.
   - `started` carries `sessionId` (D05), so the UI scopes in-flight rows to the viewed
-    session accurately instead of guessing. Because `seq` is **not** a stored column, an
-    in-flight entry is correlated to its stored row during reconciliation by
-    `(startedAt, method, path)` — `started.startedAt` and the row's `startedAt` are the
-    same `StartedAtIso` string, which `EventsTests` pins.
+    session accurately instead of guessing.
+- **Re-review addition** (Batch F, R11/F2) — `GET /vessel/api/active` →
+  `{ activeSeqs: number[], newestCompletedSeq: number }`. The server-authoritative
+  in-flight set, sourced from the live `CaptureEvents` hub: a `seq` is added on `started`
+  and removed on `completed`, independent of any SSE subscriber. Deliberately separate
+  from `/status` (which is polled and cached) — this changes on every request and is
+  fetched on demand during reconciliation. `newestCompletedSeq` is the boundary below
+  which an absent `seq` is definitely finished rather than just newly started, so a
+  request that started after the snapshot is never expired.
 - **Post-Phase-4 addition** (ui-spec.md §9.1 in-flight TODO, implemented): the
   contract gains a fourth event, `request_ready` `{seq, model}` — emitted once the
   request body has been fully read (a genuine EOF on the request tee, not YARP's
