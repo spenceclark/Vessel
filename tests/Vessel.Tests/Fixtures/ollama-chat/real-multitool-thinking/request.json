@@ -1,0 +1,11 @@
+{
+  "model": "granite4.2:8b",
+  "messages": [{"role":"user","content":"What is the weather in Paris and what time is it in Tokyo? Use the tools."}],
+  "tools": [
+    {"type":"function","function":{"name":"get_weather","description":"Get current weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}},
+    {"type":"function","function":{"name":"get_time","description":"Get current time for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}
+  ],
+  "think": true,
+  "stream": true,
+  "options": {"num_ctx": 4096}
+}

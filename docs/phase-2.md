@@ -85,6 +85,26 @@ response NDJSON `done` field → ollama. Backend `type` breaks remaining ties (e
 openai-compat server mounted at a nonstandard path). Nothing matches → `raw`, silently
 (no warning — unknown traffic is normal, per the graceful-degradation principle).
 
+**Accepted scope (post-Phase-4 addition, code review E2).** A fourth adapter,
+`openai-responses`, was added for OpenAI's Responses API (`/v1/responses`) —
+structurally distinct from OpenAI chat completions: request `input` (a string or an
+array of message/tool items) instead of `messages`; response `output[]` (typed items —
+`message`, `reasoning`, `function_call`, `function_call_output`, and others rendered as
+raw JSON rather than dropped) instead of `choices`. Detection: path suffix
+`/v1/responses` first, then payload sniff (request `input` + response `output[]`, no
+`choices`), same tiebreak rules as the other three. Field mapping: `tokens_in`/`out` from
+`usage.input_tokens`/`usage.output_tokens`; `tokens_cached_read` from
+`usage.input_tokens_details.cached_tokens` (no cache-write equivalent on this API);
+`stop_reason` normalizes `status`/`incomplete_details.reason` onto the same vocabulary
+(`length`/`max_tokens` → truncated warning; `content_filter`/`refusal`/`error` → danger)
+the other three adapters already use, rather than a fifth vocabulary the UI would need
+special-casing for. Streaming reassembly is simpler than chat completions here: the
+terminal SSE event (`response.completed`/`.incomplete`/`.failed`) already carries the
+complete final response object in its own `response` field, so reassembly is picking
+that event out rather than folding deltas. Golden fixtures under
+`Fixtures/openai-responses/`, same shape as the other three formats (D12). See also
+architecture.md §5's adapter table.
+
 Detection also runs for **error/failed rows** using the request side alone: a 502 to
 `/api/chat` still gets `format = ollama-chat`, `model`, and `prompt_text` from the
 request body — failed requests must be as browsable as successful ones. Response-side
@@ -98,6 +118,28 @@ Stored `request_body`/`response_raw` remain the wire bytes (Phase 1 D5 unchanged
 The *reassembled* `response_body` is always stored unencoded (it's a Vessel-synthesized
 document, not wire bytes). Unknown encoding → `raw` + `parse_error`. A `truncated`
 capture (hit the `maxBodyMb` cap) is parsed as far as it goes, like a truncated stream.
+
+**Finding (code review R05 + decision D01, resolved).** Two corrections landed here:
+
+- *Wire-true storage was violated and is restored.* A post-Phase-4 change made enrichment
+  write the **decoded** bytes back into `response_body` for non-streamed rows, so the
+  detail pane would show JSON instead of base64 for a gzip/br backend response — trading
+  the fidelity this decision exists to protect for display convenience, with a test that
+  enshrined it. Storage is wire-true again; the display decode moved to **read time** in
+  the detail endpoint (`SqliteReadStore.ToBodyPayload`), which is where it belonged. The
+  test was corrected rather than deleted, and now asserts both halves: the stored bytes
+  are still gzip, and the row still parses.
+- *Decoding now has an output budget.* The `maxBodyMb` cap bounds **compressed** wire
+  bytes, which says nothing about how far they expand — a 2 KB gzip body decoded to 2 MB
+  with the row marked untruncated, and stacked encodings compound it. `BodyDecoder` takes
+  a decoded-byte budget (**the same `capture.maxBodyMb`** — one number for "how much of
+  one request Vessel holds in memory", `CaptureBudget`), enforced *during* a streaming
+  copy so nothing larger is ever allocated, across every codec and every layer of a
+  stacked encoding. The outcome is explicit — `Decoded | TruncatedDecode | Failed`. A
+  truncated decode is treated exactly like a truncated capture per the paragraph above:
+  parsed as far as it goes, flagged `body_truncated` on the row, and flagged
+  `decodeTruncated` on the body in `GET /requests/{id}` so the UI never presents a prefix
+  as a whole document.
 
 ### D4 — Stream parsing: one SSE parser, one NDJSON splitter, truncation-tolerant
 
@@ -157,6 +199,15 @@ in one burst — the wire timing measures network, not generation; leave null).
 Ollama-native rows use the exact eval numbers for both streamed and non-streamed.
 Additionally for Ollama, `load_duration` > 1 s is surfaced now as warning `cold_load`
 (the data is in hand; Phase 5 only polishes presentation/threshold).
+
+**Finding (code review D02, resolved).** A post-Phase-4 change made non-streamed
+non-Ollama rows fall back to `tokens_out / duration_ms` instead of null, and tests
+required that fallback. Total request duration folds in queueing, prefill, and network
+transfer time — it is not the same quantity as generation throughput, and reporting it
+under `tok_per_sec` would silently pollute session averages with a different metric.
+Restored: non-streamed non-Ollama rows report `tok_per_sec = null` unconditionally, as
+this section originally specified. The row still shows duration and token counts, so no
+information is lost — only the mislabeled rate. See also architecture.md §4.2.
 
 ### D7 — Warning vocabulary (JSON array of string codes, `warnings` column)
 

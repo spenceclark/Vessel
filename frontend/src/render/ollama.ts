@@ -1,4 +1,5 @@
 import type { RequestDetail } from '@/api/types'
+import { ollamaImageSource } from './imageSource'
 import type { RenderBlock, RenderedView, RenderMessage } from './types'
 
 const METRIC_KEYS = [
@@ -49,6 +50,7 @@ export function extractOllamaResponse(detail: RequestDetail): RenderedView | nul
       if (typeof resp.response === 'string' && resp.response) blocks.push({ kind: 'markdown', text: resp.response })
     } else {
       const msg = resp.message
+      if (typeof msg?.thinking === 'string' && msg.thinking) blocks.push({ kind: 'thinking', text: msg.thinking })
       if (typeof msg?.content === 'string' && msg.content) blocks.push({ kind: 'markdown', text: msg.content })
       appendToolCalls(blocks, msg?.tool_calls)
     }
@@ -76,6 +78,14 @@ function requestMessage(m: any): RenderMessage {
     })
   } else if (typeof m?.content === 'string' && m.content) {
     blocks.push({ kind: 'markdown', text: m.content })
+  }
+
+  // R18 — Ollama's vision requests carry `images: [<base64>, ...]` alongside `content`;
+  // previously dropped entirely (not even a placeholder), unlike every other provider.
+  if (Array.isArray(m?.images)) {
+    for (const image of m.images) {
+      blocks.push({ kind: 'image', label: 'image', source: ollamaImageSource(image) })
+    }
   }
 
   appendToolCalls(blocks, m?.tool_calls)

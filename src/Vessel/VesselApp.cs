@@ -54,6 +54,55 @@ public static class VesselApp
 
         var app = builder.Build();
 
+        // D03 — Host allowlist + mutating-request same-origin check, scoped to /vessel/*
+        // only. Every proxied route (the catch-all below) is untouched: this must never
+        // be able to break SDK traffic, only Vessel's own control plane.
+        app.Use(async (context, next) =>
+        {
+            if (!context.Request.Path.StartsWithSegments("/vessel"))
+            {
+                await next(context);
+                return;
+            }
+
+            // R03 — defense in depth alongside the frontend's own resource policy
+            // (MessageView never emits a live src/href for captured content): even if a
+            // future rendering path forgot that rule, the browser itself refuses the
+            // request. `data:`/`blob:` stay allowed for img-src — that's the *embedded*
+            // preview path (R18), which is same-document and makes no request at all.
+            // UI routes only; proxied backend responses (the catch-all below) never get
+            // this header rewritten onto them.
+            context.Response.Headers["Content-Security-Policy"] =
+                "default-src 'self'; " +
+                "img-src 'self' data: blob:; " +
+                "style-src 'self' 'unsafe-inline'; " +
+                "font-src 'self' data:; " +
+                "connect-src 'self'; " +
+                "script-src 'self'; " +
+                "frame-ancestors 'none'; " +
+                "base-uri 'self'; " +
+                "form-action 'self'";
+
+            var configStore = context.RequestServices.GetRequiredService<ConfigStore>();
+            if (!HostOriginGuard.IsAllowedHost(context, configStore))
+            {
+                await VesselErrors.Write(
+                    context, StatusCodes.Status403Forbidden, VesselErrors.ForbiddenHost,
+                    $"Host '{context.Request.Host}' is not an allowed Vessel host");
+                return;
+            }
+
+            if (!HostOriginGuard.IsAllowedMutationOrigin(context))
+            {
+                await VesselErrors.Write(
+                    context, StatusCodes.Status403Forbidden, VesselErrors.ForbiddenOrigin,
+                    "cross-origin request rejected");
+                return;
+            }
+
+            await next(context);
+        });
+
         // Everything Vessel-owned lives under /vessel/ — mapped before the catch-all,
         // never proxied (D7).
         app.MapGet("/vessel/api/status", (RequestDelegate)StatusEndpoint.Handle);
@@ -83,4 +132,15 @@ public static class VesselApp
     /// <summary>The actual bound address, e.g. "http://127.0.0.1:4550" (resolves port 0 after start).</summary>
     public static string ListenAddress(this WebApplication app) =>
         app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
+
+    /// <summary>
+    /// R16 — call once, after <c>StartAsync</c>, so <see cref="ConfigStore"/> knows the
+    /// address Kestrel is actually bound to (which may differ from the configured
+    /// <c>listen</c> when the port was 0). Must run after the listener is up.
+    /// </summary>
+    public static void RecordBoundListen(this WebApplication app)
+    {
+        var uri = new Uri(app.ListenAddress());
+        app.Services.GetRequiredService<ConfigStore>().RecordBoundListen(System.Net.IPAddress.Parse(uri.Host), uri.Port);
+    }
 }

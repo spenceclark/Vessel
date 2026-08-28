@@ -78,20 +78,31 @@ public class FormatEnricherTests
     // must not surface as opaque base64 in Vessel's own stored copy — only the wire bytes
     // actually forwarded to the caller (ResponseTeeStream, untouched) stay compressed.
     [Fact]
-    public void CompressedResponse_NonStreamed_DecodedForStorage()
+    public void CompressedResponse_NonStreamed_StoredWireTrue_ButParsed()
     {
+        // Corrected, not deleted (D01): an earlier revision made enrichment rewrite
+        // response_body to the *decoded* bytes so the detail pane would show JSON, and this
+        // test enshrined that. Phase-2 D3 says storage is wire-true; the decode belongs at
+        // read time (SqliteReadStore.ToBodyPayload). So the assertion flips — the bytes stay
+        // compressed — while the other half of the original intent, that a compressed body
+        // is still fully parsed, is asserted here rather than dropped.
         var enricher = new FormatEnricher(new VesselConfig(), FormatEnricher.DefaultAdapters());
-        byte[] compressed = Gzip("""{"hello":"world"}"""u8.ToArray());
+        byte[] wire = Gzip(
+            """{"id":"c","object":"chat.completion","model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}"""u8.ToArray());
 
-        CaptureRecord record = Record("/unrecognized", null, null) with
+        CaptureRecord record = Record("/v1/chat/completions", """{"model":"gpt-4o-mini"}""", null) with
         {
             ResponseHeadersJson = """{"Content-Type":["application/json"],"Content-Encoding":["gzip"]}""",
-            ResponseBody = compressed,
+            ResponseBody = wire,
         };
 
         EnrichedRecord enriched = enricher.Enrich(record);
 
-        Assert.Equal("""{"hello":"world"}""", Encoding.UTF8.GetString(enriched.Record.ResponseBody!));
+        Assert.Equal(wire, enriched.Record.ResponseBody);
+        Assert.Equal(FormatNames.OpenAiChat, enriched.Format);
+        Assert.Equal("gpt-4o-mini", enriched.Model);
+        Assert.Equal(1, enriched.TokensOut);
+        Assert.Equal("hi", enriched.ResponseText);
     }
 
     // response_raw backs the UI's "Raw stream" toggle specifically because it's the actual
@@ -124,13 +135,11 @@ public class FormatEnricherTests
         return output.ToArray();
     }
 
-    // A non-streamed response has no meaningful first-to-last-byte span (the backend
-    // computes everything before sending any of it), so tok/s falls back to total
-    // duration instead — coarser, but real. The golden fixtures all use the harness's
-    // fixed 1000ms duration, which makes tok/s numerically equal tokensOut and would
-    // hide a division bug; this exercises the arithmetic with a duration that doesn't.
+    // D02: whole-request duration mixes queueing/prefill/network into a rate that isn't
+    // the same quantity as generation throughput, so a non-streamed non-Ollama row has
+    // no tok/s signal at all — regardless of duration, short or long.
     [Fact]
-    public void NonStreamedResponse_TokPerSec_FallsBackToDuration()
+    public void NonStreamedResponse_TokPerSec_IsNull()
     {
         var enricher = new FormatEnricher(new VesselConfig(), FormatEnricher.DefaultAdapters());
         CaptureRecord record = Record(
@@ -142,11 +151,9 @@ public class FormatEnricherTests
 
         EnrichedRecord enriched = enricher.Enrich(record);
 
-        Assert.Equal(20.0, enriched.TokPerSec);
+        Assert.Null(enriched.TokPerSec);
     }
 
-    // Same divide-by-near-zero guard as the streamed path's spanMs >= 100 check — a
-    // sub-100ms duration is noise, not a real rate.
     [Fact]
     public void NonStreamedResponse_TooShortDuration_TokPerSecIsNull()
     {

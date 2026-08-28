@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/client'
+import { requestDetailQueryKey } from '@/api/queryKeys'
 import type { HeaderMap } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Mark } from '@/components/ui/Mark'
 import { PrettyJson } from '@/components/PrettyJson'
 import { MessageView } from '@/components/MessageView'
+import { RenderErrorBoundary } from '@/components/RenderErrorBoundary'
+import { ErrorState } from '@/components/ui/ErrorState'
 import { renderRequest, renderResponse } from '@/render'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatMs, formatTimestamp, formatTokPerSec, formatTokenCount } from '@/lib/format'
@@ -38,7 +41,7 @@ export function DetailPane({ id }: { id: number | null }) {
   const [responseDisplay, setResponseDisplay] = useState<ViewMode>('rendered')
 
   const query = useQuery({
-    queryKey: ['request', id],
+    queryKey: requestDetailQueryKey(id ?? -1),
     queryFn: () => api.getRequest(id as number),
     enabled: id !== null,
   })
@@ -59,6 +62,10 @@ export function DetailPane({ id }: { id: number | null }) {
         <p className="text-sm text-text-muted">Select a request to see what it sent and what came back.</p>
       </div>
     )
+  }
+
+  if (query.isError) {
+    return <ErrorState message="Failed to load this request." onRetry={() => query.refetch()} />
   }
 
   if (query.isLoading || !query.data) {
@@ -87,7 +94,9 @@ export function DetailPane({ id }: { id: number | null }) {
         <TabsContent value="request">
           {requestRendered && <ViewModeToggle mode={requestDisplay} onChange={setRequestDisplay} />}
           {requestDisplay === 'rendered' && requestRendered ? (
-            <MessageView view={requestRendered} />
+            <RenderErrorBoundary key={id} fallback={<PrettyJson body={detail.requestBody} emptyLabel="No request body" />}>
+              <MessageView view={requestRendered} />
+            </RenderErrorBoundary>
           ) : (
             <PrettyJson body={detail.requestBody} emptyLabel="No request body" />
           )}
@@ -96,7 +105,9 @@ export function DetailPane({ id }: { id: number | null }) {
         <TabsContent value="response">
           {responseRendered && <ViewModeToggle mode={responseDisplay} onChange={setResponseDisplay} />}
           {responseDisplay === 'rendered' && responseRendered ? (
-            <MessageView view={responseRendered} />
+            <RenderErrorBoundary key={id} fallback={<PrettyJson body={detail.responseBody} emptyLabel="No response body" />}>
+              <MessageView view={responseRendered} />
+            </RenderErrorBoundary>
           ) : (
             <>
               {detail.streamed && detail.responseRaw && (

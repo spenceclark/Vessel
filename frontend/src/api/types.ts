@@ -78,12 +78,19 @@ export interface StatusBackend {
   default: boolean
 }
 
+/** R06 — whether the background writer is still recording (a give-up used to be a log line only). */
+export interface CaptureHealth {
+  recording: boolean
+  stoppedReason?: string
+}
+
 export interface StatusPayload {
   name: string
   version: string
   listen: string
   defaultBackend: string
   backends: StatusBackend[]
+  capture: CaptureHealth
 }
 
 /** The `session` scope this UI is currently viewing: a specific session's id, or "all" history. */
@@ -148,11 +155,20 @@ export interface ConfigApplyResult {
   restartRequired: string[]
 }
 
+// R16: GET returns the persisted restart state alongside the config, so reopening the
+// panel shows a still-pending restart even without a fresh PUT response to remember it.
+export interface ConfigGetResponse {
+  config: VesselConfigDto
+  restartRequired: string[]
+}
+
 // SSE lifecycle events (D5).
 
 export interface StartedEvent {
   seq: number
   startedAt: string
+  /** D05 — known at request start, so in-flight rows can be scoped to the viewed session. */
+  sessionId: number
   method: string
   path: string
   backend: string

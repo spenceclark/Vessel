@@ -1,8 +1,15 @@
 # Phase 4 — Implementation Report
 
-> Status: **complete**. The plan's 10k-row soak and the "find a truncated response from
-> this morning in under ten seconds" litmus test are the remaining human-at-the-keyboard
-> items, as in prior phases.
+> Status: **implementation complete; acceptance was not yet met at the time of writing.**
+> (Code review finding D04: this report previously said "complete" outright, but its own
+> final paragraph — and the acceptance table below — already listed the 10k-row soak and
+> the truncated-response litmus test as outstanding; those are acceptance criteria, not
+> optional extras, so this phase was not actually accepted at that point. A subsequent
+> external code review (see [code-review-phase-4.md](code-review-phase-4.md)) found
+> further defects across this implementation; the full remediation is tracked in
+> [code-review-phase-4-plan.md](code-review-phase-4-plan.md), whose batches have since
+> landed. This report is left as the historical implementation record of the original
+> Phase 4 work — it is not the current acceptance status of the tree.
 > Spec: [phase-4.md](phase-4.md) · Plan: [plan.md](plan.md) · Design authority: [architecture.md](architecture.md)
 
 ## What was built
@@ -38,7 +45,13 @@ No schema migration, as the spec predicted.
 
 ## Verification results
 
-### Automated tests — 167/167 pass (`dotnet test`; 142 prior + 25 new)
+### Automated tests — 167/167 pass at the time of this report (`dotnet test`; 142 prior + 25 new)
+
+**Note (code review D04):** this count describes the tree as it stood when Phase 4 was
+first implemented. It does not describe the current tree — later work (the OpenAI
+Responses adapter, `request_ready`/in-flight-detail additions, and the code-review
+remediation batches) added substantially more tests and changed some of the ones listed
+below; run `dotnet test` for the current total rather than relying on this number.
 
 | # | Coverage | Where |
 |---|---|---|
@@ -97,10 +110,19 @@ unknown-backend 404) and drove the built SPA in a browser:
 |---|---|---|
 | Untrimmed (shipping) | 102.5 MB | all checks pass — first-run config creation, `/vessel/api/status`, proxying, unknown-backend 404, embedded SPA shell + bundled JS asset |
 
-`verify/publish-smoke.ps1`'s own `npm ci && npm run build` step also validated the new
-`react-markdown`/`remark-gfm` dependency installs and builds cleanly from a fresh
-`node_modules`. `VesselApp.Build`'s new `configPath` parameter didn't need a script
-change — `Program.cs` is the only production call site and already computed it.
+**Correction (code review R01).** The paragraph above is wrong about the script:
+`verify/publish-smoke.ps1` does not have its own separate `npm ci && npm run build`
+step — it invokes `dotnet publish` directly, which is exactly why R01's clean-publish
+defect (the frontend build running too late in the MSBuild target graph, so a truly
+clean tree published with zero embedded UI resources) was able to pass this smoke check
+silently for as long as it did: an existing `frontend/dist` from any prior `npm run
+build` masked the broken ordering. The new `react-markdown`/`remark-gfm` dependencies
+did install and build cleanly from a fresh `node_modules` in this run, but that was
+incidental to whatever triggered the frontend build at the time, not evidence this
+script independently verified it. Batch A's fix (see
+[code-review-phase-4-plan.md](code-review-phase-4-plan.md)) corrects the build ordering
+and extends this script to publish from a tracked-files-only copy with no pre-existing
+`dist`, closing the gap this correction describes.
 
 ## Deviations and findings
 
@@ -151,14 +173,35 @@ change — `Program.cs` is the only production call site and already computed it
    guaranteed to include the row, and invalidating queues exactly such a refetch behind
    the in-flight one.
 
-## Acceptance criteria status
+   **Correction (code review R10).** The last sentence above is wrong, and the fix it
+   describes was insufficient. `invalidateQueries` does *not* reliably queue a fresh
+   refetch behind an in-flight one: for an **initial** fetch — no cached data yet — this
+   TanStack Query version reuses the existing promise, so the invalidation is absorbed and
+   the completion is lost with no later refetch to recover it. The review reproduced it
+   directly (one query call, zero rows, `isInvalidated: false`). Completions arriving
+   while any list fetch is unsettled are now **buffered and merged after settlement**
+   (`useLiveHistory`), which is correct for the initial-load case as well as the
+   overlapping-refetch case; the merge dedupes by id, so it is harmless when the settling
+   fetch already contained the row.
+
+## Acceptance criteria status (as of this report — see the correction below)
 
 | # | Criterion | Status |
 |---|---|---|
 | 1 | §4 tests green; full suite green; frontend `tsc` clean | ✅ 167/167 backend; `tsc -b && vite build` clean |
 | 2 | Manual gate 1–5 done | ✅ filter bar, rendered view + warnings, config live-apply, data-panel guardrail, and C2 all driven live against real Ollama traffic through the actual embedded UI |
-| 3 | Publish smoke passes; architecture.md §9 updated with the live-apply model | ✅ `verify/publish-smoke.ps1` passes (102.5 MB, untrimmed win-x64); architecture.md §9.1 added |
+| 3 | Publish smoke passes; architecture.md §9 updated with the live-apply model | ✅ `verify/publish-smoke.ps1` passes (102.5 MB, untrimmed win-x64); architecture.md §9.1 added — **but see the R01 correction above: this smoke check could not have caught a broken clean publish at the time** |
 | 4 | plan.md Phase 4 boxes ticked; deviations recorded here | ✅ |
+| 5 | 10k-row soak; truncated-response litmus test (two ways, under ten seconds) | ❌ **not done** — explicitly deferred as "the remaining human-at-the-keyboard items" below, but these are acceptance criteria from Phase 4 §5, not optional follow-ups (code review D04) |
+
+**Correction (code review D04): this phase was not actually accepted at the time of
+this report.** Row 5 above is a genuine acceptance gap, not a footnote — Phase 4 §5
+requires both the soak and the litmus test for acceptance. The original text below
+undersold that by calling them "remaining human-at-the-keyboard items, as in prior
+phases," implying routine follow-up rather than an open acceptance criterion. Both were
+subsequently exercised as part of the code-review remediation's final gate (see
+[code-review-phase-4-plan.md](code-review-phase-4-plan.md)); this report is left as the
+original point-in-time record and is not updated with those results here.
 
 A 10k-row soak and the plan's "truncated response from this morning, two ways, under ten
 seconds" litmus test are the remaining human-at-the-keyboard items, as in prior phases.

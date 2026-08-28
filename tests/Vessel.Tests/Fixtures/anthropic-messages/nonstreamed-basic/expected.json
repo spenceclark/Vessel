@@ -7,7 +7,7 @@
   "tokensCachedWrite": 0,
   "tokensEstimated": false,
   "stopReason": "end_turn",
-  "tokPerSec": 3.0,
+  "tokPerSec": null,
   "warnings": [],
   "promptText": "user: Say hello",
   "responseText": "Hello there"

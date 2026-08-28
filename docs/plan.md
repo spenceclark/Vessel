@@ -133,6 +133,18 @@ under ten seconds: filter warnings-only, or search a phrase, click, read.
       rules from §4.1 apply in full.
 - [ ] **Ollama panel**: `ollama ps` proxied view (loaded models, VRAM); server.log viewer
       if reachable (§7, §10).
+- [ ] **Export to CSV/JSONL**: provide option for a range of requests to be exported to CSV/JSON (with/without bodies).
+      Allows offline analysis by user/AI.
+- [ ] **MCP server**: let the user's own AI tools (Claude Code, etc.) interrogate the
+      captured traffic — "why did my planner agent stall?" answered by the agent
+      querying Vessel directly. Streamable HTTP endpoint at `/vessel/mcp` on the
+      existing host via the official ModelContextProtocol C# SDK (stdio bridge only
+      if a client demands it). **Read-only v1**: `search_requests` (FTS + filters),
+      `get_request`, `get_stats`, `list_sessions` — no replay/clear via MCP without
+      a separate decision. The core design work is token-budget shaping: summaries
+      and truncated bodies by default, explicit params to fetch more — never dump a
+      200K-token context into the caller. Same trust boundary as the UI (localhost,
+      D03 Host guard); docs must say an MCP client gets your captured prompts.
 
 **Done when:** replay + diff let you answer "would qwen handle what opus handled?" without
 touching client code.

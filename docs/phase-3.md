@@ -72,6 +72,12 @@ All read queries are indexed (`id` cursor, `session_id`); no query may scan bodi
   objects), `requestBody`, `responseBody`, `responseRaw`. Bodies are decompressed
   server-side; each is `{ text: string }` when valid UTF-8 else `{ base64: string }`,
   plus the UI shows raw vs reassembled for streamed rows. 404 JSON for unknown id.
+  **Post-Phase-4 addition** (code review R05/D01, phase-2 D3): "decompressed" now means
+  storage-level zstd *and* the body's own `Content-Encoding` — storage stays wire-true,
+  so this endpoint is where a gzip/br body becomes readable. That decode is bounded by
+  `capture.maxBodyMb`; when it hits the budget the body gains
+  `decodeTruncated: true` (omitted otherwise) so a prefix is never shown as a whole
+  document.
 - `GET /stats?session={id|current|all}` (default `current`) →
   `{ total, failed, avgDurationMs, avgTokPerSec, avgTtftMs, sessionId, sessionStartedAt }`.
   `failed` = `error` set or status ≥ 400. Averages over non-null values only;
@@ -84,6 +90,12 @@ All read queries are indexed (`id` cursor, `session_id`); no query may scan bodi
   the UI renders them `~`-prefixed).
 - `GET /sessions` → newest-first list; `POST /sessions` → creates a marker (optional
   `{name}`), returns it. No delete.
+  **Post-Phase-4 addition** (code review R06): `POST /sessions` and
+  `DELETE /requests` are executed by the background writer, so they now answer
+  **503 `capture_stopped`** if the writer has given up rather than awaiting a completion
+  nobody will resolve; both also honour client cancellation. `GET /vessel/api/status`
+  gains `capture: { recording: bool, stoppedReason?: string }` so that state is
+  observable (the UI banner is a separate frontend item).
 - Errors follow the Phase 0 convention (`X-Vessel-Error` + `{"error":{...}}`).
 
 ### D4 — Sessions: current-session id is stamped at capture time
@@ -107,8 +119,8 @@ so the API can respond with it. No second write connection, no lock dance.
 - Every capture gets a process-lifetime sequence number `seq` (int64 counter),
   carried on `CaptureContext`/`CaptureRecord` — the correlation key while a request
   has no DB id yet.
-- Events (named SSE events, JSON data): `started` `{seq, startedAt, method, path,
-  backend, tags}` — emitted at handler entry; `first_token` `{seq, ttftMs}` — emitted
+- Events (named SSE events, JSON data): `started` `{seq, startedAt, sessionId, method,
+  path, backend, tags}` — emitted at handler entry; `first_token` `{seq, ttftMs}` — emitted
   on the first-response-byte mark of streamed responses; `completed` `{seq, row:
   Summary}` — emitted by the **writer after the row is inserted** (so it carries the
   real DB id and enriched fields). A dropped batch (writer resilience path) emits
@@ -120,6 +132,20 @@ so the API can respond with it. No second write connection, no lock dance.
   (duplicates resolved in favor of REST rows).
 - Request-path emit cost is a non-blocking `TryWrite` per subscriber; zero subscribers
   = near-zero cost. `/vessel/*` traffic never emits events (it is never captured).
+- **Post-Phase-4 addition** (code review R11/D05, implemented):
+  - Every frame carries the hub's monotonic publish sequence as the SSE **`id:`** field.
+    Dropping oldest is deliberate, but it was previously *undetectable*: a lost
+    `completed` left an in-flight row running forever with no signal. A client seeing the
+    id jump knows it missed frames and reconciles (refetch list + stats + facets, then
+    drop in-flight entries the refreshed history accounts for). The id is deliberately
+    **not** the request `seq` — `seq` is assigned at request *start*, so a legitimately
+    long-running request trails the newest `seq` arbitrarily far, and any distance
+    heuristic on it would expire real in-flight requests.
+  - `started` carries `sessionId` (D05), so the UI scopes in-flight rows to the viewed
+    session accurately instead of guessing. Because `seq` is **not** a stored column, an
+    in-flight entry is correlated to its stored row during reconciliation by
+    `(startedAt, method, path)` — `started.startedAt` and the row's `startedAt` are the
+    same `StartedAtIso` string, which `EventsTests` pins.
 - **Post-Phase-4 addition** (ui-spec.md §9.1 in-flight TODO, implemented): the
   contract gains a fourth event, `request_ready` `{seq, model}` — emitted once the
   request body has been fully read (a genuine EOF on the request tee, not YARP's

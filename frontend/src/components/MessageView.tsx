@@ -1,7 +1,7 @@
-import { useState, type ReactNode } from 'react'
+import { useState, type ComponentProps, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { RenderBlock, RenderedView, RenderMessage } from '@/render'
+import type { ImageSource, RenderBlock, RenderedView, RenderMessage } from '@/render'
 import { Badge } from '@/components/ui/badge'
 import { ToolCallCard } from '@/components/ToolCallCard'
 
@@ -79,12 +79,85 @@ function Block({ block }: { block: RenderBlock }) {
         </details>
       )
     case 'image':
-      return <Badge variant="neutral">🖼 {block.label}</Badge>
+      return <ImageBlock label={block.label} source={block.source} />
     case 'toolUse':
       return <ToolCallCard kind="use" id={block.id} name={block.name} content={block.argsJson} />
     case 'toolResult':
       return <ToolCallCard kind="result" id={block.forId} content={block.content} />
   }
+}
+
+/**
+ * R03/R18 — the placeholder chip is always what's shown first, regardless of source: a
+ * click previews **embedded data only**, rendered from the same-document `data:` URI
+ * already built by extraction (never a fetch). A URL-sourced image shows the URL as
+ * copyable text instead — never fetched, local or remote, matching the same policy
+ * markdown images get below.
+ */
+function ImageBlock({ label, source }: { label: string; source: ImageSource }) {
+  const [open, setOpen] = useState(false)
+  const previewable = source.kind !== 'unknown'
+
+  // A markdown `![]()` places this inside a <p> (react-markdown wraps the image renderer
+  // in one, per its own paragraph handling) — <p> only permits phrasing content, so every
+  // element here has to be a <span>/inline element, not a <div>, or the browser force-closes
+  // the <p> around it (a real DOM nesting violation, not just a lint nit). `block`/
+  // `inline-block` utility classes keep the visual layout identical either way.
+  return (
+    <span className="inline-block">
+      <button
+        type="button"
+        onClick={() => previewable && setOpen((o) => !o)}
+        disabled={!previewable}
+        className="disabled:cursor-default"
+      >
+        <Badge variant="neutral">
+          🖼 {label}
+          {source.kind === 'url' && ' (remote — not fetched)'}
+          {previewable && ` · ${open ? 'hide' : 'preview'}`}
+        </Badge>
+      </button>
+      {open && source.kind === 'embedded' && (
+        <img
+          src={source.dataUri}
+          alt={label}
+          className="mt-1.5 block max-h-80 max-w-full rounded-control border border-border"
+        />
+      )}
+      {open && source.kind === 'url' && (
+        <span className="mt-1.5 block break-all rounded-control border border-border bg-surface-2 p-2 font-mono text-xs text-text-muted">
+          {source.url}
+        </span>
+      )}
+    </span>
+  )
+}
+
+// R03 — captured content is untrusted, and the viewer's own privacy promise is that
+// looking at a capture never makes a network request of its own. `urlTransform` set to
+// identity (rather than react-markdown's default sanitizer, which would strip `data:`
+// URIs) is deliberate: the actual enforcement is the `img`/`a` overrides below, which
+// never emit a live `src`/`href` pointing anywhere but a same-document `data:` URI —
+// letting the raw URL value through to them is what lets a data: URI still render while
+// every other URL renders as inert text instead of a fetchable resource or a navigable
+// link.
+const identityUrlTransform = (url: string) => url
+
+function MarkdownImage({ src, alt }: ComponentProps<'img'>) {
+  if (typeof src === 'string' && src.startsWith('data:')) {
+    return <img src={src} alt={alt} className="max-h-80 max-w-full rounded-control border border-border" />
+  }
+
+  return <ImageBlock label={alt || 'image'} source={typeof src === 'string' && src ? { kind: 'url', url: src } : { kind: 'unknown' }} />
+}
+
+/** Links render as non-navigating copyable text — no `href`, so there's nothing to click into. */
+function MarkdownLink({ href, children }: ComponentProps<'a'>) {
+  return (
+    <span className="underline decoration-dotted decoration-text-muted" title={href}>
+      {children}
+    </span>
+  )
 }
 
 /** Text blocks over ~4000 chars render clamped with an expand control. */
@@ -96,7 +169,13 @@ function ClampedMarkdown({ text }: { text: string }) {
   return (
     <div className="text-base text-text">
       <div className="md">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{shown}</ReactMarkdown>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          urlTransform={identityUrlTransform}
+          components={{ img: MarkdownImage, a: MarkdownLink }}
+        >
+          {shown}
+        </ReactMarkdown>
       </div>
       {isLong && (
         <button

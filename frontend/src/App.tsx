@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
-import { EMPTY_FILTERS, filtersActive, type RequestFilters, type RequestListResponse, type SessionScope } from '@/api/types'
-import { useEvents, useNowTick } from '@/api/useEvents'
+import { REQUEST_DETAIL_QUERY_ROOT } from '@/api/queryKeys'
+import { EMPTY_FILTERS, type RequestDetail, type RequestFilters, type SessionScope } from '@/api/types'
+import { useLiveHistory } from '@/api/useLiveHistory'
+import { CaptureHealthBanner } from '@/components/CaptureHealthBanner'
 import { StatsBar } from '@/components/StatsBar'
 import { FilterBar } from '@/components/FilterBar'
 import { RequestList } from '@/components/RequestList'
@@ -24,7 +26,6 @@ export default function App() {
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
   const [filters, setFilters] = useState<RequestFilters>(EMPTY_FILTERS)
-  const [newSinceFilter, setNewSinceFilter] = useState(0)
 
   const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: api.listSessions })
 
@@ -38,49 +39,17 @@ export default function App() {
     }
   }, [sessionsQuery.data, currentSessionId])
 
-  const queryKey = ['requests', scope, filters] as const
-  const filtered = filtersActive(filters)
-
-  const queryKeySignature = JSON.stringify(queryKey)
-  useEffect(() => {
-    setNewSinceFilter(0)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queryKeySignature])
-
-  const { inFlight } = useEvents((row, seq) => {
-    // Selection handover (ui-spec.md §9.1): the in-flight detail replaces itself with
-    // the real row in place, rather than the pane reverting to empty on completion.
-    setSelection((sel) => (sel?.kind === 'inflight' && sel.seq === seq && row ? { kind: 'row', id: row.id } : sel))
-
-    if (!row || scope === null) return
-    if (scope !== 'all' && row.sessionId !== scope) return
-
-    if (filtered) {
-      setNewSinceFilter((n) => n + 1)
-      return
-    }
-
-    // A refetch already in flight (e.g. C2's reconnect invalidation) would clobber a
-    // splice made now — its snapshot was taken before this row existed, so it overwrites
-    // the cache without it once it resolves. `completed` only fires after the writer has
-    // inserted the row, so invalidating instead queues a fresh refetch behind the current
-    // one that's guaranteed to include it.
-    if (queryClient.getQueryState(queryKey)?.fetchStatus === 'fetching') {
-      void queryClient.invalidateQueries({ queryKey })
-      return
-    }
-
-    queryClient.setQueryData<InfiniteData<RequestListResponse, number | undefined>>(queryKey, (old) => {
-      if (!old) return old
-      const first = old.pages[0]
-      if (first.rows.some((r) => r.id === row.id)) return old
-      const pages = [...old.pages]
-      pages[0] = { ...first, rows: [row, ...first.rows] }
-      return { ...old, pages }
-    })
+  // R10/R11/D05 — live history (in-flight map, completion merging, reconciliation) is one
+  // model, owned by one hook. App only supplies scope/filters and handles selection.
+  const { inFlight, connected, newSinceFilter, clearNewSinceFilter } = useLiveHistory({
+    scope,
+    filters,
+    onCompleted: (row, seq) => {
+      // Selection handover (ui-spec.md §9.1): the in-flight detail replaces itself with
+      // the real row in place, rather than the pane reverting to empty on completion.
+      setSelection((sel) => (sel?.kind === 'inflight' && sel.seq === seq && row ? { kind: 'row', id: row.id } : sel))
+    },
   })
-
-  const now = useNowTick(250)
 
   const handleReset = useCallback(async () => {
     const session = await api.createSession()
@@ -90,26 +59,58 @@ export default function App() {
     await queryClient.invalidateQueries({ queryKey: ['sessions'] })
   }, [queryClient])
 
+  // R14a — a clear (all/before) can delete the currently-selected row. Left alone, the
+  // detail pane keeps showing whatever `['request', id]` last cached: stale at best, and
+  // actively wrong once SQLite reuses that id for an unrelated later capture (R14b — no
+  // schema change to prevent reuse; documented in architecture.md §6 as a known caveat).
+  // Every clear evicts every cached detail unconditionally (cheap, and the only way to be
+  // sure none of them can resurface via reuse); the selection itself only clears when the
+  // clear actually reached the selected row.
+  const handleDataCleared = useCallback(
+    (clearedScope: { all: true } | { before: string }) => {
+      const cachedDetails = queryClient.getQueriesData<RequestDetail>({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
+      queryClient.removeQueries({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
+
+      setSelection((sel) => {
+        if (sel?.kind !== 'row') return sel // an in-flight selection isn't stored history
+        if ('all' in clearedScope) return null
+
+        const cached = cachedDetails.find(([key]) => key[1] === sel.id)?.[1]
+        // Unknown startedAt (never fetched, or evicted before this ran) is treated as
+        // "assume it was reached" — the safe default when R14 is specifically about not
+        // trusting stale state.
+        const survived = cached && new Date(cached.startedAt) >= new Date(clearedScope.before)
+        return survived ? sel : null
+      })
+    },
+    [queryClient],
+  )
+
   return (
     <div className="h-screen overflow-hidden bg-canvas">
       <div className="mx-auto flex h-full max-w-[1600px] flex-col gap-3 p-4 lg:p-6">
+        <CaptureHealthBanner />
         <StatsBar
           scope={scope}
           currentSessionId={currentSessionId}
           onScopeChange={setScope}
           onReset={handleReset}
+          onDataCleared={handleDataCleared}
+          connected={connected}
         />
         <div className="flex min-h-0 flex-1 gap-3">
           <div className="flex w-[420px] shrink-0 flex-col overflow-hidden rounded-panel border border-border bg-surface shadow-panel">
             <FilterBar scope={scope} filters={filters} onFiltersChange={setFilters} />
-            <div className="min-h-0 flex-1">
+            {/* R12 — a guaranteed floor so the list panel's own content (filter controls
+                incl. the tag picker) can never squeeze the request list to nothing; the
+                tag picker's own max-height cap is the primary guard, this is the backstop. */}
+            <div className="min-h-[160px] flex-1">
               <RequestList
                 scope={scope}
                 filters={filters}
                 inFlight={inFlight}
-                now={now}
                 newSinceFilter={newSinceFilter}
-                onClearNewSinceFilter={() => setNewSinceFilter(0)}
+                onClearNewSinceFilter={clearNewSinceFilter}
                 selection={selection}
                 onSelectRow={(id) => setSelection({ kind: 'row', id })}
                 onSelectInFlight={(seq) => setSelection({ kind: 'inflight', seq })}
@@ -118,7 +119,7 @@ export default function App() {
           </div>
           <div className="min-w-0 flex-1 overflow-hidden rounded-panel border border-border bg-surface shadow-panel">
             {selection?.kind === 'inflight' ? (
-              <InFlightDetailPane item={inFlight.get(selection.seq) ?? null} now={now} />
+              <InFlightDetailPane item={inFlight.find((i) => i.seq === selection.seq) ?? null} />
             ) : (
               <DetailPane id={selection?.kind === 'row' ? selection.id : null} />
             )}

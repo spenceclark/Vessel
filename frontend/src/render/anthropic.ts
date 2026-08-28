@@ -1,4 +1,5 @@
 import type { RequestDetail } from '@/api/types'
+import { anthropicImageSource } from './imageSource'
 import type { RenderBlock, RenderedView, RenderMessage } from './types'
 
 /**
@@ -75,7 +76,7 @@ function toRenderMessage(role: string, content: unknown): RenderMessage {
           break
         }
         case 'image':
-          blocks.push({ kind: 'image', label: 'image' })
+          blocks.push({ kind: 'image', label: 'image', source: anthropicImageSource(block.source) })
           break
         default:
           blocks.push({ kind: 'text', text: JSON.stringify(block) })

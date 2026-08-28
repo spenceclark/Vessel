@@ -1,4 +1,4 @@
-import type { InFlightRequest } from '@/api/useEvents'
+import { useNowTick, type InFlightRequest } from '@/api/useEvents'
 import { Badge } from '@/components/ui/badge'
 import { Mark } from '@/components/ui/Mark'
 import { CardGrid, MetricCard, SectionLabel } from '@/components/DetailPane'
@@ -12,7 +12,12 @@ import { tagVariant } from '@/lib/tags'
  * tab set `DetailPane` has — a request that hasn't completed has no response to show yet.
  * A live response tail is explicitly out of scope (touches the proxy hot path; Phase 5).
  */
-export function InFlightDetailPane({ item, now }: { item: InFlightRequest | null; now: number }) {
+export function InFlightDetailPane({ item }: { item: InFlightRequest | null }) {
+  // R04 (review §4 risk) — owned here rather than lifted to App, so this pane's own
+  // 250ms tick only rerenders itself (and only while actually showing an in-flight
+  // request), never the rest of the app.
+  const now = useNowTick(250, item !== null)
+
   if (!item) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">

@@ -45,10 +45,53 @@ public static class ConfigLoader
         return (loaded, false);
     }
 
+    /// <summary>
+    /// R21 — writes to a temp file in <paramref name="path"/>'s own directory, then
+    /// replaces the destination only after that write fully succeeds. A save that fails
+    /// partway (disk full, process killed, permission revoked) never truncates or
+    /// partially overwrites the last valid config: the destination is either the old
+    /// content or the new content, never neither. The temp file is cleaned up on any
+    /// failure path.
+    /// </summary>
     public static void Save(string path, VesselConfig config)
     {
         string json = JsonSerializer.Serialize(config, ConfigJsonContext.Default.VesselConfig);
-        File.WriteAllText(path, json + Environment.NewLine);
+        string directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
+        string tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.tmp-{Guid.NewGuid():N}");
+
+        try
+        {
+            File.WriteAllText(tempPath, json + Environment.NewLine);
+
+            if (File.Exists(path))
+            {
+                // Same volume (same directory) → atomic rename at the filesystem level;
+                // the destination is never seen half-written.
+                File.Replace(tempPath, path, destinationBackupFileName: null);
+            }
+            else
+            {
+                File.Move(tempPath, path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            TryDeleteTempFile(tempPath);
+            throw new ConfigException($"failed to save config to '{path}': {ex.Message}");
+        }
+    }
+
+    private static void TryDeleteTempFile(string tempPath)
+    {
+        try
+        {
+            File.Delete(tempPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best-effort cleanup — the save has already failed and been reported;
+            // a stray temp file is cosmetic, not a data-loss risk.
+        }
     }
 
     public static VesselConfig CreateDefault() => new()
@@ -69,7 +112,12 @@ public static class ConfigLoader
     /// </summary>
     public static void Validate(VesselConfig config, string path)
     {
-        if (config.Backends.Count == 0)
+        // R15 — non-nullable C# declarations don't stop `null` JSON literals from landing
+        // here (`PUT {"backends":null}` deserializes fine); every object-shaped section is
+        // checked for null before any of its members are read, so a null section becomes a
+        // ConfigException, never a NullReferenceException that the endpoint can't turn into
+        // a 400.
+        if (config.Backends is null || config.Backends.Count == 0)
         {
             throw new ConfigException($"config '{path}': no backends configured");
         }
@@ -80,7 +128,7 @@ public static class ConfigLoader
         // case-insensitive lookup (D7).
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach ((string name, BackendConfig backend) in config.Backends)
+        foreach ((string name, BackendConfig? backend) in config.Backends)
         {
             if (string.IsNullOrWhiteSpace(name))
             {
@@ -91,6 +139,11 @@ public static class ConfigLoader
             {
                 throw new ConfigException(
                     $"config '{path}': duplicate backend name '{name}' (backend names are case-insensitive)");
+            }
+
+            if (backend is null)
+            {
+                throw new ConfigException($"config '{path}': backend '{name}' is null");
             }
 
             if (!Uri.TryCreate(backend.BaseUrl, UriKind.Absolute, out Uri? uri)
@@ -113,15 +166,25 @@ public static class ConfigLoader
                 $"(configured: {string.Join(", ", config.Backends.Keys)})");
         }
 
-        if (!TryParseListen(config.Listen, out _, out _))
+        if (config.Listen is null || !TryParseListen(config.Listen, out _, out _))
         {
             throw new ConfigException(
                 $"config '{path}': listen '{config.Listen}' is not a valid host:port (e.g. \"127.0.0.1:4550\")");
         }
 
+        if (config.Timeouts is null)
+        {
+            throw new ConfigException($"config '{path}': timeouts is null");
+        }
+
         if (config.Timeouts.ActivitySeconds <= 0)
         {
             throw new ConfigException($"config '{path}': timeouts.activitySeconds must be positive");
+        }
+
+        if (config.Retention is null)
+        {
+            throw new ConfigException($"config '{path}': retention is null");
         }
 
         if (config.Retention.MaxRequests <= 0)
@@ -134,9 +197,19 @@ public static class ConfigLoader
             throw new ConfigException($"config '{path}': retention.maxDbSizeMb must be positive");
         }
 
+        if (config.Capture is null)
+        {
+            throw new ConfigException($"config '{path}': capture is null");
+        }
+
         if (config.Capture.MaxBodyMb <= 0)
         {
             throw new ConfigException($"config '{path}': capture.maxBodyMb must be positive");
+        }
+
+        if (config.Warnings is null)
+        {
+            throw new ConfigException($"config '{path}': warnings is null");
         }
 
         if (config.Warnings.SlowTtftMs < 0)

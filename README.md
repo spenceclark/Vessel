@@ -1,23 +1,30 @@
 # Vessel
 
 > The lightweight observability reverse proxy for LLM traffic.
-> Single binary. Point a `base_url` at it; get capture, metrics, and a UI.
+> Single binary. Point a `base_url` at it; get capture, search, and a UI.
 
 Vessel sits between LLM clients (agents, SDK scripts, dev tools) and LLM backends
 (Ollama, LM Studio, OpenAI, Anthropic, anything OpenAI-compatible). It forwards traffic
-as-is — never mutating it beyond stripping its own `X-Vessel-*` control s — and
-will capture every request/response, including streamed ones, into a local SQLite DB
-with an embedded web UI.
+as-is — never mutating it beyond stripping its own `X-Vessel-*` control headers — while
+capturing every request/response, including streamed ones, into a local SQLite database
+with a full-text-searchable, filterable, embedded web UI.
 
-**Current status: Phase 0** — the transparent proxy skeleton. Routing, streaming
-pass-through, and error handling are done and verified; capture, persistence, and the
-UI land in later phases. See [docs/plan.md](docs/plan.md) for the roadmap and
-[docs/phase-0-report.md](docs/phase-0-report.md) for what's verified so far.
+**Current status: Phases 0–4 implemented** — transparent proxying, capture/persistence,
+format-aware parsing (OpenAI chat, OpenAI Responses, Anthropic messages, Ollama native),
+and the full UI (history, search/filters, rendered message view, live config editing,
+retention/clear) are all in place. See [docs/plan.md](docs/plan.md) for the phased
+roadmap (Phase 5 differentiator features — replay, diff, cost estimates — and Phase 6
+release packaging are not started) and
+[docs/code-review-phase-4-plan.md](docs/code-review-phase-4-plan.md) for the current
+acceptance status: an external review found real defects in the Phase 0–4 implementation,
+and that plan tracks their remediation to completion.
 
 ## Requirements
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (to build; published
   binaries are self-contained and need no runtime)
+- [Node.js](https://nodejs.org/) (only to build the embedded frontend for `dotnet
+  publish` — an ordinary `dotnet build`/`dotnet test` never needs npm)
 
 ## Quickstart
 
@@ -29,7 +36,7 @@ dotnet run --project src/Vessel
 
 ```text
 Vessel listening on http://127.0.0.1:4550  ->  default backend: ollama (http://localhost:11434)
-Point your client at http://127.0.0.1:4550 - UI at http://127.0.0.1:4550/vessel/ (phase 3)
+Point your client at http://127.0.0.1:4550 - UI at http://127.0.0.1:4550/vessel/
 ```
 
 Then point any client at it:
@@ -48,6 +55,10 @@ OLLAMA_HOST=127.0.0.1:4550 ollama run llama3.2
 curl -N http://127.0.0.1:4550/api/chat -d '{"model":"llama3.2","messages":[{"role":"user","content":"hi"}],"stream":true}'
 ```
 
+Open `http://127.0.0.1:4550/vessel/` to browse captured traffic: search, filter by
+backend/model/tag/status, inspect a rendered message view per request, and edit config
+live.
+
 A custom config path:
 
 ```bash
@@ -56,7 +67,9 @@ dotnet run --project src/Vessel -- --config path/to/vessel.json
 
 ## Configuration
 
-`vessel.json` lives next to the executable (or wherever `--config` points):
+`vessel.json` lives next to the executable (or wherever `--config` points), and is also
+editable live from the UI's gear icon (backends/retention/capture/warnings apply
+immediately for new requests; `listen` needs a restart, and the panel shows that state):
 
 ```jsonc
 {
@@ -65,10 +78,13 @@ dotnet run --project src/Vessel -- --config path/to/vessel.json
   "backends": {
     "ollama":    { "baseUrl": "http://localhost:11434",    "type": "ollama" },
     "lmstudio":  { "baseUrl": "http://localhost:1234",     "type": "openai" },
-    "openai":    { "baseUrl": "https://api.openai.com",    "type": "openai" },
+    "openai":    { "baseUrl": "https://api.openai.com",    "type": "openai", "injectStreamUsage": false },
     "anthropic": { "baseUrl": "https://api.anthropic.com", "type": "anthropic" }
   },
-  "timeouts": { "activitySeconds": 1800 }
+  "timeouts": { "activitySeconds": 1800 },
+  "retention": { "maxRequests": 10000, "maxDbSizeMb": 500 },
+  "capture": { "maxBodyMb": 32 },
+  "warnings": { "slowTtftMs": 5000 }
 }
 ```
 
@@ -84,8 +100,8 @@ Requests are routed in this precedence order:
 3. **Default backend** — everything else. This makes Vessel a drop-in Ollama endpoint.
 
 Free-form tags for later filtering: `X-Vessel-Tags: planner,run42` or a `/t/{tags}/…`
-path prefix, composable with `/b/`: `/b/ollama/t/planner/api/chat`. (Parsed and
-stripped today; used by the UI from Phase 3.)
+path prefix, composable with `/b/`: `/b/ollama/t/planner/api/chat`. Tags show up on
+every captured row and are filterable from the UI.
 
 Everything Vessel-owned lives under `/vessel/` and is never proxied:
 
@@ -93,20 +109,47 @@ Everything Vessel-owned lives under `/vessel/` and is never proxied:
 curl http://127.0.0.1:4550/vessel/api/status
 ```
 
+The API surface (all under `/vessel/api/`): `status`, `requests` (list/filter/paginate,
+detail by id, delete/clear), `requests/facets`, `stats`, `sessions`, `config`
+(`GET`/`PUT`, live-apply), `events` (SSE lifecycle stream for the UI's live rows).
+Control-plane requests are subject to a Host allowlist (loopback or the configured
+`listen` address) and a same-origin check on mutating calls — closing a browser-origin
+gap, not a login system; see [docs/architecture.md](docs/architecture.md) §8.
+
 Errors generated by Vessel itself (as opposed to proxied backend errors) carry an
 `X-Vessel-Error` header and a JSON body with `"source": "vessel"` — `unknown_backend`
-(404, lists valid names), `upstream_unreachable` (502), `upstream_timeout` (504).
+(404, lists valid names), `upstream_unreachable` (502), `upstream_timeout` (504), among
+others.
+
+## What gets captured
+
+Every request/response — including streamed ones — is parsed (for the OpenAI chat and
+Responses APIs, Anthropic messages, and Ollama's native `/api/chat`/`/api/generate`;
+anything else is still captured, just as raw bytes), timed, and stored: model, token
+counts, tok/s, stop reason, warnings (truncated response, slow TTFT, cold model load,
+estimated tokens, and more), and the full request/response bodies. Traffic your adapter
+doesn't recognize is proxied and captured unmodified rather than rejected.
 
 ## Development
 
 ```bash
-# Build
+# Build (backend only — no npm needed)
 dotnet build Vessel.sln
 ```
 
 ```bash
-# Run all tests (routing, config, and in-proc proxy integration tests)
+# Run all backend tests
 dotnet test
+```
+
+```bash
+# Run the frontend dev server (proxies /vessel/api to a locally running Vessel instance)
+cd frontend && npm install && npm run dev
+```
+
+```bash
+# Frontend unit/component tests
+cd frontend && npm test
 ```
 
 ```bash
@@ -115,11 +158,12 @@ powershell -File verify/verify.ps1 -Model llama3.2
 ```
 
 ```bash
-# Single-file publish smoke test (win-x64); add -Trimmed to test trimming
+# Single-file publish smoke test (win-x64) — publishes from a clean, tracked-files-only
+# copy (not the working tree) so a stale frontend/dist can't mask a broken build order
 powershell -File verify/publish-smoke.ps1
 ```
 
-Self-contained single-file publish:
+Self-contained single-file publish (builds the embedded frontend as part of publishing):
 
 ```bash
 dotnet publish src/Vessel -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
@@ -129,11 +173,18 @@ dotnet publish src/Vessel -c Release -r win-x64 --self-contained -p:PublishSingl
 
 - [docs/brief.md](docs/brief.md) — what and why
 - [docs/architecture.md](docs/architecture.md) — technical design (design authority)
+- [docs/ui-spec.md](docs/ui-spec.md) — UI design system and component rules
 - [docs/plan.md](docs/plan.md) — phased delivery plan
-- [docs/phase-0.md](docs/phase-0.md) — phase 0 spec · [report](docs/phase-0-report.md)
+- `docs/phase-{0,1,2,3,4}.md` — per-phase specs, each with a matching `-report.md`
+- [docs/code-review-phase-4-plan.md](docs/code-review-phase-4-plan.md) — current
+  acceptance status: an external review's findings and their remediation
 
 ## Privacy note
 
 Vessel binds to `127.0.0.1` by default and holds no API keys — auth headers pass
-through untouched. From Phase 1 onward, captured traffic (including full prompts) is
-stored in a local `vessel.db`; treat that file accordingly.
+through untouched (though `Authorization`/`x-api-key`/`cookie`/etc. are redacted before
+the *stored* copy, so a leaked `vessel.db` doesn't leak your keys). Captured traffic —
+including full prompts and responses — is stored in a local `vessel.db`; treat that file
+accordingly. The UI itself never makes a network request when rendering captured
+content (an embedded image renders from its own captured bytes; a URL-sourced image or
+a link shows as inert text, never fetched or navigated).

@@ -83,7 +83,8 @@ public sealed class CaptureWriterService(
 
             if (!Flush(batch))
             {
-                return; // gave up loudly
+                await DrainAfterStop(reader, batch);
+                return;
             }
         }
 
@@ -96,6 +97,7 @@ public sealed class CaptureWriterService(
             {
                 if (!Flush(batch))
                 {
+                    await DrainAfterStop(reader, batch);
                     return;
                 }
 
@@ -103,15 +105,57 @@ public sealed class CaptureWriterService(
             }
         }
 
-        Flush(batch);
+        if (!Flush(batch))
+        {
+            await DrainAfterStop(reader, batch);
+        }
     }
 
     /// <summary>
-    /// Splits the batch into session commands (run immediately, on this thread) and
-    /// captured requests (enriched + inserted together). Returns false only when the
-    /// writer has failed <see cref="MaxConsecutiveFailures"/> times in a row on the
-    /// capture-insert path and is giving up; a single failure there is logged, the batch
-    /// dropped, and true returned so the loop keeps running.
+    /// R06 — after give-up, nothing will ever be written again, so the queue must not be
+    /// left to grow with a consumer that has gone away. <c>CaptureChannel.Stop</c> already
+    /// closed admission; this fails anything that raced through before that took effect,
+    /// then drains to completion so pending items are released rather than retained.
+    /// </summary>
+    private async Task DrainAfterStop(ChannelReader<CaptureWork> reader, List<CaptureWork> unflushed)
+    {
+        string reason = channel.StoppedReason ?? "capture stopped";
+
+        // The batch that failed still holds commands whose callers are waiting.
+        foreach (CaptureWork item in unflushed)
+        {
+            CaptureChannel.FailIfCommand(item, reason);
+        }
+
+        try
+        {
+            while (await reader.WaitToReadAsync())
+            {
+                while (reader.TryRead(out CaptureWork? item))
+                {
+                    CaptureChannel.FailIfCommand(item, reason);
+                }
+            }
+        }
+        catch (ChannelClosedException)
+        {
+            // Completed underneath us — nothing left to release.
+        }
+    }
+
+    /// <summary>
+    /// Executes the batch <em>in queue order</em>. Captures accumulate; reaching a control
+    /// command first inserts everything queued ahead of it, then runs the command. Returns
+    /// false only when the writer has failed <see cref="MaxConsecutiveFailures"/> times in a
+    /// row on the capture-insert path and is giving up; a single failure there is logged, the
+    /// batch dropped, and true returned so the loop keeps running.
+    /// <para>
+    /// R07: commands used to run before any capture in the same batch was inserted, so a
+    /// request captured *before* a clear could be written *after* it — the clear reported
+    /// <c>deleted: 0</c> and the row survived. Same hazard for clear-before with an eligible
+    /// old capture still in the batch. FIFO here is what makes "clear everything up to now"
+    /// mean what the user asked.
+    /// </para>
     /// </summary>
     private bool Flush(List<CaptureWork> batch)
     {
@@ -120,14 +164,25 @@ public sealed class CaptureWriterService(
             return true;
         }
 
-        var captures = new List<CaptureRecord>(batch.Count);
+        var pending = new List<CaptureRecord>(batch.Count);
         foreach (CaptureWork item in batch)
         {
+            if (item is CapturedRequest request)
+            {
+                pending.Add(request.Record);
+                continue;
+            }
+
+            // A command observes every capture queued before it, and none queued after.
+            if (!InsertPending(pending))
+            {
+                return false;
+            }
+
+            pending.Clear();
+
             switch (item)
             {
-                case CapturedRequest request:
-                    captures.Add(request.Record);
-                    break;
                 case CreateSessionCommand command:
                     RunCreateSession(command);
                     break;
@@ -137,6 +192,15 @@ public sealed class CaptureWriterService(
             }
         }
 
+        return InsertPending(pending);
+    }
+
+    /// <summary>
+    /// Enriches and inserts one run of captures. Returns false only on give-up, after
+    /// putting the channel into its terminal state so admission stops immediately (R06).
+    /// </summary>
+    private bool InsertPending(List<CaptureRecord> captures)
+    {
         if (captures.Count == 0)
         {
             return true;
@@ -174,6 +238,12 @@ public sealed class CaptureWriterService(
                 logger.LogError(
                     ex, "capture writer failed {Failures} times consecutively; giving up — further requests will not be recorded",
                     _consecutiveFailures);
+
+                // Close admission before returning: from here on, captures are dropped at the
+                // door and commands fail fast instead of awaiting a consumer that has stopped.
+                channel.Stop(
+                    $"capture stopped after {_consecutiveFailures} consecutive write failures ({ex.GetType().Name}: {ex.Message}). " +
+                    "Traffic is still proxied; restart Vessel to resume recording.");
                 return false;
             }
 

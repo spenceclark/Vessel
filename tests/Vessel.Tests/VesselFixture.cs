@@ -52,6 +52,7 @@ public sealed class VesselFixture : IAsyncLifetime
 
         _vessel = VesselApp.Build(config, DbPath, Path.Combine(_tempDir, "vessel.json"));
         await _vessel.StartAsync();
+        _vessel.RecordBoundListen();
         VesselBaseUrl = _vessel.ListenAddress();
 
         var shortTimeoutConfig = new VesselConfig
@@ -66,6 +67,7 @@ public sealed class VesselFixture : IAsyncLifetime
             Path.Combine(_tempDir, "vessel-short-timeout.db"),
             Path.Combine(_tempDir, "vessel-short-timeout.json"));
         await _shortTimeoutVessel.StartAsync();
+        _shortTimeoutVessel.RecordBoundListen();
         ShortTimeoutBaseUrl = _shortTimeoutVessel.ListenAddress();
     }
 

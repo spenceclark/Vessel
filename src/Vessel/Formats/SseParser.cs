@@ -20,7 +20,17 @@ public static class SseParser
         var data = new System.Text.StringBuilder();
         bool haveData = false;
 
-        foreach (string rawLine in text.Split('\n'))
+        // R19 — `string.Split('\n')` always yields a final element that is not a real
+        // line: if `text` ends with '\n' (the normal case), that element is the empty
+        // string sitting *after* the last newline, not a blank line the stream actually
+        // contained; if `text` has no trailing newline, it's an unterminated partial line.
+        // Either way it never represents a *complete* line the spec says to process — an
+        // event is only dispatched on an actual blank line, and an unterminated line is
+        // discarded (truncation tolerance) — so it's dropped unconditionally before the
+        // line loop rather than falling through and being mistaken for a genuine blank
+        // line (which previously let `"data: x\n"` alone look like a terminated event).
+        string[] lines = text.Split('\n');
+        foreach (string rawLine in lines.Take(lines.Length - 1))
         {
             string line = rawLine.EndsWith('\r') ? rawLine[..^1] : rawLine;
 

@@ -18,24 +18,53 @@
 
   <!-- D1: frontend/dist is embedded under a fixed "vessel-ui/" logical-name prefix that
        StaticUi.cs strips itself, so serving doesn't depend on ManifestEmbeddedFileProvider's
-       relative-path conventions. Condition guards a dev binary built without the frontend
-       (dist doesn't exist) — the backend must still build and run, serving a placeholder. -->
+       relative-path conventions. A dev binary built without the frontend (dist doesn't
+       exist) must still build and run, serving a placeholder. -->
   <PropertyGroup>
     <FrontendDir>$(MSBuildThisFileDirectory)..\..\frontend</FrontendDir>
     <FrontendDistDir>$(FrontendDir)\dist</FrontendDistDir>
   </PropertyGroup>
 
-  <ItemGroup>
-    <EmbeddedResource Include="$(FrontendDistDir)\**\*" Condition="Exists('$(FrontendDistDir)')">
-      <LogicalName>vessel-ui/%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
-    </EmbeddedResource>
-  </ItemGroup>
+  <!-- R01: the frontend build must finish before resource collection AND before compilation.
+       The dist glob therefore cannot be a static ItemGroup (evaluated before any target runs,
+       so on a clean tree it captures nothing and the assembly ships zero resources), and the
+       npm step cannot hang off PrepareForPublish (which runs after CoreCompile).
 
-  <!-- D1: dotnet publish runs the frontend build as a pre-step. Plain dotnet build / dotnet
-       test never touch npm — PrepareForPublish only runs for `dotnet publish`. -->
-  <Target Name="BuildFrontend" BeforeTargets="PrepareForPublish" Condition="Exists('$(FrontendDir)\package.json')">
+       `_IsPublishing` is set as a global property by `dotnet publish` itself — it is on the
+       MSBuild command line from the start of evaluation, so it gates correctly this early,
+       and `dotnet build`/`dotnet test` stay npm-free (phase-3 D1). It is an SDK-internal
+       name, so VerifyFrontendEmbedded below makes a regression here fail the publish loudly
+       rather than silently reproducing R01. -->
+  <Target Name="BuildFrontend" Condition="'$(_IsPublishing)' == 'true' AND Exists('$(FrontendDir)\package.json')">
+    <Message Importance="high" Text="Vessel: building frontend for publish ($(FrontendDir))" />
     <Exec Command="npm ci" WorkingDirectory="$(FrontendDir)" />
     <Exec Command="npm run build" WorkingDirectory="$(FrontendDir)" />
+  </Target>
+
+  <!-- AssignTargetPaths is the standard hook for items created by a target: it runs inside
+       PrepareResources' dependency chain, before CreateManifestResourceNames and CoreCompile.
+       DependsOnTargets (not AfterTargets) is what actually orders the npm build ahead of the
+       glob — the glob is expanded when this target executes, so dist exists by then. -->
+  <Target Name="CollectFrontendResources" DependsOnTargets="BuildFrontend" BeforeTargets="AssignTargetPaths">
+    <ItemGroup Condition="Exists('$(FrontendDistDir)')">
+      <!-- Two steps on purpose: inside a target, a bare %(RecursiveDir) in the metadata of
+           the item being created does not self-reference (it reads as task batching and
+           yields empty, collapsing every LogicalName to "vessel-ui/"). Collecting into a
+           private item type first lets the qualified %(_FrontendDistFile.*) form batch over
+           those items, which is the form that actually carries the per-file path.
+           RecursiveDir uses '\' on Windows; StaticUi.BuildIndex normalizes separators. -->
+      <_FrontendDistFile Include="$(FrontendDistDir)\**\*" />
+      <EmbeddedResource Include="@(_FrontendDistFile)">
+        <LogicalName>vessel-ui/%(_FrontendDistFile.RecursiveDir)%(_FrontendDistFile.Filename)%(_FrontendDistFile.Extension)</LogicalName>
+      </EmbeddedResource>
+    </ItemGroup>
+  </Target>
+
+  <!-- R01's actual gate: a publish that would ship the placeholder UI is a broken artifact,
+       so fail the build instead of producing it. Ordinary builds are unaffected. -->
+  <Target Name="VerifyFrontendEmbedded" Condition="'$(_IsPublishing)' == 'true'" AfterTargets="CollectFrontendResources">
+    <Error Condition="'@(EmbeddedResource->WithMetadataValue('LogicalName', 'vessel-ui/index.html'))' == ''"
+           Text="Publish would embed no frontend: vessel-ui/index.html is not among the embedded resources. The frontend build did not run or produced no dist (expected at $(FrontendDistDir))." />
   </Target>
 
 </Project>

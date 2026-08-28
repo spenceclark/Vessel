@@ -28,4 +28,6 @@ public sealed record CaptureRecord(
     byte[]? ResponseBody,
     byte[]? ResponseRaw,
     bool Truncated,
-    bool UsageInjected);
+    bool UsageInjected,
+    /// <summary>R08 — the captured response bytes are Vessel's own error body, not the backend's.</summary>
+    bool ResponseAuthoredByVessel = false);

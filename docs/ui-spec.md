@@ -177,6 +177,18 @@ The app stops being full-bleed. It becomes **panels floating on a canvas**:
 - **List panel**: search + filter controls live *inside* the panel as its header
   (own bottom border), rows below. Selected row = `--surface-3` fill + 2px accent
   inset bar on the left edge; hover = `--surface-2`.
+- **Tag picker (list panel filter header), bounded.** **Finding (code review R12,
+  resolved).** The picker's chip row has no cap of its own — at high tag cardinality
+  (the API allows up to 100 facet values) it can grow tall enough to squeeze the
+  virtualized row list below it down to nothing in the fixed-height list panel, which
+  fails the Phase 4 find-and-read goal outright regardless of query speed. Rule: the
+  chip row gets a `max-height` of roughly 3 rows with internal `overflow-y: auto` — this
+  is the actual guarantee, holding at any tag count or name length — plus a
+  collapsed-by-default "+N more" expander so the common case (a handful of tags) doesn't
+  show a scrollbar for no reason. The **currently active** tag filter, if any, always
+  sorts first so it's never scrolled out of view by whichever tag the facet happened to
+  list first. The list panel's row area additionally keeps a small guaranteed minimum
+  height as a backstop, independent of the tag picker's own cap.
 - **Detail panel**: tab strip as panel header, content scrolls. Empty state: centered
   mark (muted) + one line ("Select a request").
 
@@ -202,6 +214,13 @@ model repeat on every row and carry little scanning value:
 - Status dot leads line one; in-flight rows keep the accent dot with a 1.2s opacity
   pulse (the only looping animation in the app) + running timer, no metric columns
   until `first_token`/completion supply them.
+- **In-flight rows obey session scope and nothing else** (code review D05). `started`
+  carries `sessionId`, so scoping is exact. Any *other* active filter collapses them to a
+  single "N in flight" strip at the top of the list instead of rows: an in-flight request
+  has no final status, model or warnings yet, so testing it against those predicates would
+  be guesswork in either direction — hiding real traffic or showing traffic that won't
+  match once it lands. A count is the honest answer, and it still tells the user live
+  traffic exists while they're filtered.
 
 ### 5.2 Detail Overview
 

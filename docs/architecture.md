@@ -139,7 +139,7 @@ All timestamps from a monotonic clock (`Stopwatch`):
 | `duration_ms` | first byte of request received → last byte of response sent |
 | `ttft_ms` | request fully forwarded upstream → first response body byte from upstream. Streamed requests only; null otherwise. |
 | `vessel_overhead_ms` | time spent in Vessel before the request is forwarded (routing, header work). Displayed in the UI — the "low overhead" claim, proven per-request. |
-| `tok_per_sec` | output tokens ÷ (last byte − first byte of response). For Ollama-native, prefer the exact `eval_count / eval_duration` it reports. |
+| `tok_per_sec` | output tokens ÷ (last byte − first byte of response), **streamed responses only**. For Ollama-native, prefer the exact `eval_count / eval_duration` it reports (streamed or not). A non-streamed non-Ollama response has no wire-span signal — total request duration mixes in queueing/prefill/network and is a different quantity, so it stays **null** rather than reporting that under the same metric name (code review D02). |
 
 ### 4.3 Stream reassembly
 
@@ -157,8 +157,17 @@ background writer:
 
 ### 4.4 In-flight visibility
 
-Capture emits three lifecycle events onto the SSE feed: `started`, `first-token`,
-`completed`. The UI shows in-flight requests live with a running timer.
+Capture emits lifecycle events onto the SSE feed: `started`, `request_ready`,
+`first_token`, `completed`. The UI shows in-flight requests live with a running timer,
+plus a lightweight client-side detail (method/path/backend/model/tags/elapsed — no REST
+fetch, since a request that hasn't completed has no response to show yet).
+
+**Accepted scope (post-Phase-4 addition, code review E2).** `request_ready {seq, model}`
+was added after Phase 3/4 landed (ui-spec.md §9.1's in-flight-detail TODO): emitted once
+the request body has been fully read, with the model parsed off the request path by a
+dedicated always-running consumer (`RequestModelSnifferService`), so an in-flight row
+can show its real model within milliseconds of dispatch rather than only after
+completion. Full contract in phase-3.md D5.
 
 ---
 
@@ -171,6 +180,7 @@ backend `type` is only a tiebreak hint.
 | Adapter | Endpoints | Notes |
 |---|---|---|
 | **OpenAI chat** | `/v1/chat/completions` | Covers Ollama `/v1`, LM Studio, llama.cpp `llama-server`, Unsloth, OpenAI live. Usage in final chunk only with `stream_options.include_usage`. Cached tokens: `usage.prompt_tokens_details.cached_tokens`. |
+| **OpenAI Responses** | `/v1/responses` | **Accepted scope, post-Phase-4 addition (code review E2).** A structurally different OpenAI API: request `input` (not `messages`), response `output[]` of typed items (`message`, `reasoning`, `function_call`, …) instead of `choices`. Streaming reassembly is simpler than chat completions — the terminal SSE event (`response.completed`/`.incomplete`/`.failed`) already carries the complete final response object, no delta-folding needed. Usage: `usage.input_tokens`/`usage.output_tokens`/`usage.input_tokens_details.cached_tokens`. `status`/`incomplete_details.reason` normalize onto the same stop-reason vocabulary the other adapters use (`length`, `error`, `stop`, …) so downstream truncation/error handling needs no format-specific branch. |
 | **Anthropic messages** | `/v1/messages` | Anthropic live + Ollama's Anthropic-compat. Usage arrives in `message_start` + `message_delta`. Cache metrics: `cache_read_input_tokens`, `cache_creation_input_tokens`. |
 | **Ollama native** | `/api/chat`, `/api/generate` | NDJSON streaming. Exact token counts and timings in the final object; `load_duration` distinguishes cold model loads from slow generation. Also capture `/api/embeddings`, `/api/tags`, etc. as raw. |
 | **Raw fallback** | everything else | Method, path, status, timing, headers, raw bodies. Silent — proxied and listed normally, detail view shows raw bytes. |
@@ -226,7 +236,7 @@ CREATE TABLE requests (
     tags                TEXT,                         -- JSON array
     method              TEXT NOT NULL,
     path                TEXT NOT NULL,
-    format              TEXT NOT NULL,                -- openai-chat | anthropic-messages | ollama-chat | ollama-generate | raw
+    format              TEXT NOT NULL,                -- openai-chat | openai-responses | anthropic-messages | ollama-chat | ollama-generate | raw
     model               TEXT,
     status_code         INTEGER,
     error               TEXT,                         -- proxy-level failure detail
@@ -271,6 +281,19 @@ CREATE VIRTUAL TABLE requests_fts USING fts5(
 Bodies are **zstd-compressed** before insert (agent contexts reach 200K tokens and
 compress ~10×). Flattened text goes only into FTS, not duplicated in `requests`.
 
+**Known caveat (code review R14b, decided, not fixed here).** `id` is an ordinary SQLite
+`INTEGER PRIMARY KEY` (plain ROWID allocation), not `AUTOINCREMENT` — after "clear all"
+empties the table, the next inserted row can reuse a previously-deleted id. SQLite
+explicitly distinguishes this from `AUTOINCREMENT`'s guaranteed non-reuse. A browser tab
+with a detail view cached against the old id (React Query's `['request', id]`) could
+therefore show a different capture's body under an id it already had open. Decision: no
+schema migration for guaranteed non-reuse — that needs `AUTOINCREMENT` plus a rebuild
+migration for existing databases, and the actual failure mode only reaches a **stale
+already-open tab**, not a freshly-loaded one. The client-side fix instead: any clear
+(all/before) evicts every cached `['request', *]` detail and clears the selection when
+the clear reached it (ui-spec/App.tsx, code review R14a) — closing the practical exposure
+without a migration. Revisit `AUTOINCREMENT` only if id reuse causes a real incident.
+
 ### 6.3 Sessions
 
 A session is a marker row, nothing more. "Reset session" inserts a new `sessions` row;
@@ -302,8 +325,8 @@ Everything Vessel-owned lives under `/vessel/` (impossible to collide with `/v1/
 | `POST /vessel/api/requests/{id}/replay` | re-send captured request; body may override `backend` and/or `model`; result is a new request row with `replay_of` set |
 | `GET /vessel/api/requests/{id}/curl` | request as a copy-pasteable curl command |
 | `GET /vessel/api/sessions` · `POST /vessel/api/sessions` | list / reset (create marker) |
-| `GET /vessel/api/stats?session=` | totals, failures, avg latency / tok/s / ttft |
-| `GET /vessel/api/events` | SSE: `started`, `first-token`, `completed` lifecycle events |
+| `GET /vessel/api/stats?session=` | totals, failures, avg latency / tok/s / ttft, token totals in/out/cached (accepted scope, post-Phase-4 addition — phase-3.md D3) |
+| `GET /vessel/api/events` | SSE: `started`, `request_ready`, `first_token`, `completed` lifecycle events (§4.4) |
 | `GET/PUT /vessel/api/config` | backends, retention, ports, redaction — persisted to `vessel.json` |
 | `GET /vessel/api/ollama/ps` | (Ollama backends) proxied `ollama ps` — loaded models, memory |
 
@@ -324,6 +347,26 @@ live pass-through toggle the user sets per-backend, or the replay is sent withou
   Forwarding is unaffected (redaction applies to the stored copy only).
 - Bodies are stored in full by design (that's the product). The README will say so
   plainly: `vessel.db` contains your prompts — treat it accordingly.
+- **Browser-origin threat model (D03, resolved).** Loopback binding alone doesn't stop a
+  page open in the user's browser from reaching Vessel: an attacker page (or one reached
+  via DNS rebinding to a loopback-resolving name) can still have the victim's browser
+  issue same-machine requests, and Kestrel does not validate `Host` on its own. Two cheap
+  layers, scoped to the control plane only — every proxied route is untouched, so ordinary
+  SDK traffic can never be broken by this:
+  - `/vessel/*` (both the API and the embedded UI) requires a `Host` that is loopback
+    (`localhost`, `127.0.0.1`, `::1`) or the configured `listen` address — a mismatched
+    `Host` is `403 forbidden_host`. This is what closes the rebinding path itself.
+  - Mutating `/vessel/api/*` requests (`PUT`/`POST`/`DELETE`) additionally require
+    same-origin: `Sec-Fetch-Site: same-origin` or `none` where a browser sends it,
+    otherwise an `Origin` match against the request's own scheme+host+port. A request
+    with neither header (curl, scripts, the SDK, the test suite) isn't a browser
+    interaction at all and is let through — this stops a same-Host-but-cross-site page
+    from issuing state-changing requests via the victim's browser, without requiring UI
+    authentication. Implementation: `Api/HostOriginGuard.cs`, wired as middleware in
+    `VesselApp.Build` ahead of the `/vessel/*` route mappings.
+  - This is explicitly **not** UI authentication and **not** the Phase 6 non-loopback
+    bind-address banner (still open, tracked separately) — it only closes the specific
+    browser-reachable gap the review identified.
 
 ---
 
@@ -356,6 +399,19 @@ successful `PUT`. `PUT` validates the candidate with the exact same rules `Confi
 applies at startup (a bad config → `400` with the human validation message, nothing
 persisted or applied), then writes `vessel.json`, swaps the snapshot, and bumps the
 version — serialized under a lock, last write wins (single user, single machine).
+
+**Finding (code review R16, resolved).** `restartRequired` compared the PUT candidate's
+`listen` against whatever was *last saved*, not against the address Kestrel is actually
+bound to. Only `listen` needs a restart to take effect, so a second save of the same
+listener value reported `restartRequired: []` — "no restart needed" — even though the
+process was still serving on its old address, because the *saved* value had already
+caught up on the first save. `ConfigStore.RecordBoundListen` now records the real bound
+`(address, port)` once, right after Kestrel starts (the configured `listen` may have been
+port `0`); every `Apply` and a new read-only `ConfigStore.PendingRestart` compare against
+that fixed point instead. `GET /vessel/api/config` now returns
+`{ config, restartRequired }` (not a bare `VesselConfig`) so the settings panel shows the
+still-pending state on reopen, not just immediately after a `PUT` — the previous shape
+only surfaced it as ephemeral component state that a panel close/reopen lost.
 
 Every consumer that used to cache values from `VesselConfig` at construction now either
 reads `ConfigStore.Current` per-request/per-batch, or rebuilds its derived state lazily
@@ -438,7 +494,7 @@ experiment, not a requirement.
 | Decision | Choice | Why | Rejected |
 |---|---|---|---|
 | Proxy model | Reverse proxy | Every SDK supports base_url override; no cert trust issues | MITM forward proxy |
-| Backend | .NET 9 + YARP + Kestrel | Author fluency; YARP does streaming reverse-proxying natively; self-contained publish removes runtime objection | Go/Rust (AI-mediated maintenance), Node (runtime) |
+| Backend | .NET 10 + YARP + Kestrel | Author fluency; YARP does streaming reverse-proxying natively; self-contained publish removes runtime objection | Go/Rust (AI-mediated maintenance), Node (runtime) |
 | Storage | SQLite WAL + FTS5 + zstd bodies | Query/filter/search/caps for free; single-writer sidesteps contention | JSONL (no query/caps), DuckDB (wrong shape for row appends) |
 | Persistence path | `Channel<T>` + background writer | Zero request-path cost; natural batching | Write-on-request, fire-and-forget tasks per request |
 | Frontend | Embedded React SPA | Server already exists; richest AI-assisted ecosystem | Electron (heavy, second app), htmx (weak fit for virtualized live lists) |

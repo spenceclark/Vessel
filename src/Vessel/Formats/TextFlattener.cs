@@ -239,12 +239,13 @@ public static class TextFlattener
         return string.IsNullOrEmpty(text) ? null : text;
     }
 
-    /// <summary>Flattens an Ollama chat response object's <c>message</c> (content + tool calls).</summary>
+    /// <summary>Flattens an Ollama chat response object's <c>message</c> (content + thinking + tool calls).</summary>
     public static string? OllamaChatResponse(JsonNode? messageObject)
     {
         JsonObject? message = JsonUtil.Object(JsonUtil.Object(messageObject)?["message"]);
         var sb = new StringBuilder();
         Append(sb, JsonUtil.Str(message?["content"]));
+        Append(sb, JsonUtil.Str(message?["thinking"]));
         AppendToolCalls(sb, message?["tool_calls"]);
         return NullIfEmpty(sb);
     }

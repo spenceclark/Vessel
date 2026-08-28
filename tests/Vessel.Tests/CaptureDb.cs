@@ -184,4 +184,42 @@ public static class CaptureDb
         Assert.NotNull(blob);
         return BodyCompression.Decompress(blob!);
     }
+
+    /// <summary>
+    /// R20 — inserts one row with an exact, known <c>duration_ms</c>/<c>ttft_ms</c>
+    /// directly (bypassing the writer/enricher entirely), so a stats aggregate test can
+    /// compare against a value computed from the same literal constants instead of
+    /// re-aggregating live-measured, independently-rounded floating-point durations —
+    /// which is what let the review's probe land on opposite sides of a rounding boundary.
+    /// </summary>
+    public static void SeedRow(
+        string dbPath, string startedAt, double durationMs, bool streamed = false,
+        double? ttftMs = null, long? sessionId = null, int statusCode = 200)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO requests
+                (started_at, session_id, backend, method, path, format, status_code,
+                 streamed, duration_ms, ttft_ms, request_headers)
+            VALUES
+                ($startedAt, $sessionId, 'seed', 'GET', '/seed', 'raw', $statusCode,
+                 $streamed, $durationMs, $ttftMs, '{}')
+            """;
+        command.Parameters.AddWithValue("$startedAt", startedAt);
+        command.Parameters.AddWithValue("$sessionId", (object?)sessionId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$statusCode", statusCode);
+        command.Parameters.AddWithValue("$streamed", streamed ? 1 : 0);
+        command.Parameters.AddWithValue("$durationMs", durationMs);
+        command.Parameters.AddWithValue("$ttftMs", (object?)ttftMs ?? DBNull.Value);
+        command.ExecuteNonQuery();
+    }
 }

@@ -141,28 +141,72 @@ export function FilterBar({
       </div>
 
       {facets && facets.tags.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-text-muted">Tags:</span>
-          {facets.tags.map((t) => {
-            const selected = filters.tag === t
-            return (
-              <button
-                key={t}
-                type="button"
-                onClick={() => set('tag', selected ? null : t)}
-                className={cn(
-                  'rounded-full px-2.5 py-1 text-xs font-medium leading-none transition-opacity',
-                  selected ? 'bg-accent text-accent-fg' : cn(tagChipClass(t), 'hover:opacity-80'),
-                )}
-              >
-                {t}
-              </button>
-            )
-          })}
-        </div>
+        <TagPicker tags={facets.tags} activeTag={filters.tag} onSelect={(t) => set('tag', t)} />
       )}
 
       {active && <ActiveFilterChips filters={filters} onFiltersChange={onFiltersChange} />}
+    </div>
+  )
+}
+
+// R12 — with 100 distinct tags, an unbounded wrapping chip row could grow tall enough to
+// squeeze the sibling request list (flex-basis 0, min-height 0) down to nothing — the
+// list panel is a fixed-height flex column, so anything above the list that refuses to
+// shrink eats its space first. Bounded two ways: a max-height + internal scroll (the
+// actual layout guarantee — holds regardless of tag count or name length) and a
+// collapsed-by-default "+N more" (a usability nicety on top, not what keeps the list
+// visible). ui-spec.md §5 records this as the list panel's tag-picker rule.
+const TAG_PICKER_MAX_HEIGHT = 'max-h-[84px]' // ~3 rows of chips + gaps
+const COLLAPSED_TAG_COUNT = 12
+
+export function TagPicker({
+  tags,
+  activeTag,
+  onSelect,
+}: {
+  tags: string[]
+  activeTag: string | null
+  onSelect: (tag: string | null) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  // Active-first: the selected tag (if any) always stays visible even collapsed, instead
+  // of being scrolled out of view by whatever the facet's natural ordering put ahead of it.
+  const ordered = activeTag && tags.includes(activeTag) ? [activeTag, ...tags.filter((t) => t !== activeTag)] : tags
+
+  const overflow = ordered.length - COLLAPSED_TAG_COUNT
+  const visible = expanded || overflow <= 0 ? ordered : ordered.slice(0, COLLAPSED_TAG_COUNT)
+
+  return (
+    <div className="flex items-start gap-1.5">
+      <span className="mt-1 shrink-0 text-xs text-text-muted">Tags:</span>
+      <div className={cn('flex flex-1 flex-wrap items-center gap-1.5 overflow-y-auto', TAG_PICKER_MAX_HEIGHT)}>
+        {visible.map((t) => {
+          const selected = activeTag === t
+          return (
+            <button
+              key={t}
+              type="button"
+              onClick={() => onSelect(selected ? null : t)}
+              className={cn(
+                'rounded-full px-2.5 py-1 text-xs font-medium leading-none transition-opacity',
+                selected ? 'bg-accent text-accent-fg' : cn(tagChipClass(t), 'hover:opacity-80'),
+              )}
+            >
+              {t}
+            </button>
+          )
+        })}
+        {overflow > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded((e) => !e)}
+            className="rounded-full border border-border px-2.5 py-1 text-xs font-medium leading-none text-text-secondary hover:bg-surface-2"
+          >
+            {expanded ? 'Show less' : `+${overflow} more`}
+          </button>
+        )}
+      </div>
     </div>
   )
 }

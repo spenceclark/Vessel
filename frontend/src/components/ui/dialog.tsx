@@ -7,8 +7,25 @@ const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabi
  * §8.7 — Escape-to-close + a basic focus trap, shared by Dialog and ConfirmDialog.
  * Focuses the first focusable element on open, cycles Tab/Shift+Tab within the dialog,
  * and restores focus to whatever had it beforehand on close.
+ *
+ * R04 — the initial-focus grab and listener setup must run only on an actual open/close
+ * *transition*, never on an ordinary rerender. The previous version depended on `onClose`
+ * directly: any caller passing an inline arrow function (StatsBar did, and a caller two
+ * levels up rerendering on a timer — App's old 250ms clock — makes that near-continuous)
+ * gave that prop a new identity every render, which re-ran this whole effect: it tore
+ * down and reattached the keydown listener and, worse, re-ran the "focus the first
+ * focusable element" line, yanking focus out of whatever input the user was mid-typing
+ * into and back onto the dialog's first control (usually the Close button). Reading
+ * `onClose` through a ref makes the effect itself immune to the caller's callback
+ * identity — `[open]` is the only thing that should ever re-arm it — independent of
+ * whether every call site also bothers to memoize its callback.
  */
 function useDialogA11y(open: boolean, onClose: () => void, ref: RefObject<HTMLElement | null>) {
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  })
+
   useEffect(() => {
     if (!open) return
 
@@ -19,7 +36,7 @@ function useDialogA11y(open: boolean, onClose: () => void, ref: RefObject<HTMLEl
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         e.preventDefault()
-        onClose()
+        onCloseRef.current()
         return
       }
 
@@ -43,7 +60,8 @@ function useDialogA11y(open: boolean, onClose: () => void, ref: RefObject<HTMLEl
       document.removeEventListener('keydown', onKeyDown)
       previouslyFocused?.focus()
     }
-  }, [open, onClose, ref])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately open-only; see comment above
+  }, [open, ref])
 }
 
 /** §6 — radius-panel, surface, shadow-dialog, 420px default width, 100ms fade. */

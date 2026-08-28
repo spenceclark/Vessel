@@ -11,7 +11,7 @@ const CONFIRM_WORD = 'DELETE'
  * action is behind a typed-confirmation step (type "DELETE" to enable Confirm) rather
  * than a single click.
  */
-export function DataPanel() {
+export function DataPanel({ onCleared }: { onCleared?: (scope: { all: true } | { before: string }) => void }) {
   const queryClient = useQueryClient()
   const [mode, setMode] = useState<'idle' | 'all' | 'before'>('idle')
   const [beforeDate, setBeforeDate] = useState('')
@@ -35,6 +35,9 @@ export function DataPanel() {
         queryClient.invalidateQueries({ queryKey: ['stats'] }),
         queryClient.invalidateQueries({ queryKey: ['facets'] }),
       ])
+      // R14a — the selected row's own cache and, if the clear reached it, its selection
+      // are the caller's concern (App owns both); this only reports what happened.
+      onCleared?.(scope)
       reset()
     } catch (err) {
       setMessage(err instanceof ApiError ? err.message : 'Failed to clear requests.')

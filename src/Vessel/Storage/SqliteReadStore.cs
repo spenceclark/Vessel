@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
+using Vessel.Formats;
 
 namespace Vessel.Storage;
 
@@ -250,7 +251,12 @@ public sealed class SqliteReadStore(string dbPath)
     }
 
     /// <summary>D3 — full detail with bodies decompressed server-side, or null for an unknown id (caller writes 404).</summary>
-    public RequestDetail? GetDetail(long id)
+    /// <summary>
+    /// D3 — one row with headers and bodies. <paramref name="maxDecodedBytes"/> is the
+    /// caller's capture budget (R05): bodies are decoded for display up to that, and flagged
+    /// past it.
+    /// </summary>
+    public RequestDetail? GetDetail(long id, long maxDecodedBytes)
     {
         using SqliteConnection connection = Open();
         using SqliteCommand command = connection.CreateCommand();
@@ -274,9 +280,12 @@ public sealed class SqliteReadStore(string dbPath)
             ? null
             : JsonNode.Parse(reader.GetString(SummaryColumnCount + 1));
 
-        BodyPayload? requestBody = ToBodyPayload(reader, SummaryColumnCount + 2);
-        BodyPayload? responseBody = ToBodyPayload(reader, SummaryColumnCount + 3);
-        BodyPayload? responseRaw = ToBodyPayload(reader, SummaryColumnCount + 4);
+        string? requestEncoding = ContentEncodingOf(requestHeaders);
+        string? responseEncoding = ContentEncodingOf(responseHeaders);
+
+        BodyPayload? requestBody = ToBodyPayload(reader, SummaryColumnCount + 2, requestEncoding, maxDecodedBytes);
+        BodyPayload? responseBody = ToBodyPayload(reader, SummaryColumnCount + 3, responseEncoding, maxDecodedBytes);
+        BodyPayload? responseRaw = ToBodyPayload(reader, SummaryColumnCount + 4, responseEncoding, maxDecodedBytes);
 
         return RequestDetail.From(summary, requestHeaders, responseHeaders, requestBody, responseBody, responseRaw);
     }
@@ -392,19 +401,60 @@ public sealed class SqliteReadStore(string dbPath)
             : System.Text.Json.JsonSerializer.Deserialize(
                 reader.GetString(ordinal), Capture.CaptureJsonContext.Default.StringArray) ?? [];
 
-    /// <summary>Decompresses the blob and classifies it: valid UTF-8 → text, otherwise → base64 (D3).</summary>
-    private static BodyPayload? ToBodyPayload(SqliteDataReader reader, int ordinal)
+    /// <summary>
+    /// Undoes storage compression (zstd), then the body's own <c>Content-Encoding</c>, then
+    /// classifies: valid UTF-8 → text, otherwise → base64 (D3).
+    /// <para>
+    /// D01: the stored bytes are wire-true, so a gzip/br response is compressed here and
+    /// would otherwise fail the UTF-8 check and render as opaque base64 — the display decode
+    /// is what makes it readable, without storage having to keep a second, altered copy.
+    /// R05: bounded by the same capture budget, and a body that exceeds it is flagged rather
+    /// than silently shown as a complete document.
+    /// </para>
+    /// </summary>
+    private static BodyPayload? ToBodyPayload(
+        SqliteDataReader reader, int ordinal, string? contentEncoding, long maxDecodedBytes)
     {
         if (reader.IsDBNull(ordinal))
         {
             return null;
         }
 
-        byte[] raw = BodyCompression.Decompress((byte[])reader.GetValue(ordinal));
+        byte[] stored = BodyCompression.Decompress((byte[])reader.GetValue(ordinal));
+
+        BodyDecoder.Result decoded = BodyDecoder.Decode(stored, contentEncoding, maxDecodedBytes);
+        // A body that won't decode still has to be shown: fall back to the wire bytes rather
+        // than dropping the payload, so the row keeps evidence either way.
+        byte[] raw = decoded.Bytes ?? stored;
+        bool truncated = decoded.Status == BodyDecoder.DecodeStatus.TruncatedDecode;
+
         string text = Encoding.UTF8.GetString(raw);
         return Encoding.UTF8.GetBytes(text).AsSpan().SequenceEqual(raw)
-            ? new BodyPayload(text, null)
-            : new BodyPayload(null, Convert.ToBase64String(raw));
+            ? new BodyPayload(text, null, truncated)
+            : new BodyPayload(null, Convert.ToBase64String(raw), truncated);
+    }
+
+    /// <summary>The <c>Content-Encoding</c> value from an already-parsed header object, or null.</summary>
+    private static string? ContentEncodingOf(JsonNode? headers)
+    {
+        if (headers is not JsonObject obj)
+        {
+            return null;
+        }
+
+        foreach (KeyValuePair<string, JsonNode?> header in obj)
+        {
+            if (!string.Equals(header.Key, "Content-Encoding", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return header.Value is JsonArray values && values.Count > 0
+                ? values[0]?.GetValue<string>()
+                : null;
+        }
+
+        return null;
     }
 
     private SqliteConnection Open()

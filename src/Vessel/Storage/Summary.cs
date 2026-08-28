@@ -39,13 +39,20 @@ public sealed record Summary(
 public sealed record RequestListResponse(Summary[] Rows, long? NextBefore);
 
 /// <summary>
-/// D3 — a decompressed body: valid UTF-8 renders as <see cref="Text"/>, anything else as
-/// <see cref="Base64"/>. Exactly one of the two is non-null; the other is omitted from
-/// the wire JSON entirely.
+/// D3 — a body prepared for display: valid UTF-8 renders as <see cref="Text"/>, anything
+/// else as <see cref="Base64"/>. Exactly one of the two is non-null; the other is omitted
+/// from the wire JSON entirely.
+/// <para>
+/// D01/R05: storage keeps the original wire bytes, so any <c>Content-Encoding</c> is undone
+/// here, at read time, under the capture budget. <see cref="DecodeTruncated"/> says the body
+/// expanded past that budget and what's shown is a prefix — omitted from the JSON when
+/// false, so the common case is unchanged.
+/// </para>
 /// </summary>
 public sealed record BodyPayload(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Text,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Base64);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Base64,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool DecodeTruncated = false);
 
 /// <summary>
 /// D3 — <c>GET /requests/{id}</c> response: every <see cref="Summary"/> field flattened to

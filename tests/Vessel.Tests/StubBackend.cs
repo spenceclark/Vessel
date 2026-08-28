@@ -84,16 +84,39 @@ public sealed class StubBackend : IAsyncDisposable
             if (context.Request.Query["stream"] == "1")
             {
                 context.Response.ContentType = "application/x-ndjson";
+
+                // R08 — an optional pause between chunks so a test can disconnect *after*
+                // real streamed content arrived but before the stream finishes; and an
+                // optional marker in the first chunk so FTS assertions have a unique term.
+                int chunkDelayMs = int.TryParse(context.Request.Query["delayMs"], out int cd) ? cd : 0;
+                // Trailing space when a marker is used so it stays its own FTS token once
+                // the chunks fold; without a marker the default folds to "Hello" exactly as
+                // the other streaming tests expect.
+                string streamMarker = context.Request.Query["marker"].ToString();
+                string firstContent = streamMarker.Length > 0 ? streamMarker + " " : "He";
+
                 string[] lines =
                 [
-                    """{"model":"qwen2.5:1.5b","created_at":"2026-08-27T00:00:00.100000Z","message":{"role":"assistant","content":"He"},"done":false}""",
+                    $$"""{"model":"qwen2.5:1.5b","created_at":"2026-08-27T00:00:00.100000Z","message":{"role":"assistant","content":"{{firstContent}}"},"done":false}""",
                     """{"model":"qwen2.5:1.5b","created_at":"2026-08-27T00:00:00.200000Z","message":{"role":"assistant","content":"llo"},"done":false}""",
                     """{"model":"qwen2.5:1.5b","created_at":"2026-08-27T00:00:00.300000Z","message":{"role":"assistant","content":""},"done_reason":"stop","done":true,"total_duration":500000000,"load_duration":30000000,"prompt_eval_count":10,"prompt_eval_duration":100000000,"eval_count":2,"eval_duration":40000000}""",
                 ];
-                foreach (string line in lines)
+
+                try
                 {
-                    await context.Response.WriteAsync(line + "\n");
-                    await context.Response.Body.FlushAsync();
+                    for (int i = 0; i < lines.Length; i++)
+                    {
+                        await context.Response.WriteAsync(lines[i] + "\n", context.RequestAborted);
+                        await context.Response.Body.FlushAsync(context.RequestAborted);
+                        if (chunkDelayMs > 0 && i < lines.Length - 1)
+                        {
+                            await Task.Delay(chunkDelayMs, context.RequestAborted);
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // Client went away mid-stream — exactly the case under test.
                 }
 
                 return;
@@ -121,6 +144,31 @@ public sealed class StubBackend : IAsyncDisposable
                 Encoding.UTF8.GetString(received.ToArray()), context.Request.ContentLength);
             context.Response.ContentType = "application/json";
             await JsonSerializer.SerializeAsync(context.Response.Body, payload);
+        }));
+
+        // D01/R05 — a gzip-encoded JSON response. ?bomb=1 makes the *decoded* size huge from
+        // a tiny wire body (highly compressible zeros), which is how the decode budget gets
+        // exercised end to end; otherwise it's an ordinary small compressed chat completion.
+        app.Map("/gzip", (RequestDelegate)(async context =>
+        {
+            await context.Request.Body.CopyToAsync(Stream.Null);
+
+            byte[] payload = context.Request.Query["bomb"] == "1"
+                ? new byte[4 * 1024 * 1024]
+                : Encoding.UTF8.GetBytes(
+                    """{"id":"gz","object":"chat.completion","model":"gzip-model","choices":[{"index":0,"message":{"role":"assistant","content":"compressed hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}""");
+
+            using var compressed = new MemoryStream();
+            using (var gzip = new System.IO.Compression.GZipStream(compressed, System.IO.Compression.CompressionLevel.Optimal, leaveOpen: true))
+            {
+                gzip.Write(payload, 0, payload.Length);
+            }
+
+            byte[] wire = compressed.ToArray();
+            context.Response.ContentType = "application/json";
+            context.Response.Headers.ContentEncoding = "gzip";
+            context.Response.ContentLength = wire.Length;
+            await context.Response.Body.WriteAsync(wire);
         }));
 
         app.Map("/sse", (RequestDelegate)(context =>

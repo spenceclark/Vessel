@@ -105,6 +105,10 @@ public class EventsTests
         long seq = startedDoc.RootElement.GetProperty("seq").GetInt64();
         Assert.Contains("sseflow", startedDoc.RootElement.GetProperty("path").GetString());
 
+        // D05 — `started` carries the session so the UI can scope in-flight rows without
+        // guessing; it must match the session the row is ultimately stored under.
+        long startedSessionId = startedDoc.RootElement.GetProperty("sessionId").GetInt64();
+
         (string Event, string Data) firstToken = events.First(e => e.Event == "first_token");
         using JsonDocument ftDoc = JsonDocument.Parse(firstToken.Data);
         Assert.Equal(seq, ftDoc.RootElement.GetProperty("seq").GetInt64());
@@ -116,6 +120,14 @@ public class EventsTests
         JsonElement row = compDoc.RootElement.GetProperty("row");
         Assert.NotEqual(JsonValueKind.Null, row.ValueKind);
         long rowId = row.GetProperty("id").GetInt64();
+
+        // The scoping the UI relies on is only correct if these agree.
+        Assert.Equal(startedSessionId, row.GetProperty("sessionId").GetInt64());
+        // ...and the same startedAt string is what correlates an in-flight entry to its
+        // stored row during reconciliation (R11) — seq is not persisted.
+        Assert.Equal(
+            startedDoc.RootElement.GetProperty("startedAt").GetString(),
+            row.GetProperty("startedAt").GetString());
 
         using HttpResponseMessage listResp = await client.GetAsync($"{vessel.BaseUrl}/vessel/api/requests", CT);
         using JsonDocument listDoc = JsonDocument.Parse(await listResp.Content.ReadAsStringAsync(CT));
@@ -170,6 +182,64 @@ public class EventsTests
         using JsonDocument readyDoc = JsonDocument.Parse(events[requestReadyIndex].Data);
         Assert.Equal(seq, readyDoc.RootElement.GetProperty("seq").GetInt64());
         Assert.Equal("test-model-xyz", readyDoc.RootElement.GetProperty("model").GetString());
+    }
+
+    // R11 — every frame carries a monotonic `id:`. This is asserted on the raw wire on
+    // purpose: the client's gap detection reads `EventSource.lastEventId`, which is empty
+    // unless the server actually emits the field, and a silently missing `id:` would leave
+    // gap detection permanently dead while every client-side test still passed.
+    [Fact]
+    public async Task Sse_EveryFrameCarriesMonotonicEventId()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        using HttpResponseMessage response = await client.GetAsync(
+            $"{vessel.BaseUrl}/vessel/api/events", HttpCompletionOption.ResponseHeadersRead, CT);
+        await using Stream stream = await response.Content.ReadAsStreamAsync(CT);
+        using var reader = new StreamReader(stream);
+        await Task.Delay(50, CT);
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
+
+        // Read raw lines until two complete frames have been seen.
+        Task<List<string>> linesTask = Task.Run(
+            async () =>
+            {
+                var collected = new List<string>();
+                int frames = 0;
+                while (frames < 2)
+                {
+                    string? line = await reader.ReadLineAsync(cts.Token);
+                    if (line is null) break;
+                    collected.Add(line);
+                    if (line.StartsWith("data:", StringComparison.Ordinal)) frames++;
+                }
+
+                return collected;
+            },
+            cts.Token);
+
+        using HttpResponseMessage proxied = await client.GetAsync($"{vessel.BaseUrl}/echo?eventid", CT);
+        Assert.Equal(HttpStatusCode.OK, proxied.StatusCode);
+
+        List<string> lines = await linesTask;
+
+        var ids = lines
+            .Where(l => l.StartsWith("id:", StringComparison.Ordinal))
+            .Select(l => long.Parse(l["id:".Length..].Trim()))
+            .ToList();
+
+        Assert.True(ids.Count >= 2, $"expected an id: line per frame, got {ids.Count} in:\n{string.Join("\n", lines)}");
+        // Monotonically increasing, so a client can tell "next" from "dropped some".
+        Assert.Equal(ids.OrderBy(x => x).ToList(), ids);
+        Assert.Equal(ids.Distinct().Count(), ids.Count);
+
+        // The id must precede its event, or EventSource won't associate the two.
+        int firstId = lines.FindIndex(l => l.StartsWith("id:", StringComparison.Ordinal));
+        int firstEvent = lines.FindIndex(l => l.StartsWith("event:", StringComparison.Ordinal));
+        Assert.True(firstId < firstEvent, "id: must come before event: within a frame");
     }
 
     // U6: a subscriber that never reads its stream must never back-pressure the request

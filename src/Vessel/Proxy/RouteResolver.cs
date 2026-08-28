@@ -29,12 +29,17 @@ public static class RouteResolver
     public const string TagsHeader = "X-Vessel-Tags";
 
     /// <summary>
-    /// Pure function: (path, headers) → decision. Precedence: <c>/b/{name}</c> path prefix,
-    /// then <c>X-Vessel-Backend</c> header, then the default backend. Tags come from an
-    /// optional <c>/t/{tags}</c> prefix (after <c>/b/</c>, or standalone) and the
-    /// <c>X-Vessel-Tags</c> header; phase 0 parses them but does nothing with them.
+    /// Pure function: (path, headers, backends) → decision. Precedence: <c>/b/{name}</c>
+    /// path prefix, then <c>X-Vessel-Backend</c> header, then the default backend. Tags come
+    /// from an optional <c>/t/{tags}</c> prefix (after <c>/b/</c>, or standalone) and the
+    /// <c>X-Vessel-Tags</c> header.
+    /// <para>
+    /// R02: takes an already-resolved <see cref="BackendSet"/> rather than the registry, so
+    /// the caller decides which config revision the decision belongs to and every lookup
+    /// here comes from that one revision.
+    /// </para>
     /// </summary>
-    public static RouteDecision Resolve(PathString path, IHeaderDictionary headers, BackendRegistry registry)
+    public static RouteDecision Resolve(PathString path, IHeaderDictionary headers, BackendSet backends)
     {
         string rest = path.Value ?? "/";
         string? requestedName = null;
@@ -70,10 +75,10 @@ public static class RouteResolver
 
         if (requestedName is null)
         {
-            return new RouteDecision(registry.Default, registry.Default.Name, forwardPath, tags.ToArray(), RouteSource.Default);
+            return new RouteDecision(backends.Default, backends.Default.Name, forwardPath, tags.ToArray(), RouteSource.Default);
         }
 
-        ResolvedBackend? backend = requestedName.Length == 0 ? null : registry.Find(requestedName);
+        ResolvedBackend? backend = requestedName.Length == 0 ? null : backends.Find(requestedName);
         return new RouteDecision(backend, requestedName, forwardPath, tags.ToArray(), source);
     }
 

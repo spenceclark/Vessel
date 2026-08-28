@@ -6,8 +6,21 @@ using Vessel.Storage;
 
 namespace Vessel.Capture;
 
-/// <summary>One pre-serialized SSE frame: a named event plus its single-line JSON payload.</summary>
-public sealed record SseEvent(string Name, string Json);
+/// <summary>
+/// One pre-serialized SSE frame: a monotonic publish id, a named event, and its
+/// single-line JSON payload.
+/// <para>
+/// R11 — <see cref="Id"/> is what makes event loss *detectable*. Subscriber queues drop
+/// oldest when full (deliberately, so a stalled browser can't back-pressure the request
+/// path), and a client that only removes an in-flight row on <c>completed</c> had no way
+/// to know a completion had been dropped: the row ran forever. The id is emitted as the
+/// SSE <c>id:</c> field, so a client seeing a jump knows exactly that it missed frames and
+/// can reconcile authoritatively. It is deliberately *not* the request <c>seq</c>: seq is
+/// assigned at request start, so a long-running request legitimately trails far behind the
+/// newest seq, and any distance heuristic on it would expire real in-flight requests.
+/// </para>
+/// </summary>
+public sealed record SseEvent(long Id, string Name, string Json);
 
 /// <summary>
 /// D5 — the SSE broadcast hub. Each subscriber (one per open <c>/vessel/api/events</c>
@@ -21,6 +34,7 @@ public sealed class CaptureEvents
 
     private readonly ConcurrentDictionary<long, Channel<SseEvent>> _subscribers = new();
     private long _nextSubscriberId;
+    private long _publishId;
 
     public CaptureSubscription Subscribe()
     {
@@ -37,8 +51,13 @@ public sealed class CaptureEvents
 
     internal void Unsubscribe(long id) => _subscribers.TryRemove(id, out _);
 
-    /// <summary>Emitted at handler entry, once the backend/tags are resolved (request path).</summary>
-    public void Started(long seq, string startedAt, string method, string path, string backend, string[] tags)
+    /// <summary>
+    /// Emitted at handler entry, once the backend/tags are resolved (request path).
+    /// <paramref name="sessionId"/> is known here (D05) so the UI can scope in-flight rows
+    /// to the viewed session instead of showing every session's live traffic.
+    /// </summary>
+    public void Started(
+        long seq, string startedAt, long sessionId, string method, string path, string backend, string[] tags)
     {
         if (_subscribers.IsEmpty)
         {
@@ -46,7 +65,8 @@ public sealed class CaptureEvents
         }
 
         Publish("started", JsonSerializer.Serialize(
-            new StartedEvent(seq, startedAt, method, path, backend, tags), EventsJsonContext.Default.StartedEvent));
+            new StartedEvent(seq, startedAt, sessionId, method, path, backend, tags),
+            EventsJsonContext.Default.StartedEvent));
     }
 
     /// <summary>
@@ -97,7 +117,10 @@ public sealed class CaptureEvents
 
     private void Publish(string name, string json)
     {
-        var evt = new SseEvent(name, json);
+        // One id per published frame, shared by every subscriber: all subscribers receive
+        // the same fan-out, so a per-subscriber gap in this sequence means that subscriber's
+        // queue dropped frames (R11).
+        var evt = new SseEvent(Interlocked.Increment(ref _publishId), name, json);
         foreach (Channel<SseEvent> channel in _subscribers.Values)
         {
             channel.Writer.TryWrite(evt); // drop-oldest mode never blocks
@@ -123,7 +146,8 @@ public sealed class CaptureSubscription : IDisposable
     public void Dispose() => _hub.Unsubscribe(_id);
 }
 
-internal sealed record StartedEvent(long Seq, string StartedAt, string Method, string Path, string Backend, string[] Tags);
+internal sealed record StartedEvent(
+    long Seq, string StartedAt, long SessionId, string Method, string Path, string Backend, string[] Tags);
 
 internal sealed record RequestReadyEvent(long Seq, string Model);
 

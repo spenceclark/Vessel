@@ -19,8 +19,17 @@ public static class VesselErrors
     public const string InvalidRequest = "invalid_request";
     public const string InvalidConfig = "invalid_config";
 
+    /// <summary>R06 — the writer gave up; commands that need it can't be honoured (503).</summary>
+    public const string CaptureStopped = "capture_stopped";
+
     /// <summary>Capture-only code (no response is written — nobody's listening).</summary>
     public const string ClientDisconnect = "client_disconnect";
+
+    /// <summary>D03 — the request's Host header isn't loopback or the configured listener (control plane only).</summary>
+    public const string ForbiddenHost = "forbidden_host";
+
+    /// <summary>D03 — a mutating <c>/vessel/api/*</c> request failed the same-origin check.</summary>
+    public const string ForbiddenOrigin = "forbidden_origin";
 
     public static Task Write(
         HttpContext context, int statusCode, string code, string message, string[]? backends = null)
@@ -48,6 +57,16 @@ public sealed record StatusPayload(
     string Version,
     string Listen,
     string DefaultBackend,
-    StatusBackend[] Backends);
+    StatusBackend[] Backends,
+    CaptureHealth Capture);
 
 public sealed record StatusBackend(string Name, string BaseUrl, string Type, bool Default);
+
+/// <summary>
+/// R06 — whether the background writer is still recording. A give-up used to be visible
+/// only as one log line; the UI needs it to tell the user that traffic is still being
+/// proxied but nothing is being captured (the banner is a separate frontend item).
+/// </summary>
+public sealed record CaptureHealth(
+    bool Recording,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? StoppedReason);

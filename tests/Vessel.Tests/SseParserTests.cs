@@ -78,4 +78,34 @@ public class SseParserTests
         Assert.DoesNotContain(events, e => e.Data == "[DONE]");
         Assert.Equal(2, events.Count);
     }
+
+    // R19 — a single trailing newline is not an event terminator: `string.Split('\n')`
+    // always manufactures a final empty element that isn't a real blank line the stream
+    // contained. The matrix: LF/CRLF x {no newline, one, two} after the last data line.
+    // Only the two-newline (real blank line) case terminates the event.
+    [Theory]
+    [InlineData("data: [DONE]", 0)] // no newline at all: unterminated line, discarded
+    [InlineData("data: [DONE]\n", 0)] // one LF: line complete, but no blank line follows
+    [InlineData("data: [DONE]\n\n", 1)] // two LF: real blank line terminates the event
+    [InlineData("data: [DONE]\r", 0)]
+    [InlineData("data: [DONE]\r\n", 0)]
+    [InlineData("data: [DONE]\r\n\r\n", 1)]
+    public void TerminalNewlineMatrix_OnlyRealBlankLineDispatches(string text, int expectedCount)
+    {
+        List<SseEvent> events = SseParser.Parse(text);
+        Assert.Equal(expectedCount, events.Count);
+    }
+
+    // Same matrix, one event ahead of the sentinel — proves a genuine prior blank line is
+    // never mistaken for the trailing artifact (only the *last* split element is dropped).
+    [Theory]
+    [InlineData("data: a\n\ndata: [DONE]", 1)]
+    [InlineData("data: a\n\ndata: [DONE]\n", 1)]
+    [InlineData("data: a\n\ndata: [DONE]\n\n", 2)]
+    public void TerminalNewlineMatrix_PriorEventUnaffected(string text, int expectedCount)
+    {
+        List<SseEvent> events = SseParser.Parse(text);
+        Assert.Equal(expectedCount, events.Count);
+        Assert.Equal("a", events[0].Data);
+    }
 }

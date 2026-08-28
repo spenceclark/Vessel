@@ -1,4 +1,5 @@
 import type { RequestDetail } from '@/api/types'
+import { openAiImageSource } from './imageSource'
 import type { RenderBlock, RenderedView, RenderMessage } from './types'
 
 /**
@@ -50,7 +51,8 @@ function requestMessage(m: any): RenderMessage {
   } else if (Array.isArray(m?.content)) {
     for (const part of m.content) {
       if (part?.type === 'text') blocks.push({ kind: 'markdown', text: part.text ?? '' })
-      else if (part?.type === 'image_url') blocks.push({ kind: 'image', label: 'image' })
+      else if (part?.type === 'image_url')
+        blocks.push({ kind: 'image', label: 'image', source: openAiImageSource(part.image_url?.url) })
       else blocks.push({ kind: 'text', text: JSON.stringify(part) })
     }
   }

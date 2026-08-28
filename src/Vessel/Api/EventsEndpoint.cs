@@ -42,7 +42,12 @@ public static class EventsEndpoint
                     continue;
                 }
 
-                await context.Response.WriteAsync($"event: {evt.Name}\ndata: {evt.Json}\n\n", aborted);
+                // R11 — the `id:` field carries the hub's publish sequence. A client that
+                // sees it jump knows its bounded queue dropped frames (drop-oldest is
+                // deliberate) and can reconcile, instead of leaving in-flight rows running
+                // forever because a `completed` was silently lost.
+                await context.Response.WriteAsync(
+                    $"id: {evt.Id}\nevent: {evt.Name}\ndata: {evt.Json}\n\n", aborted);
                 await context.Response.Body.FlushAsync(aborted);
             }
         }

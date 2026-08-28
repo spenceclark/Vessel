@@ -1,6 +1,7 @@
 import type {
   ClearResponse,
   ConfigApplyResult,
+  ConfigGetResponse,
   FacetsResponse,
   RequestDetail,
   RequestFilters,
@@ -106,7 +107,7 @@ export const api = {
     return request<ClearResponse>(`/requests?${qs}`, { method: 'DELETE' })
   },
 
-  getConfig: () => request<VesselConfigDto>('/config'),
+  getConfig: () => request<ConfigGetResponse>('/config'),
 
   putConfig: (config: VesselConfigDto) =>
     request<ConfigApplyResult>('/config', {

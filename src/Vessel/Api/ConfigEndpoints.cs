@@ -9,9 +9,10 @@ public static class ConfigEndpoints
     public static async Task Get(HttpContext context)
     {
         var store = context.RequestServices.GetRequiredService<ConfigStore>();
+        var result = new ConfigGetResult(store.Current, store.PendingRestart);
         context.Response.ContentType = "application/json; charset=utf-8";
         await JsonSerializer.SerializeAsync(
-            context.Response.Body, store.Current, ConfigJsonContext.Default.VesselConfig, context.RequestAborted);
+            context.Response.Body, result, ApiJsonContext.Default.ConfigGetResult, context.RequestAborted);
     }
 
     /// <summary>

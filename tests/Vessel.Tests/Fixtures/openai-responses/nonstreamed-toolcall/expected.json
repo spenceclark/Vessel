@@ -7,7 +7,7 @@
   "tokensCachedWrite": null,
   "tokensEstimated": false,
   "stopReason": "stop",
-  "tokPerSec": 25.0,
+  "tokPerSec": null,
   "warnings": [],
   "promptText": "user: What's the weather in Boston?",
   "responseText": "Need to call get_current_weather for Boston.\n[tool_call get_current_weather] {\"location\":\"Boston, MA\"}"

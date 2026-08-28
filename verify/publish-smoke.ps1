@@ -1,16 +1,27 @@
 <#
 .SYNOPSIS
 Single-file publish smoke test (CI-runnable): publishes a self-contained single-file
-win-x64 build, runs the produced exe from an empty directory, and asserts first-run
-config creation, /vessel/api/status, proxying, and the unknown-backend error path.
+win-x64 build **from a clean source copy carrying no build outputs**, runs the produced
+exe from an empty directory, and asserts first-run config creation, /vessel/api/status,
+proxying, the unknown-backend error path, and the embedded SPA + its hashed asset.
+
+R01: publishing from the working tree let a stale frontend/dist mask a broken build
+order — the gate passed while a genuinely clean publish embedded nothing. The copy is
+built from `git ls-files --cached --others --exclude-standard`, i.e. tracked files plus
+untracked-but-not-ignored ones: everything a fresh clone would compile, minus the
+ignored build outputs (frontend/dist, node_modules, bin, obj). Untracked-not-ignored
+files are included deliberately so the check works on a working tree with uncommitted
+work, which the house rules require (AGENTS.md: never commit).
 
 .EXAMPLE
 ./publish-smoke.ps1            # untrimmed (the shipping configuration)
 ./publish-smoke.ps1 -Trimmed   # data-gathering for the phase-6 trimming decision
+./publish-smoke.ps1 -InPlace   # publish from the working tree (faster; skips the R01 gate)
 #>
 [CmdletBinding()]
 param(
     [switch]$Trimmed,
+    [switch]$InPlace,
     [string]$Rid = "win-x64"
 )
 
@@ -18,7 +29,59 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Net.Http
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$project = Join-Path $repoRoot "src/Vessel"
+
+function New-CleanSourceCopy {
+    param([string]$RepoRoot)
+
+    $dest = Join-Path ([IO.Path]::GetTempPath()) ("vessel-clean-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $dest | Out-Null
+
+    Push-Location $RepoRoot
+    try {
+        $files = & git ls-files --cached --others --exclude-standard
+        if ($LASTEXITCODE -ne 0) { throw "git ls-files failed ($LASTEXITCODE)" }
+    }
+    finally { Pop-Location }
+
+    $copied = 0
+    foreach ($rel in $files) {
+        if ([string]::IsNullOrWhiteSpace($rel)) { continue }
+        $src = Join-Path $RepoRoot $rel
+        # Tracked-but-deleted paths are listed and simply have nothing to copy.
+        if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { continue }
+        $dst = Join-Path $dest $rel
+        $dstDir = Split-Path -Parent $dst
+        if (-not (Test-Path -LiteralPath $dstDir)) { New-Item -ItemType Directory -Force -Path $dstDir | Out-Null }
+        Copy-Item -LiteralPath $src -Destination $dst
+        $copied++
+    }
+
+    # Fail loudly rather than "successfully" publishing an empty tree.
+    foreach ($mustExist in @("src/Vessel/Vessel.csproj", "frontend/package.json")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $dest $mustExist))) {
+            throw "clean source copy is missing $mustExist - refusing to publish from it"
+        }
+    }
+    foreach ($mustNotExist in @("frontend/dist", "frontend/node_modules", "src/Vessel/bin", "src/Vessel/obj")) {
+        if (Test-Path -LiteralPath (Join-Path $dest $mustNotExist)) {
+            throw "clean source copy unexpectedly contains build output $mustNotExist"
+        }
+    }
+
+    Write-Host "Clean source copy: $dest ($copied files, no dist/bin/obj/node_modules)" -ForegroundColor Cyan
+    return $dest
+}
+
+$cleanRoot = $null
+if ($InPlace) {
+    Write-Host "-InPlace: publishing from the working tree (R01 clean-tree gate SKIPPED)" -ForegroundColor Yellow
+    $sourceRoot = $repoRoot
+}
+else {
+    $cleanRoot = New-CleanSourceCopy -RepoRoot $repoRoot
+    $sourceRoot = $cleanRoot
+}
+$project = Join-Path $sourceRoot "src/Vessel"
 
 function Get-FreePort {
     $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
@@ -61,6 +124,22 @@ $exe = Join-Path $project "bin/Release/net10.0/$Rid/publish/Vessel.exe"
 if (-not (Test-Path $exe)) { throw "expected single-file exe not found: $exe" }
 $sizeMb = [Math]::Round((Get-Item $exe).Length / 1MB, 1)
 Write-Host "Published: $exe ($sizeMb MB)" -ForegroundColor Green
+
+# R01: assert the embedded UI is actually *in the artifact*, before any HTTP check. The
+# HTTP checks below can only fail after a successful launch; this one localizes a broken
+# build order to the build, and catches it even if the process fails to start. The
+# intermediate Vessel.dll is the assembly whose manifest resources were compiled in (the
+# single-file exe bundles it).
+$builtDll = Join-Path $project "bin/Release/net10.0/$Rid/Vessel.dll"
+if (-not (Test-Path $builtDll)) { throw "expected built assembly not found: $builtDll" }
+$dllBytes = [IO.File]::ReadAllBytes($builtDll)
+$dllText = [Text.Encoding]::UTF8.GetString($dllBytes)
+foreach ($resource in @("vessel-ui/index.html", "vessel-ui/assets")) {
+    if ($dllText -notlike "*$resource*") {
+        throw "published assembly embeds no '$resource' - the frontend was not built before resource collection (R01)"
+    }
+}
+Write-Host "PASS: published assembly embeds the frontend (vessel-ui/index.html + assets)" -ForegroundColor Green
 
 # --- Run from an empty directory ------------------------------------------------------
 
@@ -197,6 +276,9 @@ finally {
     if ($null -ne $stubListener) { $stubListener.Stop(); $stubListener.Close() }
     Start-Sleep -Milliseconds 300
     try { Remove-Item -Recurse -Force $work } catch { Write-Warning "could not clean $work" }
+    if ($null -ne $cleanRoot) {
+        try { Remove-Item -Recurse -Force $cleanRoot } catch { Write-Warning "could not clean $cleanRoot" }
+    }
 }
 
 if ($failures -gt 0) {

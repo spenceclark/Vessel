@@ -1,0 +1,79 @@
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:34.4818596Z","message":{"role":"assistant","content":"","thinking":"Okay"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:34.5510551Z","message":{"role":"assistant","content":"","thinking":","},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:34.6255258Z","message":{"role":"assistant","content":"","thinking":" the"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:34.7085432Z","message":{"role":"assistant","content":"","thinking":" user"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:34.791554Z","message":{"role":"assistant","content":"","thinking":" is"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:34.8721513Z","message":{"role":"assistant","content":"","thinking":" asking"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:34.9590819Z","message":{"role":"assistant","content":"","thinking":" for"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:35.0385785Z","message":{"role":"assistant","content":"","thinking":" the"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:35.1181709Z","message":{"role":"assistant","content":"","thinking":" weather"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:35.201154Z","message":{"role":"assistant","content":"","thinking":" in"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:35.278106Z","message":{"role":"assistant","content":"","thinking":" Paris"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:35.3570355Z","message":{"role":"assistant","content":"","thinking":" and"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:35.4300759Z","message":{"role":"assistant","content":"","thinking":" the"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:35.51416Z","message":{"role":"assistant","content":"","thinking":" current"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:35.5967811Z","message":{"role":"assistant","content":"","thinking":" time"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:35.6748367Z","message":{"role":"assistant","content":"","thinking":" in"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:35.7592942Z","message":{"role":"assistant","content":"","thinking":" Tokyo"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:35.8413309Z","message":{"role":"assistant","content":"","thinking":"."},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:35.9207086Z","message":{"role":"assistant","content":"","thinking":" Let"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:36.0087355Z","message":{"role":"assistant","content":"","thinking":" me"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:36.0917624Z","message":{"role":"assistant","content":"","thinking":" check"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:36.1767949Z","message":{"role":"assistant","content":"","thinking":" the"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:36.2799021Z","message":{"role":"assistant","content":"","thinking":" tools"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:36.3554364Z","message":{"role":"assistant","content":"","thinking":" available"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:36.4394171Z","message":{"role":"assistant","content":"","thinking":"."},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:36.5160088Z","message":{"role":"assistant","content":"","thinking":"\n"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:36.5929677Z","message":{"role":"assistant","content":"","thinking":"\n"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:36.6750541Z","message":{"role":"assistant","content":"","thinking":"There"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:36.7501279Z","message":{"role":"assistant","content":"","thinking":"'s"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:36.8341129Z","message":{"role":"assistant","content":"","thinking":" get"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:36.9172193Z","message":{"role":"assistant","content":"","thinking":"_"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:36.9937977Z","message":{"role":"assistant","content":"","thinking":"weather"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:37.0573665Z","message":{"role":"assistant","content":"","thinking":" which"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:37.1334153Z","message":{"role":"assistant","content":"","thinking":" requires"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:37.2156626Z","message":{"role":"assistant","content":"","thinking":" a"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:37.2919043Z","message":{"role":"assistant","content":"","thinking":" city"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:37.3709023Z","message":{"role":"assistant","content":"","thinking":","},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:37.4519479Z","message":{"role":"assistant","content":"","thinking":" and"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:37.5305025Z","message":{"role":"assistant","content":"","thinking":" get"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:37.6074045Z","message":{"role":"assistant","content":"","thinking":"_"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:37.6904794Z","message":{"role":"assistant","content":"","thinking":"time"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:37.7824289Z","message":{"role":"assistant","content":"","thinking":" which"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:37.8726741Z","message":{"role":"assistant","content":"","thinking":" also"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:37.949703Z","message":{"role":"assistant","content":"","thinking":" requires"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:38.032267Z","message":{"role":"assistant","content":"","thinking":" a"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:38.1146885Z","message":{"role":"assistant","content":"","thinking":" city"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:38.1898594Z","message":{"role":"assistant","content":"","thinking":"."},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:38.2729206Z","message":{"role":"assistant","content":"","thinking":" So"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:38.3665039Z","message":{"role":"assistant","content":"","thinking":" I"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:38.4489326Z","message":{"role":"assistant","content":"","thinking":" need"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:38.5228272Z","message":{"role":"assistant","content":"","thinking":" to"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:38.5995324Z","message":{"role":"assistant","content":"","thinking":" call"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:38.676429Z","message":{"role":"assistant","content":"","thinking":" both"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:38.7633662Z","message":{"role":"assistant","content":"","thinking":" functions"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:38.8391095Z","message":{"role":"assistant","content":"","thinking":"."},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:38.9151506Z","message":{"role":"assistant","content":"","thinking":" First"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:38.9971011Z","message":{"role":"assistant","content":"","thinking":","},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:39.0721321Z","message":{"role":"assistant","content":"","thinking":" get"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:39.1477908Z","message":{"role":"assistant","content":"","thinking":"_"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:39.2178473Z","message":{"role":"assistant","content":"","thinking":"weather"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:39.2967392Z","message":{"role":"assistant","content":"","thinking":" for"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:39.3727857Z","message":{"role":"assistant","content":"","thinking":" Paris"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:39.4497891Z","message":{"role":"assistant","content":"","thinking":" and"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:39.5305914Z","message":{"role":"assistant","content":"","thinking":" get"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:39.6092154Z","message":{"role":"assistant","content":"","thinking":"_"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:39.6922588Z","message":{"role":"assistant","content":"","thinking":"time"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:39.780885Z","message":{"role":"assistant","content":"","thinking":" for"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:39.8633886Z","message":{"role":"assistant","content":"","thinking":" Tokyo"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:39.9414245Z","message":{"role":"assistant","content":"","thinking":"."},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:40.0249719Z","message":{"role":"assistant","content":"","thinking":" I"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:40.1133915Z","message":{"role":"assistant","content":"","thinking":"'ll"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:40.1837505Z","message":{"role":"assistant","content":"","thinking":" make"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:40.2479768Z","message":{"role":"assistant","content":"","thinking":" two"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:40.3224201Z","message":{"role":"assistant","content":"","thinking":" separate"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:40.3919003Z","message":{"role":"assistant","content":"","thinking":" tool"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:40.4677655Z","message":{"role":"assistant","content":"","thinking":" calls"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:40.5512896Z","message":{"role":"assistant","content":"","thinking":"."},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:40.6166157Z","message":{"role":"assistant","content":"","thinking":"\n"},"done":false}
+{"model":"granite4.2:8b","created_at":"2026-08-28T18:13:45.1547127Z","message":{"role":"assistant","content":"","tool_calls":[{"id":"mmzlu3JE5BJoiGmFvG5w9yPrt0WC8q7Y","function":{"index":0,"name":"get_weather","arguments":{"city":"Paris"}}},{"id":"Ox4KKli8A4aBwUgQ2JeFTF98uu00iSQq","function":{"index":1,"name":"get_time","arguments":{"city":"Tokyo"}}}]},"done":true,"done_reason":"stop","total_duration":16437368200,"load_duration":5328542600,"prompt_eval_count":333,"prompt_eval_duration":427188000,"eval_count":138,"eval_duration":10673156000}

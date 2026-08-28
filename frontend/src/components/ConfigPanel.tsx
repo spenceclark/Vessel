@@ -3,7 +3,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/api/client'
 import type { BackendConfigDto, VesselConfigDto } from '@/api/types'
 import { Button } from '@/components/ui/button'
+import { ErrorState } from '@/components/ui/ErrorState'
 import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 
 const SELECT_CLASS = 'h-7 rounded-control border border-border bg-surface-2 px-2 text-sm text-text'
 
@@ -19,11 +21,20 @@ export function ConfigPanel() {
   const [draft, setDraft] = useState<VesselConfigDto | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const [restartRequired, setRestartRequired] = useState<string[]>([])
+  // R16: a just-saved PUT's answer is the freshest signal; once the post-save refetch of
+  // ['config'] resolves, GET's persisted state (survives reopen, unlike component state)
+  // takes back over. Derived at render time rather than mirrored into state via an effect.
+  const [justSavedRestartRequired, setJustSavedRestartRequired] = useState<string[] | null>(null)
+  const restartRequired = justSavedRestartRequired ?? configQuery.data?.restartRequired ?? []
+  const [renameError, setRenameError] = useState<{ backend: string; message: string } | null>(null)
 
   useEffect(() => {
-    if (configQuery.data && draft === null) setDraft(configQuery.data)
+    if (configQuery.data && draft === null) setDraft(configQuery.data.config)
   }, [configQuery.data, draft])
+
+  if (configQuery.isError && !draft) {
+    return <ErrorState message="Failed to load config." onRetry={() => configQuery.refetch()} />
+  }
 
   if (!draft) {
     return <div className="text-sm text-text-muted">Loading…</div>
@@ -33,8 +44,24 @@ export function ConfigPanel() {
     setDraft((d) => (d ? { ...d, backends: { ...d.backends, [name]: { ...d.backends[name], ...patch } } } : d))
   }
 
+  // R13 — `renameBackend` used to delete-then-assign with no collision check, so renaming
+  // onto an existing name silently overwrote it: two backend rows collapsed into one, and
+  // the server can't catch it because only one property survives in the submitted JSON.
+  // The server's own name comparison is case-insensitive (D7), so the guard here matches
+  // that — while still allowing a case-only rename of the *same* backend (that's not a
+  // collision, it's the rename being performed).
   function renameBackend(oldName: string, newName: string) {
     if (!newName || newName === oldName) return
+
+    const collision = Object.keys(draft?.backends ?? {}).some(
+      (existing) => existing !== oldName && existing.toLowerCase() === newName.toLowerCase(),
+    )
+    if (collision) {
+      setRenameError({ backend: oldName, message: `A backend named "${newName}" already exists.` })
+      return
+    }
+
+    setRenameError((e) => (e?.backend === oldName ? null : e))
     setDraft((d) => {
       if (!d || !(oldName in d.backends)) return d
       const backends = { ...d.backends }
@@ -46,6 +73,7 @@ export function ConfigPanel() {
   }
 
   function removeBackend(name: string) {
+    setRenameError((e) => (e?.backend === name ? null : e))
     setDraft((d) => {
       if (!d) return d
       const backends = { ...d.backends }
@@ -96,12 +124,15 @@ export function ConfigPanel() {
     setError(null)
     try {
       const result = await api.putConfig(draft)
-      setRestartRequired(result.restartRequired)
+      setJustSavedRestartRequired(result.restartRequired)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['status'] }),
         queryClient.invalidateQueries({ queryKey: ['facets'] }),
         queryClient.invalidateQueries({ queryKey: ['config'] }),
       ])
+      // ['config'] has now refetched (invalidateQueries awaits active refetches), so
+      // configQuery.data already carries this same answer — stop shadowing it.
+      setJustSavedRestartRequired(null)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to save config.')
     } finally {
@@ -113,7 +144,7 @@ export function ConfigPanel() {
     <div className="flex flex-col gap-4 text-sm">
       {restartRequired.length > 0 && (
         <div className="rounded-control border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-warn)_10%,transparent)] px-3 py-2 text-xs text-warn">
-          Saved. {restartRequired.join(', ')} change{restartRequired.length === 1 ? 's' : ''} on next start.
+          Pending restart: {restartRequired.join(', ')} change{restartRequired.length === 1 ? 's' : ''} will apply on next start.
         </div>
       )}
       {error && (
@@ -135,6 +166,7 @@ export function ConfigPanel() {
               backend={backend}
               isDefault={draft.defaultBackend === name}
               canRemove={Object.keys(draft.backends).length > 1}
+              renameError={renameError?.backend === name ? renameError.message : null}
               onRename={(next) => renameBackend(name, next)}
               onUpdate={(patch) => updateBackend(name, patch)}
               onMakeDefault={() => setDraft((d) => (d ? { ...d, defaultBackend: name } : d))}
@@ -195,6 +227,7 @@ function BackendRow({
   backend,
   isDefault,
   canRemove,
+  renameError,
   onRename,
   onUpdate,
   onMakeDefault,
@@ -204,6 +237,7 @@ function BackendRow({
   backend: BackendConfigDto
   isDefault: boolean
   canRemove: boolean
+  renameError: string | null
   onRename: (next: string) => void
   onUpdate: (patch: Partial<BackendConfigDto>) => void
   onMakeDefault: () => void
@@ -213,44 +247,47 @@ function BackendRow({
   useEffect(() => setNameDraft(name), [name])
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-control border border-border p-2">
-      <Input
-        type="text"
-        value={nameDraft}
-        onChange={(e) => setNameDraft(e.target.value)}
-        onBlur={() => onRename(nameDraft.trim())}
-        className="w-28 font-mono"
-        placeholder="name"
-      />
-      <Input
-        type="text"
-        value={backend.baseUrl}
-        onChange={(e) => onUpdate({ baseUrl: e.target.value })}
-        className="min-w-[180px] flex-1 font-mono"
-        placeholder="http://localhost:11434"
-      />
-      <select value={backend.type} onChange={(e) => onUpdate({ type: e.target.value })} className={SELECT_CLASS}>
-        {['auto', 'ollama', 'openai', 'anthropic'].map((t) => (
-          <option key={t} value={t}>
-            {t}
-          </option>
-        ))}
-      </select>
-      <label className="flex items-center gap-1 text-xs text-text-muted">
-        <input
-          type="checkbox"
-          checked={backend.injectStreamUsage ?? false}
-          onChange={(e) => onUpdate({ injectStreamUsage: e.target.checked })}
+    <div className="flex flex-col gap-1 rounded-control border border-border p-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          type="text"
+          value={nameDraft}
+          onChange={(e) => setNameDraft(e.target.value)}
+          onBlur={() => onRename(nameDraft.trim())}
+          className={cn('w-28 font-mono', renameError && 'border-danger')}
+          placeholder="name"
         />
-        injectStreamUsage
-      </label>
-      <label className="ml-auto flex items-center gap-1 text-xs text-text-muted">
-        <input type="radio" name="default-backend" checked={isDefault} onChange={onMakeDefault} />
-        default
-      </label>
-      <Button variant="ghost" disabled={!canRemove} onClick={onRemove}>
-        Remove
-      </Button>
+        <Input
+          type="text"
+          value={backend.baseUrl}
+          onChange={(e) => onUpdate({ baseUrl: e.target.value })}
+          className="min-w-[180px] flex-1 font-mono"
+          placeholder="http://localhost:11434"
+        />
+        <select value={backend.type} onChange={(e) => onUpdate({ type: e.target.value })} className={SELECT_CLASS}>
+          {['auto', 'ollama', 'openai', 'anthropic'].map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+        <label className="flex items-center gap-1 text-xs text-text-muted">
+          <input
+            type="checkbox"
+            checked={backend.injectStreamUsage ?? false}
+            onChange={(e) => onUpdate({ injectStreamUsage: e.target.checked })}
+          />
+          injectStreamUsage
+        </label>
+        <label className="ml-auto flex items-center gap-1 text-xs text-text-muted">
+          <input type="radio" name="default-backend" checked={isDefault} onChange={onMakeDefault} />
+          default
+        </label>
+        <Button variant="ghost" disabled={!canRemove} onClick={onRemove}>
+          Remove
+        </Button>
+      </div>
+      {renameError && <p className="text-xs text-danger">{renameError}</p>}
     </div>
   )
 }

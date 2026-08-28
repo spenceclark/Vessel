@@ -25,7 +25,7 @@ public class RouteResolverTests
             headerDict[name] = value;
         }
 
-        return RouteResolver.Resolve(new PathString(path), headerDict, _registry);
+        return RouteResolver.Resolve(new PathString(path), headerDict, _registry.Latest);
     }
 
     [Fact]

@@ -66,8 +66,15 @@ public sealed class OllamaAdapter(bool generate) : IFormatAdapter
         List<JsonNode> lines = NdjsonParser.Parse(streamText);
 
         var content = new StringBuilder();
+        var thinking = new StringBuilder();
         JsonObject? done = null;
-        JsonNode? toolCalls = null;
+        // R09 — Ollama's wire shape sends each turn's tool_calls as a *complete* array per
+        // chunk (not OpenAI-style indexed fragments), but a multi-tool-call turn can still
+        // arrive across more than one chunk. `??=` on the first sighting silently dropped
+        // every later batch — including the case where the first sighting was an empty
+        // array (still "non-null", so it masked everything after). Every non-empty array
+        // seen is appended in order instead.
+        var toolCalls = new JsonArray();
 
         foreach (JsonNode line in lines)
         {
@@ -85,7 +92,11 @@ public sealed class OllamaAdapter(bool generate) : IFormatAdapter
             {
                 JsonObject? message = JsonUtil.Object(obj["message"]);
                 content.Append(JsonUtil.Str(message?["content"]));
-                toolCalls ??= message?["tool_calls"];
+                thinking.Append(JsonUtil.Str(message?["thinking"]));
+                foreach (JsonNode? call in JsonUtil.Array(message?["tool_calls"]) ?? [])
+                {
+                    toolCalls.Add(call is null ? null : JsonNode.Parse(call.ToJsonString()));
+                }
             }
 
             if (JsonUtil.Bool(obj["done"]))
@@ -115,9 +126,14 @@ public sealed class OllamaAdapter(bool generate) : IFormatAdapter
                 ? existing
                 : NewMessage(synth);
             message["content"] = content.ToString();
-            if (message["tool_calls"] is null && toolCalls is not null)
+            if (thinking.Length > 0)
             {
-                message["tool_calls"] = JsonNode.Parse(toolCalls.ToJsonString());
+                message["thinking"] = thinking.ToString();
+            }
+
+            if (toolCalls.Count > 0)
+            {
+                message["tool_calls"] = toolCalls;
             }
         }
 

@@ -2,33 +2,36 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '@/api/client'
-import type { RequestFilters, SessionScope, Summary } from '@/api/types'
-import type { InFlightRequest } from '@/api/useEvents'
+import { filtersActive, type RequestFilters, type SessionScope, type Summary } from '@/api/types'
+import { requestsQueryKey } from '@/api/queryKeys'
+import { useNowTick, type InFlightRequest } from '@/api/useEvents'
 import type { Selection } from '@/App'
 import { InFlightRow, RequestRow } from '@/components/RequestRow'
+import { ErrorState } from '@/components/ui/ErrorState'
 import { Mark } from '@/components/ui/Mark'
 
 const PAGE_LIMIT = 100
 
 /**
  * D6/D3 — reverse-chron virtualized history. In-flight rows (from SSE `started`, not yet
- * `completed`) pin above the loaded pages with a live timer. A `completed` event with a
- * row inserts it straight into the first page's cache entry rather than triggering a
- * refetch — cheap, and it can never race a REST page's own cursor (D5: duplicates
- * resolved in favor of REST rows, checked by id before inserting) — but only while no
- * filter beyond session scope is active; a new row may not match the active filter, and
- * refetching on every completion would defeat the cache, so instead a "new requests"
- * pill appears for the user to refresh on demand.
+ * `completed`) pin above the loaded pages with a live timer.
  *
- * The SSE subscription itself lives in App (ui-spec.md §9.1): selection spans both rows
- * and in-flight entries, and the in-flight detail pane needs the same `inFlight` map this
- * list renders from, so both are owned one level up and threaded down as props.
+ * This component only *renders*: the SSE subscription, the in-flight map, cache merging
+ * and reconciliation all live in `useLiveHistory` (R10/R11/D05), and reach here as props.
+ * Keeping them out of the list matters because the detail pane needs the same live state,
+ * and because a completion must be merged correctly whether or not this list is mounted or
+ * mid-fetch.
+ *
+ * A `completed` row is spliced into the first page's cache entry rather than triggering a
+ * refetch — cheap, and it can never race a REST page's own cursor (D5: duplicates resolved
+ * in favor of REST rows, checked by id) — but only while no filter beyond session scope is
+ * active; a new row may not match the active filter, so instead a "new requests" pill
+ * appears for the user to refresh on demand.
  */
 export function RequestList({
   scope,
   filters,
   inFlight,
-  now,
   newSinceFilter,
   onClearNewSinceFilter,
   selection,
@@ -37,8 +40,7 @@ export function RequestList({
 }: {
   scope: SessionScope | null
   filters: RequestFilters
-  inFlight: Map<number, InFlightRequest>
-  now: number
+  inFlight: InFlightRequest[]
   newSinceFilter: number
   onClearNewSinceFilter: () => void
   selection: Selection | null
@@ -48,7 +50,7 @@ export function RequestList({
   const queryClient = useQueryClient()
   const parentRef = useRef<HTMLDivElement>(null)
 
-  const queryKey = ['requests', scope, filters] as const
+  const queryKey = requestsQueryKey(scope, filters)
 
   const query = useInfiniteQuery({
     queryKey,
@@ -60,8 +62,21 @@ export function RequestList({
   })
 
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.rows) ?? [], [query.data])
-  const inFlightList = useMemo(() => Array.from(inFlight.values()), [inFlight])
+
+  // D05 — in-flight rows obey session scope (applied upstream in useLiveHistory) and
+  // nothing else. With any other filter active they can't be filtered honestly: they have
+  // no final status, model or warnings yet, so matching them against those predicates
+  // would be guesswork. They collapse to a count instead of silently lying either way.
+  const filtered = filtersActive(filters)
+  const inFlightList = useMemo(() => (filtered ? [] : inFlight), [filtered, inFlight])
   const itemCount = inFlightList.length + rows.length
+
+  // R04 (review §4 risk) — owned here, not lifted to App: the running in-flight timer
+  // only needs to rerender this list (and, separately, the in-flight detail pane), never
+  // App's siblings (StatsBar/FilterBar/DetailPane) that a shared top-level tick used to
+  // drag along every 250ms regardless of what was actually showing. Also only ticks at
+  // all while there's something in-flight to animate.
+  const now = useNowTick(250, inFlightList.length > 0)
 
   const virtualizer = useVirtualizer({
     count: itemCount,
@@ -102,7 +117,16 @@ export function RequestList({
           {newSinceFilter} new request{newSinceFilter === 1 ? '' : 's'} — refresh
         </button>
       )}
-      {itemCount === 0 && !query.isLoading && (
+      {filtered && inFlight.length > 0 && (
+        <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-[color-mix(in_srgb,var(--color-accent)_5%,transparent)] px-3 py-1.5 text-xs text-text-secondary">
+          <span className="pulse-dot h-2 w-2 shrink-0 rounded-full bg-accent" aria-hidden="true" />
+          {inFlight.length} in flight — not shown while a filter is active
+        </div>
+      )}
+      {itemCount === 0 && query.isError && (
+        <ErrorState message="Failed to load requests." onRetry={() => query.refetch()} />
+      )}
+      {itemCount === 0 && !query.isLoading && !query.isError && (
         <div className="flex flex-col items-center gap-2 p-8 text-center">
           <Mark size={28} muted />
           <p className="text-sm text-text-muted">No requests yet — traffic through Vessel will show up here.</p>

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Settings } from 'lucide-react'
 import { api } from '@/api/client'
@@ -18,11 +18,16 @@ export function StatsBar({
   currentSessionId,
   onScopeChange,
   onReset,
+  onDataCleared,
+  connected,
 }: {
   scope: SessionScope | null
   currentSessionId: number | null
   onScopeChange: (scope: SessionScope) => void
   onReset: () => Promise<void>
+  onDataCleared?: (scope: { all: true } | { before: string }) => void
+  /** D8 (review §4 risk) — the SSE connection state `useEvents` already tracked but no one displayed. */
+  connected: boolean
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [resetting, setResetting] = useState(false)
@@ -43,6 +48,12 @@ export function StatsBar({
   })
 
   const stats = statsQuery.data
+
+  // R04 — stable identities, belt-and-suspenders alongside dialog.tsx's own ref-based
+  // fix: a fresh inline arrow every render is exactly what turned the focus-trap effect
+  // into a per-render focus-steal under the (now-removed) 250ms clock rerender.
+  const closeSettings = useCallback(() => setSettingsOpen(false), [])
+  const cancelReset = useCallback(() => setConfirmOpen(false), [])
 
   async function handleConfirmReset() {
     setConfirmOpen(false)
@@ -91,6 +102,15 @@ export function StatsBar({
       </div>
 
       <div className="ml-auto flex items-center gap-3">
+        {!connected && (
+          <span
+            className="flex items-center gap-1.5 text-xs text-text-muted"
+            title="Live-update connection lost — reconnecting…"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-text-muted" aria-hidden="true" />
+            Disconnected
+          </span>
+        )}
         <Tabs
           value={scope === 'all' ? 'all' : 'current'}
           onValueChange={(v) => {
@@ -131,17 +151,17 @@ export function StatsBar({
         description="Starts a new session for new traffic. Nothing is deleted — switch to All to browse full history."
         confirmLabel="Reset"
         onConfirm={handleConfirmReset}
-        onCancel={() => setConfirmOpen(false)}
+        onCancel={cancelReset}
       />
 
-      <Dialog open={settingsOpen} title="Data & config" onClose={() => setSettingsOpen(false)} widthClassName="w-[620px]">
+      <Dialog open={settingsOpen} title="Data & config" onClose={closeSettings} widthClassName="w-[620px]">
         <Tabs value={settingsTab} onValueChange={(v) => setSettingsTab(v as 'data' | 'config')}>
           <TabsList>
             <TabsTrigger value="data">Data</TabsTrigger>
             <TabsTrigger value="config">Config</TabsTrigger>
           </TabsList>
           <TabsContent value="data" className="pt-3">
-            <DataPanel />
+            <DataPanel onCleared={onDataCleared} />
           </TabsContent>
           <TabsContent value="config" className="pt-3">
             <ConfigPanel />

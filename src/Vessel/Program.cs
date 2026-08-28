@@ -42,6 +42,7 @@ string dbPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath))
 
 WebApplication app = VesselApp.Build(config, dbPath, configPath);
 await app.StartAsync();
+app.RecordBoundListen();
 
 string listen = app.ListenAddress();
 var registry = app.Services.GetRequiredService<Vessel.Proxy.BackendRegistry>();

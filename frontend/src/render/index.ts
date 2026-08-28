@@ -4,11 +4,20 @@ import { extractOpenAiChatRequest, extractOpenAiChatResponse } from './openai'
 import { extractOpenAiResponsesRequest, extractOpenAiResponsesResponse } from './openaiResponses'
 import { extractAnthropicRequest, extractAnthropicResponse } from './anthropic'
 import { extractOllamaRequest, extractOllamaResponse } from './ollama'
+import { sanitizeRenderedView } from './validate'
 
-export type { RenderBlock, RenderedView, RenderMessage } from './types'
+export type { ImageSource, RenderBlock, RenderedView, RenderMessage } from './types'
 
 /** D4 — dispatches by `detail.format`; `raw` and any extraction failure return null (caller falls back to PrettyJson). */
 export function renderRequest(detail: RequestDetail): RenderedView | null {
+  return sanitizeRenderedView(extractRequest(detail))
+}
+
+export function renderResponse(detail: RequestDetail): RenderedView | null {
+  return sanitizeRenderedView(extractResponse(detail))
+}
+
+function extractRequest(detail: RequestDetail): RenderedView | null {
   switch (detail.format) {
     case 'openai-chat':
       return extractOpenAiChatRequest(detail)
@@ -24,7 +33,7 @@ export function renderRequest(detail: RequestDetail): RenderedView | null {
   }
 }
 
-export function renderResponse(detail: RequestDetail): RenderedView | null {
+function extractResponse(detail: RequestDetail): RenderedView | null {
   switch (detail.format) {
     case 'openai-chat':
       return extractOpenAiChatResponse(detail)

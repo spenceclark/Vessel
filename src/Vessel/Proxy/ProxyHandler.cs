@@ -57,10 +57,14 @@ public sealed class ProxyHandler
 
     public async Task Handle(HttpContext context)
     {
-        // D7 — one snapshot read per request: self-consistent even if a config PUT races
-        // concurrently. maxBodyMb/timeouts are never cached across requests.
-        VesselConfig config = _configStore.Current;
-        long maxBodyBytes = (long)config.Capture.MaxBodyMb * 1024 * 1024;
+        // D7/R02 — exactly one snapshot read per request, used for *both* routing and this
+        // request's limits/timeouts. Previously the limits came from ConfigStore.Current and
+        // routing from the registry's own independently-refreshed view, so a PUT landing
+        // between them could apply revision N's timeouts to revision N+1's backend.
+        ConfigSnapshot snapshot = _configStore.Snapshot;
+        VesselConfig config = snapshot.Config;
+        BackendSet backends = _registry.Resolve(snapshot);
+        long maxBodyBytes = CaptureBudget.MaxWireBytes(config);
         var requestConfig = new ForwarderRequestConfig
         {
             ActivityTimeout = TimeSpan.FromSeconds(config.Timeouts.ActivitySeconds),
@@ -77,11 +81,11 @@ public sealed class ProxyHandler
         context.Features.Set<IHttpResponseBodyFeature>(
             new StreamResponseBodyFeature(new ResponseTeeStream(priorBody.Stream, capture, context), priorBody));
 
-        RouteDecision decision = RouteResolver.Resolve(context.Request.Path, context.Request.Headers, _registry);
+        RouteDecision decision = RouteResolver.Resolve(context.Request.Path, context.Request.Headers, backends);
 
         // D5 — as early as backend/tags are known, before any forwarding work begins.
         _captureEvents.Started(
-            capture.Seq, capture.StartedAtIso, context.Request.Method,
+            capture.Seq, capture.StartedAtIso, capture.SessionId, context.Request.Method,
             decision.ForwardPath.Value + context.Request.QueryString.Value,
             decision.Backend?.Name ?? decision.RequestedName ?? "", decision.Tags);
 
@@ -95,9 +99,10 @@ public sealed class ProxyHandler
             if (decision.Backend is null)
             {
                 capture.Error = VesselErrors.UnknownBackend;
+                capture.ResponseAuthoredByVessel = true; // R08 — the body below is Vessel's own
                 await VesselErrors.Write(
                     context, StatusCodes.Status404NotFound, VesselErrors.UnknownBackend,
-                    $"unknown backend '{decision.RequestedName}'", _registry.Names);
+                    $"unknown backend '{decision.RequestedName}'", backends.Names);
                 return;
             }
 
@@ -279,6 +284,9 @@ public sealed class ProxyHandler
         {
             case ForwarderError.RequestTimedOut:
                 capture.Error = VesselErrors.UpstreamTimeout;
+                // R08 — what lands in the response buffer from here on is Vessel's, not the
+                // backend's; enrichment must not read it as a completion.
+                capture.ResponseAuthoredByVessel = true;
                 await VesselErrors.Write(
                     context, StatusCodes.Status504GatewayTimeout, VesselErrors.UpstreamTimeout,
                     $"backend '{backend.Name}' ({backend.BaseUrl}) timed out");
@@ -293,6 +301,7 @@ public sealed class ProxyHandler
 
             default:
                 capture.Error = VesselErrors.UpstreamUnreachable;
+                capture.ResponseAuthoredByVessel = true;
                 await VesselErrors.Write(
                     context, StatusCodes.Status502BadGateway, VesselErrors.UpstreamUnreachable,
                     $"backend '{backend.Name}' ({backend.BaseUrl}) is unreachable: {error}");

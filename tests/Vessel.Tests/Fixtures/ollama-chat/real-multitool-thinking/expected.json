@@ -1,0 +1,35 @@
+{
+  "format": "ollama-chat",
+  "model": "granite4.2:8b",
+  "tokensIn": 333,
+  "tokensOut": 138,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": "stop",
+  "tokPerSec": 12.93,
+  "warnings": ["cold_load"],
+  "promptText": "user: What is the weather in Paris and what time is it in Tokyo? Use the tools.",
+  "responseText": "Okay, the user is asking for the weather in Paris and the current time in Tokyo. Let me check the tools available.\n\nThere's get_weather which requires a city, and get_time which also requires a city. So I need to call both functions. First, get_weather for Paris and get_time for Tokyo. I'll make two separate tool calls.\n\n[tool_call get_weather] {\"city\":\"Paris\"}\n[tool_call get_time] {\"city\":\"Tokyo\"}",
+  "responseBody": {
+    "model": "granite4.2:8b",
+    "created_at": "2026-08-28T18:13:45.1547127Z",
+    "message": {
+      "role": "assistant",
+      "content": "",
+      "thinking": "Okay, the user is asking for the weather in Paris and the current time in Tokyo. Let me check the tools available.\n\nThere's get_weather which requires a city, and get_time which also requires a city. So I need to call both functions. First, get_weather for Paris and get_time for Tokyo. I'll make two separate tool calls.\n",
+      "tool_calls": [
+        {"id": "mmzlu3JE5BJoiGmFvG5w9yPrt0WC8q7Y", "function": {"index": 0, "name": "get_weather", "arguments": {"city": "Paris"}}},
+        {"id": "Ox4KKli8A4aBwUgQ2JeFTF98uu00iSQq", "function": {"index": 1, "name": "get_time", "arguments": {"city": "Tokyo"}}}
+      ]
+    },
+    "done_reason": "stop",
+    "done": true,
+    "total_duration": 16437368200,
+    "load_duration": 5328542600,
+    "prompt_eval_count": 333,
+    "prompt_eval_duration": 427188000,
+    "eval_count": 138,
+    "eval_duration": 10673156000
+  }
+}

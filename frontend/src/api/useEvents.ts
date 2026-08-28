@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
-import type { CompletedEvent, FacetsResponse, FirstTokenEvent, RequestReadyEvent, StartedEvent, Summary } from './types'
+import type { CompletedEvent, FirstTokenEvent, RequestReadyEvent, StartedEvent } from './types'
 
 export interface InFlightRequest {
   seq: number
   startedAt: string
+  sessionId: number
   method: string
   path: string
   backend: string
@@ -13,120 +13,108 @@ export interface InFlightRequest {
   ttftMs?: number
 }
 
+export interface EventHandlers {
+  onStarted: (data: StartedEvent) => void
+  onRequestReady: (data: RequestReadyEvent) => void
+  onFirstToken: (data: FirstTokenEvent) => void
+  onCompleted: (data: CompletedEvent) => void
+  /** R11 — frames were dropped between the last one and this one; the caller must reconcile. */
+  onGap: (missed: number) => void
+  /** The EventSource reconnected after a drop: everything during the gap was missed. */
+  onReconnect: () => void
+}
+
 /**
- * D5/D6 — subscribes to the SSE lifecycle feed and tracks in-flight requests: added on
- * `started`, given the real model on `request_ready` (post-Phase-4 — `started` fires
- * before the request body is read, so it never carries one) and a live TTFT on
- * `first_token`, removed on `completed` (whatever the outcome — the completed row
- * itself, success or drop, is handed to `onCompleted`). A `Map` keyed by `seq` preserves
- * arrival order for the caller's in-flight display.
+ * D5/D6 — the SSE subscription, and nothing else: it decodes frames, tracks connectivity,
+ * and reports loss. All state derived from these events (the in-flight map, cache merging,
+ * reconciliation) lives in `useLiveHistory`, so this stays testable with a fake EventSource
+ * and has no opinion about React Query.
+ *
+ * R11 — every frame carries a monotonic `id`. A jump means this subscriber's bounded
+ * queue dropped frames (drop-oldest is deliberate: a stalled browser must never
+ * back-pressure the request path), which is the only reliable signal that a `completed`
+ * may have been lost. Without it a dropped completion left an in-flight row running
+ * forever, with no way for the client to know.
  */
-export function useEvents(onCompleted: (row: Summary | null, seq: number) => void) {
-  const [inFlight, setInFlight] = useState<Map<number, InFlightRequest>>(new Map())
+export function useEvents(handlers: EventHandlers) {
   const [connected, setConnected] = useState(false)
-  const onCompletedRef = useRef(onCompleted)
-  onCompletedRef.current = onCompleted
-  const queryClient = useQueryClient()
-  const hasConnectedBefore = useRef(false)
+
+  // Installed once; re-reading through a ref keeps the subscription stable across renders
+  // (reconnecting on every render would itself lose events). Assigned in an effect rather
+  // than during render — SSE callbacks only ever fire asynchronously, so the effect has
+  // always run by the time one does.
+  const handlersRef = useRef(handlers)
+  useEffect(() => {
+    handlersRef.current = handlers
+  })
 
   useEffect(() => {
     const source = new EventSource('/vessel/api/events')
+    let lastId: number | null = null
+    let hasConnectedBefore = false
 
-    // C2 — a dropped EventSource (laptop sleep, Vessel restart) loses whatever fired
-    // during the gap. EventSource reconnects on its own; on every `open` after the
-    // first, close the gap with a refetch instead of leaving the list stale.
     source.addEventListener('open', () => {
       setConnected(true)
-      if (hasConnectedBefore.current) {
-        void queryClient.invalidateQueries({ queryKey: ['requests'] })
-        void queryClient.invalidateQueries({ queryKey: ['stats'] })
+      if (hasConnectedBefore) {
+        // Whatever happened during the gap was missed, and ids restart relative to a new
+        // server process — reset rather than reporting a spurious gap on the next frame.
+        lastId = null
+        handlersRef.current.onReconnect()
       }
-      hasConnectedBefore.current = true
+
+      hasConnectedBefore = true
     })
+
     source.addEventListener('error', () => setConnected(false))
 
-    source.addEventListener('started', (e: MessageEvent<string>) => {
-      const data = JSON.parse(e.data) as StartedEvent
-      setInFlight((prev) => {
-        const next = new Map(prev)
-        next.set(data.seq, { ...data })
-        return next
-      })
-    })
-
-    source.addEventListener('request_ready', (e: MessageEvent<string>) => {
-      const data = JSON.parse(e.data) as RequestReadyEvent
-      setInFlight((prev) => {
-        const existing = prev.get(data.seq)
-        if (!existing) return prev
-        const next = new Map(prev)
-        next.set(data.seq, { ...existing, model: data.model })
-        return next
-      })
-    })
-
-    source.addEventListener('first_token', (e: MessageEvent<string>) => {
-      const data = JSON.parse(e.data) as FirstTokenEvent
-      setInFlight((prev) => {
-        const existing = prev.get(data.seq)
-        if (!existing) return prev
-        const next = new Map(prev)
-        next.set(data.seq, { ...existing, ttftMs: data.ttftMs })
-        return next
-      })
-    })
-
-    source.addEventListener('completed', (e: MessageEvent<string>) => {
-      const data = JSON.parse(e.data) as CompletedEvent
-      setInFlight((prev) => {
-        if (!prev.has(data.seq)) return prev
-        const next = new Map(prev)
-        next.delete(data.seq)
-        return next
-      })
-
-      // A completed row can carry a tag/model/backend/format the filter bar's cached
-      // facets don't know about yet — without this, the "Tags:" picker (and the other
-      // filter dropdowns) only pick it up after something else happens to refetch
-      // (a scope toggle, a reload). Only invalidate the cache entries actually missing
-      // something, checked against what's cached rather than refetched unconditionally,
-      // so ordinary traffic doesn't hammer the facets endpoint on every completion.
-      if (data.row) {
-        for (const [key, cached] of queryClient.getQueriesData<FacetsResponse>({ queryKey: ['facets'] })) {
-          if (introducesNewFacet(data.row, cached)) {
-            void queryClient.invalidateQueries({ queryKey: key })
-          }
+    /** Decodes one frame, reporting any gap in the publish sequence before dispatching it. */
+    function receive<T>(event: MessageEvent<string>, dispatch: (data: T) => void) {
+      const id = Number(event.lastEventId)
+      if (Number.isFinite(id) && id > 0) {
+        if (lastId !== null && id > lastId + 1) {
+          handlersRef.current.onGap(id - lastId - 1)
         }
+
+        lastId = id
       }
 
-      onCompletedRef.current(data.row, data.seq)
-    })
+      dispatch(JSON.parse(event.data) as T)
+    }
+
+    source.addEventListener('started', (e: MessageEvent<string>) =>
+      receive<StartedEvent>(e, (data) => handlersRef.current.onStarted(data)),
+    )
+    source.addEventListener('request_ready', (e: MessageEvent<string>) =>
+      receive<RequestReadyEvent>(e, (data) => handlersRef.current.onRequestReady(data)),
+    )
+    source.addEventListener('first_token', (e: MessageEvent<string>) =>
+      receive<FirstTokenEvent>(e, (data) => handlersRef.current.onFirstToken(data)),
+    )
+    source.addEventListener('completed', (e: MessageEvent<string>) =>
+      receive<CompletedEvent>(e, (data) => handlersRef.current.onCompleted(data)),
+    )
 
     return () => source.close()
   }, [])
 
-  return { inFlight, connected }
+  return { connected }
 }
 
-/** True when `row` has a tag/model/backend/format not already present in `cached` (undefined = nothing cached yet, nothing to catch up). */
-function introducesNewFacet(row: Summary, cached: FacetsResponse | undefined): boolean {
-  if (!cached) return false
-  return (
-    !cached.backends.includes(row.backend) ||
-    !cached.formats.includes(row.format) ||
-    (row.model != null && !cached.models.includes(row.model)) ||
-    row.tags.some((t) => !cached.tags.includes(t))
-  )
-}
-
-/** D6 — one shared 250ms interval driving every in-flight row's running timer, not per-row. */
-export function useNowTick(intervalMs = 250) {
+/**
+ * D6 — a running clock for in-flight rows' elapsed-time display. Each consumer owns its
+ * own instance (R04, review §4 risk): a single top-level tick shared via props used to
+ * rerender the entire app tree every 250ms, including panels with nothing time-sensitive
+ * in them. `enabled` lets a consumer stop the interval entirely when it has nothing
+ * in-flight to animate, rather than ticking (and rerendering) for no visible effect.
+ */
+export function useNowTick(intervalMs = 250, enabled = true) {
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
+    if (!enabled) return
     const id = window.setInterval(() => setNow(Date.now()), intervalMs)
     return () => window.clearInterval(id)
-  }, [intervalMs])
+  }, [intervalMs, enabled])
 
   return now
 }

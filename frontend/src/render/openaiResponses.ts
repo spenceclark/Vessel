@@ -1,4 +1,5 @@
 import type { RequestDetail } from '@/api/types'
+import { openAiImageSource } from './imageSource'
 import type { RenderBlock, RenderedView, RenderMessage } from './types'
 
 /**
@@ -129,7 +130,7 @@ function contentBlocks(content: unknown): RenderBlock[] {
         if (part.refusal) blocks.push({ kind: 'text', text: part.refusal })
         break
       case 'input_image':
-        blocks.push({ kind: 'image', label: 'image' })
+        blocks.push({ kind: 'image', label: 'image', source: openAiImageSource(part.image_url) })
         break
       default:
         blocks.push({ kind: 'text', text: JSON.stringify(part) })

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Vessel.Api;
 using Vessel.Config;
 using Xunit;
 
@@ -18,12 +19,15 @@ public class ConfigApplyTests
     private static StringContent AsJson(VesselConfig config) =>
         new(JsonSerializer.Serialize(config, ConfigJsonContext.Default.VesselConfig), Encoding.UTF8, "application/json");
 
-    private static async Task<VesselConfig> GetConfig(HttpClient client, string baseUrl)
+    private static async Task<VesselConfig> GetConfig(HttpClient client, string baseUrl) =>
+        (await GetConfigResult(client, baseUrl)).Config;
+
+    private static async Task<ConfigGetResult> GetConfigResult(HttpClient client, string baseUrl)
     {
         using HttpResponseMessage response = await client.GetAsync($"{baseUrl}/vessel/api/config", CT);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         string text = await response.Content.ReadAsStringAsync(CT);
-        return JsonSerializer.Deserialize(text, ConfigJsonContext.Default.VesselConfig)!;
+        return JsonSerializer.Deserialize(text, ApiJsonContext.Default.ConfigGetResult)!;
     }
 
     // V6: each invalid scenario -> 400 invalid_config, nothing persisted (no file written —
@@ -89,6 +93,50 @@ public class ConfigApplyTests
         Assert.False(File.Exists(vessel.ConfigPath));
     }
 
+    // R15: a structurally-null section (`PUT {"backends":null}` and siblings) must 400 with
+    // a human validation message, not a 500 from a NullReferenceException in Validate — and
+    // must leave state/file exactly as InvalidPut_* above: no file, GET still the original.
+    [Theory]
+    [InlineData("""{ "backends": null }""")]
+    [InlineData("""{ "backends": { "stub": null } }""")]
+    [InlineData("""{ "retention": null }""")]
+    [InlineData("""{ "capture": null }""")]
+    [InlineData("""{ "warnings": null }""")]
+    [InlineData("""{ "timeouts": null }""")]
+    [InlineData("""{ "listen": null }""")]
+    public async Task InvalidPut_NullSection_400_NothingApplied(string overrideJson)
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        VesselConfig original = await GetConfig(client, vessel.BaseUrl);
+        using JsonDocument baseDoc = JsonDocument.Parse(
+            JsonSerializer.Serialize(original, ConfigJsonContext.Default.VesselConfig));
+        using JsonDocument overrideDoc = JsonDocument.Parse(overrideJson);
+
+        var merged = new Dictionary<string, JsonElement>();
+        foreach (JsonProperty prop in baseDoc.RootElement.EnumerateObject())
+        {
+            merged[prop.Name] = prop.Value;
+        }
+
+        foreach (JsonProperty prop in overrideDoc.RootElement.EnumerateObject())
+        {
+            merged[prop.Name] = prop.Value;
+        }
+
+        using var content = new StringContent(JsonSerializer.Serialize(merged), Encoding.UTF8, "application/json");
+
+        using HttpResponseMessage response = await client.PutAsync($"{vessel.BaseUrl}/vessel/api/config", content, CT);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("invalid_config", response.Headers.GetValues("X-Vessel-Error").Single());
+        Assert.False(File.Exists(vessel.ConfigPath));
+
+        VesselConfig afterGet = await GetConfig(client, vessel.BaseUrl);
+        Assert.Equal(original.DefaultBackend, afterGet.DefaultBackend);
+        Assert.Single(afterGet.Backends);
+    }
+
     // V6: valid PUT rewrites vessel.json, preserving unknown properties (forward-compat,
     // same JsonExtensionData contract ConfigLoaderTests already proves for load/save).
     [Fact]
@@ -139,6 +187,47 @@ public class ConfigApplyTests
 
         using HttpResponseMessage stillUp = await client.GetAsync($"{vessel.BaseUrl}/vessel/api/status", CT);
         Assert.Equal(HttpStatusCode.OK, stillUp.StatusCode);
+    }
+
+    // R16: the second save of the *same* changed listen value must still report the
+    // restart as pending — comparing against the last-saved config (rather than the
+    // address the process is actually bound to) made this silently report `[]` the
+    // second time, even though the process never rebound.
+    [Fact]
+    public async Task ValidPut_RepeatedSaveOfSameListenChange_StillReportsRestartRequired()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        VesselConfig candidate = await GetConfig(client, vessel.BaseUrl);
+        candidate.Listen = "127.0.0.1:59998";
+
+        using HttpResponseMessage first = await client.PutAsync($"{vessel.BaseUrl}/vessel/api/config", AsJson(candidate), CT);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        using JsonDocument firstDoc = JsonDocument.Parse(await first.Content.ReadAsStringAsync(CT));
+        Assert.Equal(["listen"], firstDoc.RootElement.GetProperty("restartRequired").EnumerateArray().Select(e => e.GetString()!).ToArray());
+
+        // An unrelated edit on top of the still-unapplied listen change.
+        candidate.Retention.MaxRequests = 7;
+        using HttpResponseMessage second = await client.PutAsync($"{vessel.BaseUrl}/vessel/api/config", AsJson(candidate), CT);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        using JsonDocument secondDoc = JsonDocument.Parse(await second.Content.ReadAsStringAsync(CT));
+        Assert.Equal(["listen"], secondDoc.RootElement.GetProperty("restartRequired").EnumerateArray().Select(e => e.GetString()!).ToArray());
+
+        // GET reflects the same still-pending state without a fresh PUT to remember it
+        // (the R16 "shows it on reopen" half).
+        ConfigGetResult reopened = await GetConfigResult(client, vessel.BaseUrl);
+        Assert.Equal(["listen"], reopened.RestartRequired);
+
+        // Reverting to the address the process is actually bound to clears it.
+        candidate.Listen = new Uri(vessel.BaseUrl).Authority;
+        using HttpResponseMessage revert = await client.PutAsync($"{vessel.BaseUrl}/vessel/api/config", AsJson(candidate), CT);
+        Assert.Equal(HttpStatusCode.OK, revert.StatusCode);
+        using JsonDocument revertDoc = JsonDocument.Parse(await revert.Content.ReadAsStringAsync(CT));
+        Assert.Empty(revertDoc.RootElement.GetProperty("restartRequired").EnumerateArray());
+
+        ConfigGetResult reopenedAfterRevert = await GetConfigResult(client, vessel.BaseUrl);
+        Assert.Empty(reopenedAfterRevert.RestartRequired);
     }
 
     // V7: a non-listen field (here retention) PUT reports no restart required.

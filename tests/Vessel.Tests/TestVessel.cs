@@ -43,6 +43,7 @@ public sealed class TestVessel : IAsyncDisposable
 
         vessel._app = VesselApp.Build(config, vessel.DbPath, vessel.ConfigPath);
         await vessel._app.StartAsync();
+        vessel._app.RecordBoundListen();
         vessel.BaseUrl = vessel._app.ListenAddress();
         return vessel;
     }

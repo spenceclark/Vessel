@@ -20,7 +20,14 @@ public sealed class FormatEnricher
     private readonly ConfigStore? _configStore;
     private IReadOnlyDictionary<string, string> _backendTypes = new Dictionary<string, string>();
     private int _slowTtftMs;
-    private int _builtVersion = -1;
+
+    /// <summary>R05 — decoded output shares the capture cap (D01); derived with the rest of the config-dependent state.</summary>
+    private long _maxDecodedBytes;
+
+    // R02: keyed by the snapshot reference the derived state was built from, not by a
+    // separately-read version number (which a concurrent Apply could mismatch against the
+    // config actually read). Only ever touched on the single writer thread.
+    private ConfigSnapshot? _builtFrom;
 
     /// <summary>Static snapshot — used by tests and anywhere a live config isn't wired up. Never re-reads <paramref name="config"/>.</summary>
     public FormatEnricher(VesselConfig config, ILogger<FormatEnricher>? logger = null)
@@ -35,10 +42,12 @@ public sealed class FormatEnricher
     {
         _adapters = adapters;
         _logger = logger;
-        RebuildFrom(config);
+        // No store to track: a fixed revision that never advances (_configStore stays null,
+        // so EnsureCurrent is a no-op).
+        RebuildFrom(new ConfigSnapshot(config, 0));
     }
 
-    /// <summary>D7 — live: re-derives <see cref="_backendTypes"/>/<see cref="_slowTtftMs"/> whenever <paramref name="configStore"/>'s version advances.</summary>
+    /// <summary>D7 — live: re-derives <see cref="_backendTypes"/>/<see cref="_slowTtftMs"/> whenever <paramref name="configStore"/> publishes a new snapshot.</summary>
     public FormatEnricher(ConfigStore configStore, ILogger<FormatEnricher>? logger = null)
         : this(configStore, DefaultAdapters(), logger)
     {
@@ -52,26 +61,34 @@ public sealed class FormatEnricher
         _adapters = adapters;
         _logger = logger;
         _configStore = configStore;
-        RebuildFrom(configStore.Current);
-        _builtVersion = configStore.Version;
+        RebuildFrom(configStore.Snapshot);
     }
 
-    private void RebuildFrom(VesselConfig config)
+    private void RebuildFrom(ConfigSnapshot snapshot)
     {
+        VesselConfig config = snapshot.Config;
         _slowTtftMs = config.Warnings.SlowTtftMs;
+        _maxDecodedBytes = CaptureBudget.MaxDecodedBytes(config);
         _backendTypes = config.Backends.ToDictionary(
             kvp => kvp.Key, kvp => kvp.Value.Type, StringComparer.OrdinalIgnoreCase);
+        _builtFrom = snapshot;
     }
 
     private void EnsureCurrent()
     {
-        if (_configStore is null || _builtVersion == _configStore.Version)
+        if (_configStore is null)
         {
             return;
         }
 
-        RebuildFrom(_configStore.Current);
-        _builtVersion = _configStore.Version;
+        // One read; the config that gets derived is the same one the cache key records.
+        ConfigSnapshot snapshot = _configStore.Snapshot;
+        if (ReferenceEquals(_builtFrom, snapshot))
+        {
+            return;
+        }
+
+        RebuildFrom(snapshot);
     }
 
     public static Dictionary<string, IFormatAdapter> DefaultAdapters() => new()
@@ -99,33 +116,39 @@ public sealed class FormatEnricher
 
     private EnrichedRecord EnrichCore(CaptureRecord record)
     {
+        // D01/phase-2 D3: decoding is a *scratch* step for parsing and FTS only. The record's
+        // bodies stay exactly as they came off the wire — an earlier revision wrote the
+        // decoded bytes back here so the detail pane would show JSON, which silently traded
+        // wire fidelity for display convenience; the detail endpoint now decodes for display
+        // itself (under the same R05 budget), so storage doesn't have to lie.
         BodyDecoder.Result request = BodyDecoder.Decode(
-            record.RequestBody, HeaderValue(record.RequestHeadersJson, "Content-Encoding"));
+            record.RequestBody, HeaderValue(record.RequestHeadersJson, "Content-Encoding"), _maxDecodedBytes);
         byte[]? responseWire = record.Streamed ? record.ResponseRaw : record.ResponseBody;
         BodyDecoder.Result response = BodyDecoder.Decode(
-            responseWire, HeaderValue(record.ResponseHeadersJson, "Content-Encoding"));
-
-        // Store the decoded bytes, not the wire-compressed ones, so a compressed backend
-        // response (OpenAI/Cloudflare routinely br- or gzip-encodes) reads as JSON instead
-        // of tripping SqliteReadStore's UTF-8 check and rendering as opaque base64. This is
-        // Vessel's own captured copy only — ResponseTeeStream already forwarded the original
-        // compressed bytes to the caller untouched, and response_raw (the streamed "Raw
-        // stream" toggle, §5) is deliberately left wire-accurate here.
-        if (!record.Streamed && response.Status == BodyDecoder.DecodeStatus.Ok && response.Bytes is not null)
-        {
-            record = record with { ResponseBody = response.Bytes };
-        }
+            responseWire, HeaderValue(record.ResponseHeadersJson, "Content-Encoding"), _maxDecodedBytes);
 
         if (request.Status == BodyDecoder.DecodeStatus.Failed || response.Status == BodyDecoder.DecodeStatus.Failed)
         {
             return Raw(record, parseError: true);
         }
 
+        // R05 — a decode that hit the budget yields a prefix, which is the same situation as
+        // a capture that hit maxBodyMb: phase-2 D3/D4 say parse as far as it goes and flag
+        // the row, and R08 says don't discard content that genuinely arrived. So it flows on
+        // (adapters are truncation-tolerant by design) carrying `body_truncated`. A prefix of
+        // a non-streamed JSON document simply fails to parse, so nothing wrong is extracted.
+        bool decodeTruncated = request.Status == BodyDecoder.DecodeStatus.TruncatedDecode
+            || response.Status == BodyDecoder.DecodeStatus.TruncatedDecode;
+
         JsonNode? requestNode = request.Bytes is null ? null : JsonUtil.Parse(Utf8(request.Bytes));
 
-        // Error rows enrich from the request side alone — the "response" is Vessel's own
-        // error body or absent, never a real backend response (D2).
-        bool hasRealResponse = record.Error is null;
+        // R08 — "is there a real upstream response to read", not "did the request succeed".
+        // Treating every proxy error as no-response threw away genuinely received content:
+        // a disconnect *after* streamed tokens arrived lost its partial reassembly,
+        // response_text and FTS row, contradicting phase-2 D4's partial-stream behaviour.
+        // A pre-response failure (unreachable, timeout, unknown backend) still has nothing
+        // to parse — there the buffer holds Vessel's own error body, flagged at the source.
+        bool hasRealResponse = !record.ResponseAuthoredByVessel && responseWire is { Length: > 0 };
         string? responseText = hasRealResponse && response.Bytes is not null ? Utf8(response.Bytes) : null;
 
         string format = FormatDetector.Detect(
@@ -133,7 +156,7 @@ public sealed class FormatEnricher
 
         if (format == FormatNames.Raw)
         {
-            return Raw(record, parseError: false);
+            return Raw(record, parseError: false, decodeTruncated);
         }
 
         AdapterResult result = _adapters[format].Parse(new AdapterInput(requestNode, responseText, record.Streamed));
@@ -161,7 +184,7 @@ public sealed class FormatEnricher
 
         double? tokPerSec = TokPerSec(record, result, tokensOut);
         string? warningsJson = SerializeWarnings(
-            BuildWarnings(record, result.Warnings, result.StopReason, estimated));
+            BuildWarnings(record, result.Warnings, result.StopReason, estimated, decodeTruncated));
 
         return new EnrichedRecord(
             record, format, result.Model, tokPerSec,
@@ -172,11 +195,11 @@ public sealed class FormatEnricher
 
     /// <summary>
     /// Ollama's exact figure when present; otherwise wire timing for streamed rows (D6).
-    /// A non-streamed response has no wire timing worth using — the backend computes the
-    /// whole thing before sending any of it, so first/last byte land together at the very
-    /// end and a first-to-last-byte span would measure ~0, not generation time — so it
-    /// falls back to total duration instead. Coarser (it folds in network/queueing time
-    /// no streamed figure would), but still a real approximation rather than nothing.
+    /// A non-streamed non-Ollama row has no generation-rate signal at all: the backend
+    /// computes the whole thing before sending any of it, so the only span available is
+    /// total request duration — which mixes in queueing, prefill, and network time and
+    /// is not the same quantity as tokens/sec (D02). It stays null rather than reporting
+    /// a different metric under the same name.
     /// </summary>
     private static double? TokPerSec(CaptureRecord record, AdapterResult result, long? tokensOut)
     {
@@ -185,36 +208,31 @@ public sealed class FormatEnricher
             return exact;
         }
 
+        if (!record.Streamed)
+        {
+            return null;
+        }
+
         if (tokensOut is not long tokens || tokens <= 0)
         {
             return null;
         }
 
-        if (record.Streamed)
+        if (record.FirstResponseByteMs is double first && record.LastResponseByteMs is double last)
         {
-            if (record.FirstResponseByteMs is double first && record.LastResponseByteMs is double last)
+            double spanMs = last - first;
+            if (spanMs >= 100)
             {
-                double spanMs = last - first;
-                if (spanMs >= 100)
-                {
-                    return tokens / (spanMs / 1000.0);
-                }
+                return tokens / (spanMs / 1000.0);
             }
-
-            return null;
-        }
-
-        if (record.DurationMs is double duration && duration >= 100)
-        {
-            return tokens / (duration / 1000.0);
         }
 
         return null;
     }
 
-    private EnrichedRecord Raw(CaptureRecord record, bool parseError)
+    private EnrichedRecord Raw(CaptureRecord record, bool parseError, bool decodeTruncated = false)
     {
-        var warnings = BuildWarnings(record, [], stopReason: null, estimated: false);
+        var warnings = BuildWarnings(record, [], stopReason: null, estimated: false, decodeTruncated);
         if (parseError)
         {
             warnings.Add(Warnings.ParseError);
@@ -228,7 +246,8 @@ public sealed class FormatEnricher
     }
 
     private List<string> BuildWarnings(
-        CaptureRecord record, IReadOnlyList<string> adapterWarnings, string? stopReason, bool estimated)
+        CaptureRecord record, IReadOnlyList<string> adapterWarnings, string? stopReason, bool estimated,
+        bool decodeTruncated = false)
     {
         var warnings = new List<string>(adapterWarnings);
 
@@ -257,7 +276,9 @@ public sealed class FormatEnricher
             warnings.Add(Warnings.HttpError);
         }
 
-        if (record.Truncated)
+        // R05: a decoded body cut off at the budget is "the body was cut off" to the user,
+        // exactly like a wire capture that hit maxBodyMb — same warning, one concept.
+        if (record.Truncated || decodeTruncated)
         {
             warnings.Add(Warnings.BodyTruncated);
         }

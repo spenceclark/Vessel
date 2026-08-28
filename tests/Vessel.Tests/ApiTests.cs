@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using Xunit;
 
@@ -152,8 +153,19 @@ public class ApiTests
         JsonElement stats = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/stats", CT); // default "current"
         Assert.Equal(4, stats.GetProperty("total").GetInt64());
         Assert.Equal(1, stats.GetProperty("failed").GetInt64());
-        Assert.Equal(expectedAvgDuration, stats.GetProperty("avgDurationMs").GetDouble(), precision: 3);
-        Assert.Equal(streamedRow.TtftMs!.Value, stats.GetProperty("avgTtftMs").GetDouble(), precision: 3); // the only streamed row
+        // R20: a fixed-decimal-place comparison here rounds two independently-computed
+        // floating averages (SQL AVG vs. this LINQ re-aggregation of the same live-measured
+        // values) before comparing, so ordinary summation-order noise near a rounding
+        // boundary reads as a mismatch. A tolerance well above float noise but far below "a
+        // real latency discrepancy" keeps this an integration check on live timing, not a
+        // deterministic-precision check — Stats_SeededDurations_AverageMatchesExactly above
+        // is that.
+        Assert.True(
+            Math.Abs(stats.GetProperty("avgDurationMs").GetDouble() - expectedAvgDuration) < 0.001,
+            $"expected avgDurationMs near {expectedAvgDuration:R}, got {stats.GetProperty("avgDurationMs").GetDouble():R}");
+        Assert.True(
+            Math.Abs(stats.GetProperty("avgTtftMs").GetDouble() - streamedRow.TtftMs!.Value) < 0.001,
+            $"expected avgTtftMs near {streamedRow.TtftMs.Value:R}, got {stats.GetProperty("avgTtftMs").GetDouble():R}"); // the only streamed row
         // None of these 4 rows (echo/sse/unknown-backend) carry token data — the
         // null-safe-to-0 default (not absent, not null): a session with zero token
         // data is a genuine zero, not "not measured" (ui-spec.md §9.1).
@@ -182,6 +194,119 @@ public class ApiTests
 
         JsonElement oldStats = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/stats?session={originalSessionId}", CT);
         Assert.Equal(4, oldStats.GetProperty("total").GetInt64());
+    }
+
+    // R20 — the review reproduced an intermittent failure of the aggregate assertion above:
+    // comparing SQLite's AVG(duration_ms) against a LINQ re-aggregation of the *same*
+    // live-measured stored values landed on opposite sides of a 3-decimal rounding boundary
+    // (18.820500000000003 vs 18.820499999999999 — ~4e-15 apart, ordinary floating-point
+    // summation-order noise between two independent aggregation algorithms). This test seeds
+    // exact, known durations directly into the store (bypassing the writer/proxy entirely,
+    // so there is no live timing to vary run to run) and compares against a value computed
+    // from those same literal seed constants — deterministic by construction, not merely
+    // low-probability. The seeds deliberately don't divide evenly (600.7/3 has more binary
+    // fractional digits than 3 decimal places can represent exactly) to keep exercising the
+    // precision this coverage exists for; the comparison itself just no longer rounds both
+    // sides to a fixed decimal place first, which is what turned harmless float noise into a
+    // hard failure.
+    [Fact]
+    public async Task Stats_SeededDurations_AverageMatchesExactly()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        double[] seedDurations = [100.1, 200.2, 300.4];
+        for (int i = 0; i < seedDurations.Length; i++)
+        {
+            CaptureDb.SeedRow(vessel.DbPath, $"2026-08-27T00:00:0{i}.0000000Z", seedDurations[i]);
+        }
+
+        double expectedAvg = seedDurations.Average();
+
+        JsonElement stats = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/stats?session=all", CT);
+        Assert.Equal(3, stats.GetProperty("total").GetInt64());
+        double actualAvg = stats.GetProperty("avgDurationMs").GetDouble();
+        Assert.True(
+            Math.Abs(actualAvg - expectedAvg) < 1e-9,
+            $"expected avgDurationMs {expectedAvg:R} but got {actualAvg:R} (diff {Math.Abs(actualAvg - expectedAvg):R})");
+    }
+
+    // D01 — storage stays wire-true (phase-2 D3), so the detail endpoint is what makes a
+    // compressed body readable. Both halves matter: the stored blob is still the gzip bytes,
+    // and the API hands back decoded text.
+    [Fact]
+    public async Task Detail_CompressedBody_StoredWireTrue_DecodedForDisplay()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        // A chat-shaped request so format detection has something to sniff (the path is
+        // deliberately non-standard — this is about the compressed *response* decoding).
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{vessel.BaseUrl}/gzip")
+        {
+            Content = new StringContent(
+                """{"model":"gzip-model","messages":[{"role":"user","content":"hi"}]}""",
+                Encoding.UTF8,
+                "application/json"),
+        };
+        using HttpResponseMessage resp = await client.SendAsync(request, CT);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        await resp.Content.ReadAsByteArrayAsync(CT);
+
+        await CaptureDb.WaitUntil(vessel.DbPath, rows => rows.Count, count => count >= 1);
+        CapturedRow row = CaptureDb.Query(vessel.DbPath).Single(r => r.Path.StartsWith("/gzip"));
+
+        // Wire-true storage: under the storage-level zstd, the bytes are still the gzip the
+        // backend sent (magic 1f 8b), not decoded JSON.
+        Assert.NotNull(row.ResponseBody);
+        byte[] stored = CaptureDb.Decompress(row.ResponseBody);
+        Assert.Equal(0x1f, stored[0]);
+        Assert.Equal(0x8b, stored[1]);
+
+        JsonElement detail = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/requests/{row.Id}", CT);
+        JsonElement body = detail.GetProperty("responseBody");
+        Assert.Contains("compressed hello", body.GetProperty("text").GetString());
+        // Nothing to flag: it fits the budget comfortably.
+        Assert.False(body.TryGetProperty("decodeTruncated", out JsonElement flag) && flag.GetBoolean());
+
+        // And the enricher parsed it from its own scratch decode, despite storage being wire bytes.
+        Assert.Equal("gzip-model", detail.GetProperty("model").GetString());
+        Assert.Equal(2, detail.GetProperty("tokensOut").GetInt64());
+    }
+
+    // R05 — a small wire body that expands past the capture budget must come back bounded
+    // and explicitly flagged, never silently presented as the whole document.
+    [Fact]
+    public async Task Detail_DecodeExceedingBudget_IsBoundedAndFlagged()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync(c => c.Capture.MaxBodyMb = 1);
+        using var client = new HttpClient();
+
+        using HttpResponseMessage resp = await client.GetAsync($"{vessel.BaseUrl}/gzip?bomb=1", CT);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        await resp.Content.ReadAsByteArrayAsync(CT);
+
+        await CaptureDb.WaitUntil(vessel.DbPath, rows => rows.Count, count => count >= 1);
+        CapturedRow row = CaptureDb.Query(vessel.DbPath).Single(r => r.Path.StartsWith("/gzip"));
+
+        // The wire body is tiny — the cap on captured bytes never noticed anything.
+        Assert.NotNull(row.ResponseBody);
+        Assert.True(row.ResponseBody!.Length < 64 * 1024, $"wire body should be small, was {row.ResponseBody.Length}");
+
+        JsonElement detail = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/requests/{row.Id}", CT);
+        JsonElement body = detail.GetProperty("responseBody");
+
+        Assert.True(body.GetProperty("decodeTruncated").GetBoolean(), "an over-budget decode must be flagged");
+
+        // Bounded to the budget rather than the 4 MB the stream wanted to expand to.
+        int shown = body.TryGetProperty("text", out JsonElement text)
+            ? Encoding.UTF8.GetByteCount(text.GetString()!)
+            : Convert.FromBase64String(body.GetProperty("base64").GetString()!).Length;
+        Assert.True(shown <= 1024 * 1024, $"decoded display body should be bounded by the 1 MB budget, was {shown}");
+
+        // The row itself carries the same fact the capture cap would have: the body is cut
+        // off (phase-2 D3 treats a truncated capture and a truncated decode alike).
+        Assert.Contains("body_truncated", row.WarningCodes);
     }
 
     // Post-Phase-4 addition (ui-spec.md §9.1 token-totals TODO, phase-3.md D3): the

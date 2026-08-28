@@ -62,6 +62,16 @@ public sealed class CaptureContext
     /// <summary>Proxy-level failure code, e.g. unknown_backend / upstream_unreachable / client_disconnect.</summary>
     public string? Error { get; set; }
 
+    /// <summary>
+    /// R08 — true when the bytes in <see cref="ResponseBuffer"/> are Vessel's own error body
+    /// rather than the backend's response. Both go through the response tee, so the buffer
+    /// alone can't tell them apart, and enrichment must not try to parse a Vessel error
+    /// document as a completion. Set only on the paths that write an error body for a
+    /// proxied request; a mid-stream failure leaves it false, because whatever arrived
+    /// before the failure really is upstream content.
+    /// </summary>
+    public bool ResponseAuthoredByVessel { get; set; }
+
     /// <summary>Set by <c>ProxyHandler</c> when it injected <c>stream_options.include_usage</c> (D11).</summary>
     public bool UsageInjected { get; set; }
 
@@ -169,7 +179,8 @@ public sealed class CaptureContext
             ResponseBody: streamed ? null : responseBytes,
             ResponseRaw: streamed ? responseBytes : null,
             Truncated: RequestBuffer.Truncated || ResponseBuffer.Truncated,
-            UsageInjected: UsageInjected);
+            UsageInjected: UsageInjected,
+            ResponseAuthoredByVessel: ResponseAuthoredByVessel);
     }
 
     /// <summary>

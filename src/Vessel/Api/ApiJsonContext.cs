@@ -22,6 +22,7 @@ namespace Vessel.Api;
 [JsonSerializable(typeof(FacetsResponse))]
 [JsonSerializable(typeof(ClearResponse))]
 [JsonSerializable(typeof(Vessel.Config.ConfigApplyResult))]
+[JsonSerializable(typeof(Vessel.Config.ConfigGetResult))]
 [JsonSerializable(typeof(JsonNode))]
 public sealed partial class ApiJsonContext : JsonSerializerContext;
 

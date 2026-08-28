@@ -1,0 +1,4 @@
+{"model":"qwen2.5:1.5b","message":{"role":"assistant","content":"","thinking":"Let me check "},"done":false}
+{"model":"qwen2.5:1.5b","message":{"role":"assistant","content":"","thinking":"the weather.","tool_calls":[{"function":{"name":"get_weather","arguments":{"city":"Paris"}}}]},"done":false}
+{"model":"qwen2.5:1.5b","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"get_time","arguments":{"city":"Paris"}}}]},"done":false}
+{"model":"qwen2.5:1.5b","message":{"role":"assistant","content":""},"done_reason":"stop","done":true,"total_duration":500000000,"load_duration":30000000,"prompt_eval_count":15,"prompt_eval_duration":100000000,"eval_count":8,"eval_duration":80000000}

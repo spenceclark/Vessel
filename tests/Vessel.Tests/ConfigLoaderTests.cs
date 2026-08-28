@@ -173,6 +173,94 @@ public class ConfigLoaderTests : IDisposable
         Assert.Contains(expectedInMessage, ex.Message);
     }
 
+    // R15: a null-shaped section deserializes fine despite the non-nullable C# declaration
+    // (JSON `null` overrides the property default) — Validate must reject it with a
+    // ConfigException, not let the null reach a member access and NullReferenceException.
+    [Theory]
+    [InlineData(
+        """{ "defaultBackend": "ollama", "backends": null }""",
+        "backends")]
+    [InlineData(
+        """{ "defaultBackend": "ollama", "backends": { "ollama": null } }""",
+        "backend 'ollama' is null")]
+    [InlineData(
+        """{ "defaultBackend": "ollama", "backends": { "ollama": { "baseUrl": "http://localhost:11434" } }, "retention": null }""",
+        "retention is null")]
+    [InlineData(
+        """{ "defaultBackend": "ollama", "backends": { "ollama": { "baseUrl": "http://localhost:11434" } }, "capture": null }""",
+        "capture is null")]
+    [InlineData(
+        """{ "defaultBackend": "ollama", "backends": { "ollama": { "baseUrl": "http://localhost:11434" } }, "warnings": null }""",
+        "warnings is null")]
+    [InlineData(
+        """{ "defaultBackend": "ollama", "backends": { "ollama": { "baseUrl": "http://localhost:11434" } }, "timeouts": null }""",
+        "timeouts is null")]
+    [InlineData(
+        """{ "defaultBackend": "ollama", "backends": { "ollama": { "baseUrl": "http://localhost:11434" } }, "listen": null }""",
+        "listen")]
+    public void NullSection_ThrowsConfigException(string body, string expectedInMessage)
+    {
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, body);
+
+        var ex = Assert.Throws<ConfigException>(() => ConfigLoader.LoadOrCreate(path));
+        Assert.Contains(expectedInMessage, ex.Message);
+    }
+
+    // R21: a save that fails partway must never destroy the last valid config file — the
+    // temp-file-then-replace approach means a readonly destination fails the *replace*
+    // step, after the temp file already holds the new content, so the original is
+    // untouched and only the (cleaned-up) temp file is affected.
+    [Fact]
+    public void Save_DestinationReadOnly_ThrowsAndLeavesOriginalFileIntact()
+    {
+        string path = PathFor("vessel.json");
+        VesselConfig original = CreateDefault();
+        ConfigLoader.Save(path, original);
+        string originalContent = File.ReadAllText(path);
+
+        File.SetAttributes(path, FileAttributes.ReadOnly);
+        try
+        {
+            VesselConfig changed = CreateDefault();
+            changed.DefaultBackend = "changed";
+            changed.Backends["changed"] = new BackendConfig { BaseUrl = "http://localhost:9" };
+
+            Assert.Throws<ConfigException>(() => ConfigLoader.Save(path, changed));
+
+            Assert.Equal(originalContent, File.ReadAllText(path));
+
+            // No orphaned temp file left behind in the directory.
+            string[] leftovers = Directory.GetFiles(_dir, ".vessel.json.tmp-*");
+            Assert.Empty(leftovers);
+        }
+        finally
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+        }
+    }
+
+    [Fact]
+    public void Save_Succeeds_NoLeftoverTempFile()
+    {
+        string path = PathFor("vessel.json");
+        ConfigLoader.Save(path, CreateDefault());
+
+        string[] entries = Directory.GetFiles(_dir);
+        Assert.Single(entries);
+        Assert.Equal(path, entries[0]);
+    }
+
+    private static VesselConfig CreateDefault() => new()
+    {
+        Listen = "127.0.0.1:4550",
+        DefaultBackend = "ollama",
+        Backends = new Dictionary<string, BackendConfig>
+        {
+            ["ollama"] = new() { BaseUrl = "http://localhost:11434", Type = "ollama" },
+        },
+    };
+
     [Fact]
     public void CaseInsensitiveDefaultBackendName_IsAccepted()
     {

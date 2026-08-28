@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Vessel.Capture;
+using Vessel.Config;
 using Vessel.Storage;
 
 namespace Vessel.Api;
@@ -85,7 +86,21 @@ public static class RequestsEndpoints
         var channel = context.RequestServices.GetRequiredService<CaptureChannel>();
         var completion = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         channel.Enqueue(new ClearCommand(beforeIso, completion));
-        int deleted = await completion.Task;
+
+        int deleted;
+        try
+        {
+            // R06 — bounded: the writer either runs this or fails it. Before, a give-up left
+            // this awaiting a completion nobody would resolve, and HTTP cancellation didn't
+            // bound the wait either.
+            deleted = await completion.Task.WaitAsync(context.RequestAborted);
+        }
+        catch (CaptureStoppedException ex)
+        {
+            await VesselErrors.Write(
+                context, StatusCodes.Status503ServiceUnavailable, VesselErrors.CaptureStopped, ex.Message);
+            return;
+        }
 
         context.Response.ContentType = "application/json; charset=utf-8";
         await JsonSerializer.SerializeAsync(
@@ -105,8 +120,11 @@ public static class RequestsEndpoints
         }
 
         var store = context.RequestServices.GetRequiredService<SqliteReadStore>();
+        var configStore = context.RequestServices.GetRequiredService<ConfigStore>();
 
-        RequestDetail? detail = store.GetDetail(id);
+        // D01/R05: bodies are stored wire-true, so the display decode happens here, bounded
+        // by the same capture budget the writer honours.
+        RequestDetail? detail = store.GetDetail(id, CaptureBudget.MaxDecodedBytes(configStore.Current));
         if (detail is null)
         {
             await VesselErrors.Write(context, StatusCodes.Status404NotFound, VesselErrors.NotFound, $"no such request: {id}");

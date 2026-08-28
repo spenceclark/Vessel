@@ -38,7 +38,21 @@ public static class SessionsEndpoints
         // D4 — the insert runs on the writer thread; this handler never touches SQLite directly.
         var completion = new TaskCompletionSource<SessionInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
         channel.Enqueue(new CreateSessionCommand(name, completion));
-        SessionInfo info = await completion.Task;
+
+        SessionInfo info;
+        try
+        {
+            // R06 — see the clear endpoint: bounded by the writer's terminal state and by
+            // client cancellation, never an unbounded await.
+            info = await completion.Task.WaitAsync(context.RequestAborted);
+        }
+        catch (CaptureStoppedException ex)
+        {
+            await VesselErrors.Write(
+                context, StatusCodes.Status503ServiceUnavailable, VesselErrors.CaptureStopped, ex.Message);
+            return;
+        }
+
         currentSession.Set(info.Id);
 
         context.Response.StatusCode = StatusCodes.Status201Created;
