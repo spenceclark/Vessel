@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Http.Features;
 using Vessel.Api;
@@ -83,19 +83,38 @@ public sealed class ProxyHandler
 
         RouteDecision decision = RouteResolver.Resolve(context.Request.Path, context.Request.Headers, backends);
 
-        // D5 — as early as backend/tags are known, before any forwarding work begins.
-        _captureEvents.Started(
-            capture.Seq, capture.StartedAtIso, capture.SessionId, context.Request.Method,
+        // D5 — as early as backend/tags are known, before any forwarding work begins. This
+        // allocates the seq *and* registers it as in-flight in one step (I0b(1)).
+        capture.Register(
+            context.Request.Method,
             decision.ForwardPath.Value + context.Request.QueryString.Value,
             decision.Backend?.Name ?? decision.RequestedName ?? "", decision.Tags);
 
-        // The request tee: request bytes observed as YARP reads them upstream. For
-        // injectStreamUsage-eligible backends the body is prepared specially (D11);
-        // otherwise it is teed as-is.
-        await PrepareRequestBody(context, capture, decision, maxBodyBytes);
-
+        // R26/I1 — everything after registration runs inside the guarded span, so "registered →
+        // terminal" holds for *every* exit. Request preparation used to sit above this try: with
+        // injectStreamUsage it reads the request body, and a client that disconnected mid-upload
+        // threw straight past the finalizer — no record, no `completed`, and the seq stranded in
+        // the authoritative active set forever (the viewer showed it running).
         try
         {
+            // The request tee: request bytes observed as YARP reads them upstream. For
+            // injectStreamUsage-eligible backends the body is prepared specially (D11);
+            // otherwise it is teed as-is.
+            try
+            {
+                await PrepareRequestBody(context, capture, decision, maxBodyBytes);
+            }
+            catch (Exception ex) when (ex is IOException or OperationCanceledException)
+            {
+                // The client went away while we were reading its body. Same policy as every
+                // other client-side failure below: mark the row and fall through to the
+                // finalizer, which still enqueues it and still ends the lifecycle. Nothing can
+                // be forwarded and nobody is listening for a response.
+                capture.Error = VesselErrors.ClientDisconnect;
+                _logger.LogDebug("client disconnected while reading the request body: {Error}", ex.Message);
+                return;
+            }
+
             if (decision.Backend is null)
             {
                 capture.Error = VesselErrors.UnknownBackend;
@@ -128,7 +147,7 @@ public sealed class ProxyHandler
             // inside BuildRecord, so plaintext secrets never reach the channel.
             //
             // R25/H0b(3) — "registered → terminal" is owned here, at the registration site.
-            // `Started` (above) put this seq in the hub's active set; the writer normally
+            // `Register` (above) put this seq in the hub's active set; the writer normally
             // removes it via `completed`. But when admission is closed (the writer gave up),
             // the capture is dropped and the writer will never emit `completed` for it, so the
             // seq would leak in the active set and the viewer would show it as forever-running.

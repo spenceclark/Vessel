@@ -150,6 +150,28 @@ export interface ActiveRequestsResponse {
   activeSeqs: number[]
   newestCompletedSeq: number
   serverRunId: string
+  /** I0a — the latest clear this run performed, or null if none; see {@link ClearState}. */
+  clear: ClearState | null
+}
+
+/**
+ * I0a/R23 — one clear as the server describes it: a monotonic version plus the predicate it
+ * actually deleted by. The same shape arrives in-band on the `cleared` SSE frame and on
+ * `GET /active`, so a client that missed the frame (bounded drop-oldest queue, reconnect)
+ * recovers the identical deletion state by comparing versions. Versions are per run: they
+ * reset when the process does, so they are only comparable within one `serverRunId`.
+ */
+export interface ClearState {
+  version: number
+  scope: 'all' | 'before'
+  /** The clear-before cutoff; null for a clear-all. */
+  beforeTs: string | null
+  /**
+   * The largest row id that existed when a clear-all ran (0 for clear-before): every deleted
+   * row satisfies `id <= boundaryId`. A necessary condition, never a sufficient one — SQLite
+   * reuses ids once a clear-all empties the table, so a fresh row can sit below the boundary.
+   */
+  boundaryId: number
 }
 
 export interface BackendConfigDto {
@@ -219,11 +241,10 @@ export interface HelloEvent {
 }
 
 /**
- * H0a/R23 — the in-band clear notification, ordered on the SSE stream against completions. On
- * receipt the client purges buffered + listed rows matching the server's own predicate (`all`,
- * or `startedAt < beforeTs`); completions received after it are post-clear by construction.
+ * H0a/R23/I0a — the in-band clear notification, ordered on the SSE stream against completions.
+ * On receipt the client purges buffered + listed rows matching the server's own predicate; the
+ * completions received after it are post-clear by construction. Identical in shape to the
+ * {@link ClearState} `GET /active` reports, so the fast path and the recovery path describe one
+ * clear the same way and the version tells them apart from a repeat.
  */
-export interface ClearedEvent {
-  scope: 'all' | 'before'
-  beforeTs: string | null
-}
+export type ClearedEvent = ClearState

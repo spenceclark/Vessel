@@ -21,7 +21,8 @@ public static class ActiveRequestsEndpoint
         context.Response.ContentType = "application/json; charset=utf-8";
         return JsonSerializer.SerializeAsync(
             context.Response.Body,
-            new ActiveRequestsPayload(active.ActiveSeqs, active.NewestCompletedSeq, active.ServerRunId),
+            new ActiveRequestsPayload(
+                active.ActiveSeqs, active.NewestCompletedSeq, active.ServerRunId, active.Clear),
             ApiJsonContext.Default.ActiveRequestsPayload,
             context.RequestAborted);
     }
@@ -31,5 +32,10 @@ public static class ActiveRequestsEndpoint
 /// Wire shape for <see cref="ActiveRequestsEndpoint"/> (mirrored in <c>types.ts</c>).
 /// <paramref name="ServerRunId"/> (H0b(1)) lets reconciliation reject a snapshot from a
 /// different Vessel run rather than mis-comparing this process's seqs against another's.
+/// <paramref name="Clear"/> (I0a) is the latest clear this run performed — version plus the
+/// predicate it deleted by, or null if none — so recovery re-applies a clear whose in-band
+/// <c>cleared</c> frame the subscriber's bounded queue dropped. Deletion state therefore never
+/// depends on that frame surviving a deliberately lossy feed.
 /// </summary>
-public sealed record ActiveRequestsPayload(long[] ActiveSeqs, long NewestCompletedSeq, string ServerRunId);
+public sealed record ActiveRequestsPayload(
+    long[] ActiveSeqs, long NewestCompletedSeq, string ServerRunId, ClearState? Clear);

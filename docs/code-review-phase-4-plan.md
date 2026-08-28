@@ -714,9 +714,12 @@ deviations:
 - **F2 (R11).** *Superseded in part by Batch H (H0b): the re-re-review found this snapshot was
   not coherent (`activeSeqs` and the watermark read separately) and lacked server identity, so
   it wrongly expired requests under concurrent load and across a restart. H2 put both fields
-  and the fan-out under one lock and added `serverRunId` (hello/active/status). The
-  server-authoritative direction below stands; the specifics are corrected there, not rewritten
-  here.* Reconciliation is now server-authoritative, not history-derived. The hub
+  and the fan-out under one lock and added `serverRunId` (hello/active/status). **Refined
+  again by Batch I (I0b):** the boundary rule below was still unsound while a `seq` could
+  exist before it was registered (allocation moved inside `Register`, I2), and H2's run-id
+  guard treated a stale `/active` response as restart evidence, which erased the current run's
+  live rows — a mismatched response is now discarded instead (I2). The server-authoritative
+  direction below stands; the specifics are corrected there, not rewritten here.* Reconciliation is now server-authoritative, not history-derived. The hub
   tracks a live in-flight set (`_active`, added on `started`, removed on `completed`,
   independent of subscribers) plus `_newestCompletedSeq`, exposed at a new
   `GET /vessel/api/active` → `{ activeSeqs, newestCompletedSeq }`. The client removes any
@@ -740,8 +743,15 @@ deviations:
   streams that need not arrive in DB-operation order, and a clear-before boundary can't be an
   id (ids follow persistence order, not start time). H3 replaced the whole scheme with an
   in-band `cleared` event ordered against completions on the one SSE stream, and retired
-  `boundaryId`/`ClearOutcome`. The description below is the retired design, kept for the
-  record.* Clears and completion-merging share a generation model owned by
+  `boundaryId`/`ClearOutcome`. **Extended by Batch I (I0a):** H3 was correct but incomplete —
+  it made correctness depend on the `cleared` frame surviving a deliberately lossy feed, and
+  purged only what was in the cache/buffer at that instant, so a pre-clear REST snapshot
+  settling later restored deleted rows. The clear is now versioned server state reported on
+  `GET /active` as well, re-applied at fetch settlement (I3). Note that a *bounded* id
+  boundary returns there — `boundaryId` for clear-all only, where it is a valid necessary
+  condition — which is not a return of this design: it is never the ack's, never used for
+  clear-before, and never sufficient on its own. The description below is the retired design,
+  kept for the record.* Clears and completion-merging share a generation model owned by
   `useLiveHistory`. A clear bumps a generation and records a deletion predicate; a buffered
   completion is stamped at buffer time and discarded at drain if a later clear removed its
   row (every row for clear-all; ids ≤ boundary for clear-before). The boundary is a new
@@ -998,6 +1008,177 @@ references, not code.
 **Exit:** the re-re-review's §"conditions" items on R11/R23/R24/R25 all demonstrated;
 no new lifecycle mechanism invented outside H0.
 
+---
+
+# Fourth-round remediation (Batch I)
+
+> Source: round-four review (same doc, updated in place). R24/R25 closed; H0's
+> mechanisms confirmed implemented and sound — the residue is three ordering races at
+> their edges (R11 A/B, R23 A/B, R26) plus the still-unconfirmed 10k-tab crash, now
+> observed in two separate rounds.
+
+## I0 — Design corrections
+
+> **Status: ALL THREE APPROVED, 2026-08-28.** I0a/I0b/I0c are the decided designs —
+> implementing agents treat this table as authoritative; I5's truth pass records them
+> into the owning docs. I0c still requires I4's profiling before it lands.
+
+| # | Correction | Design |
+|---|---|---|
+| I0a | **R23: clears become versioned, recoverable state.** | The writer keeps a monotonic clear version with each clear's predicate — `boundaryId` for clear-all (id-prefix is valid there: every then-existing row has id ≤ max), `beforeTs` for clear-before (matching the actual DELETE). The recovery/active endpoint reports the latest clear version + predicate. Client: re-apply current predicates to the list cache **whenever any list fetch settles** (idempotent — catches TanStack reusing a pre-clear in-flight fetch) and to the completion buffer on drain; on gap/reconnect recovery, apply any missed clear versions. Correctness never depends on a `cleared` frame surviving the lossy feed; the in-band frame remains the fast path. |
+| I0b | **R11: evidence validity windows.** | (1) Server: seq allocation moves inside `Register`, under the publish lock — "seq exists ⇒ registered" becomes atomic, making the review's allocate-pause-snapshot-register interleaving unrepresentable. (2) Client: a recovery response is applied only when its run id AND its issuing request's run id both equal the current run — a mismatched response is **discarded**, never treated as restart evidence (only the SSE hello signals a run change). |
+| I0c | **Crash mitigation: coalesced event application.** | SSE events append to a queue flushed into React state on an interval (~10 Hz) instead of one state update per event — at burst rates (~4k events/s observed) per-event updates are a main-thread/OOM shape independent of ordering correctness. Imperceptible latency for a monitoring UI; in-flight timers already tick on their own shared interval. Ships with I4's profiling so the fix is confirmed against a measured cause, not assumed. |
+
+## Batch I — Opus: ordering edges + crash diagnosis (one session)
+
+- [x] **I1 · R26 — Guarded span covers preparation.** The try/finally that guarantees
+  registered→terminal starts immediately after `Register`; `PrepareRequestBody`
+  moves inside it. An abort during the injectStreamUsage body read produces the
+  intended captured record (`client_disconnect`) and a terminal registry transition.
+  Test: the review's real-HTTP repro (Content-Length 4096, JSON prefix, TCP close →
+  seq leaves active, row lands with the error) as an integration test.
+- [x] **I2 · R11 — I0b verbatim.** Tests: the stale-run-response case (pending run-A
+  recovery + run-B hello + B's started → A's response resolves → B's entry survives,
+  [1] not []); the allocation-race probe ported (now unrepresentable server-side);
+  restart and long-running cases still green.
+- [x] **I3 · R23 — I0a verbatim.** Tests: both review cases (held pre-clear initial
+  fetch resolving post-clear → []; dropped cleared frame + gap recovery + buffered
+  completion → []), plus legitimate post-clear completions and reused IDs surviving,
+  across initial-fetch and refetch settlement.
+- [x] **I4 — Crash diagnosis, then the gate.** Profile the 10k burst with the tab
+  connected (heap timeline + main-thread activity) *before* applying I0c; land I0c
+  against the measured cause (or the actual cause if it differs); then the full
+  burst gate: zero stuck rows, no reload, no crash, stats/list correct at the end.
+  If the crash persists after I0c with a profile in hand, stop and report — do not
+  iterate blindly.
+- [x] **I5 — Truth pass.** phase-3.md D3/D5 updated (clear-version contract, hello
+  semantics, seq-allocation note); this plan's F/H entries annotated as refined by
+  I0; review-round history kept legible rather than rewritten.
+
+**Exit:** all three findings' controlled-delivery tests ported and green; burst gate
+passed with a profile on record; suites green ×3.
+
+**Batch I landed 2026-08-29 — 271/271 backend green ×3, 67/67 frontend green ×3, `tsc -b` +
+`vite build` clean, lint unchanged at 6 warnings (baseline).** I0a, I0b and I0c were
+implemented as approved. Every new test was confirmed to *fail* against the pre-fix behaviour
+before being kept. Notes and deviations:
+
+- **I1 (R26).** `PrepareRequestBody` moved inside the handler's guarded span, with a narrow
+  `catch (IOException or OperationCanceledException)` around preparation alone that sets
+  `capture.Error = client_disconnect` and returns — the `finally` then enqueues the record and
+  ends the lifecycle exactly as on every other client-side failure. New integration test
+  `EventsTests.AbortedUsageInjectionUpload_LandsAsClientDisconnect_AndLeavesNoActiveEntry`
+  drives the review's repro over a raw socket (injectStreamUsage backend, `Content-Length:
+  4096`, JSON prefix, `LingerOption(true, 0)` reset mid-body) and asserts both halves: the
+  active set empties, and the row lands with `client_disconnect` and a null status. Against
+  the pre-fix placement it fails with `Assert.Empty() Failure … Collection: [1]` — the
+  review's stranded seq, reproduced. **Known limit, recorded rather than fixed:** the bytes
+  `ReadCapped` had already consumed when the abort hit are not captured (they live in a local
+  buffer, not the tee), so an aborted injectStreamUsage upload stores no request body. The
+  row, its error and the lifecycle are correct; body salvage on that path is a separate
+  change, not smuggled into this one.
+- **I2 (R11 / I0b).** (1) The `seq` counter moved from `CaptureContext` to `CaptureEvents`,
+  allocated inside `Register` under the publish lock — allocation *is* registration, so the
+  review's allocate-pause-snapshot-register interleaving is unrepresentable. `CaptureContext`
+  gained `Register(method, path, backend, tags)` and a private-set `Seq`, and now takes the
+  hub non-optionally. **Deviation worth recording:** `Register` takes the lock *twice* — once
+  to allocate + register, once to fan out — so the `started` JSON is still serialized outside
+  the lock (H2's zero-subscriber hot-path property). The split is safe in the only direction
+  that matters: a snapshot taken between them sees the seq active but no frame yet, never a
+  frame without the seq; and `completed` for that seq cannot overtake the frame, because the
+  writer publishes it only after the handler has enqueued the record.
+  (2) Client: `reconcile` records the run id its request was issued under and applies the
+  response only when that *and* the response's own run id still equal the connection's current
+  run; otherwise the response is discarded as evidence (the refetches still run, being
+  run-agnostic). The old "different run id ⇒ clear the whole in-flight map" branch is gone —
+  that was the bug. Tests: `EventsTests.Active_SnapshotStaysCoherent…` ported onto `Register`
+  (the odd/even parity now comes from the hub's own allocation order, asserted); frontend
+  `ignores a recovery response from an obsolete run instead of erasing the new run's requests`
+  (the review's order A: expects `[1]`, got `[]` before the fix); the restart,
+  long-running-survivor and above-boundary cases unchanged and green.
+- **I3 (R23 / I0a).** The hub keeps `ClearState {version, scope, beforeTs, boundaryId}` under
+  the publish lock; `ICaptureStore.Clear` returns `ClearResult(Deleted, BoundaryId)` with
+  `MAX(id)` read inside the delete's own transaction for a clear-all; the `cleared` frame and
+  `GET /active`'s new `clear` field carry the identical shape. The client records the latest
+  clear, purges by it on arrival, re-applies at fetch settlement and on buffer drain, and
+  learns a missed clear from `/active` during recovery. Two points to record:
+  - **Deviation — the re-application is armed, not permanent.** I0a says "whenever any list
+    fetch settles"; applied literally and indefinitely that is *not* idempotent, because a
+    clear-all empties the table and SQLite restarts row ids, so genuine post-clear rows sit
+    below `boundaryId` and would be purged forever — it breaks the reused-id survivor case I3
+    itself requires. It is therefore applied once more at the first quiescence after the clear
+    — by then every fetch whose snapshot could predate the clear has settled, and every later
+    response comes from a post-clear database — and then retired.
+  - **Addition — post-clear provenance.** Rows learned from a completion published *after* the
+    clear are exempt from the predicate (the wire order makes them post-clear by
+    construction). This is what keeps `boundaryId` a *necessary* condition without needing it
+    to be a sufficient one. The set is bounded: only rows that actually match the predicate
+    are recorded, and it resets on each clear.
+  - Tests: `purges a pre-clear list snapshot that settles after the clear` (review order A,
+    including the ack's `invalidateQueries` against an unsettled initial fetch) and `applies a
+    clear it never saw, from the version on /active, to the completion buffer` (review order
+    B: dropped frame → id gap → recovery). Both fail without their fix. The three existing H3
+    orderings plus a new `keeps a post-clear row reusing a cleared id across refetch
+    settlement` pin the survivors; disabling the provenance exemption fails two of them.
+    Backend: `Active_ReportsLatestClearVersionAndPredicate_WithoutAnySubscriber` — deliberately
+    with no subscriber attached, since that is exactly the client the frame never reached.
+- **I4 (crash diagnosis, then I0c, then the gate).** Profiled *before* changing anything, on a
+  real Vessel (Debug build, port 4550, an isolated temp config + DB in the session scratchpad —
+  the user's daily-driver `vessel.db` was never touched) against a fast local Node upstream
+  (20–80 ms), with the Vite dev UI open in the in-app Browser pane, connected live. An in-page
+  probe sampled the JS heap, `longtask` entries and timer drift every 250 ms and beaconed them
+  to a local collector, so the timeline survives the pane discarding its renderer.
+  **Measured cause, 10,000 requests at concurrency 24 (~1.3k SSE frames/s):** the heap climbs
+  55 → 110 MB as traffic lands, then **one 10,258 ms long task** with a 15,474 ms timer stall
+  while the heap explodes 76 MB → **3,107 MB** against a 4,096 MB limit; the renderer stopped
+  answering (screenshots and script evaluation timed out, then `Render frame was disposed`).
+  Server-side that same run was clean — 10,000/10,000 OK, active set empty, no log errors — so
+  this is purely the tab, and its shape (allocation plus a single blocking task, not ordering)
+  is what I0c predicted.
+  **I0c as landed:** frames are queued and applied on a ~100 ms window — one `setInFlightMap`
+  and one list-cache write per window (`mergeRows` replaced the per-row `mergeRow`; the R10
+  buffer drain uses it too). Order within a window is preserved exactly, and a `cleared`
+  mid-window still divides the completions it deletes from the ones it does not (rows queued
+  for merge earlier in the same window are filtered by the predicate, since they are not yet in
+  the cache for the purge to see). Pinned by `applies a burst of completions in one cache write
+  per window` (40 completions → 1 cache write; 40 before the change).
+  **Burst gate, after I0c, tab connected and visible throughout, never reloaded:** 10,000/10,000
+  OK, 0 failed; heap peaked at 184 MB and settled to 72 MB; worst long task **92 ms** (78 tasks,
+  4.5 s total blocking across a 255 s session); mid-burst the page rendered live in-flight rows
+  (20 `.pulse-dot`s) with the SSE connected and stats climbing in real time; at settle **0**
+  in-flight rows, `GET /active` empty, and the UI showed **53,000 requests / 0 failed**, matching
+  the store exactly, with 100 tag facets and the picker bounded (12 chips + "+88 more", R12).
+  No crash screen, no reload, no error in the Vessel log. 53,000 requests were driven through
+  the live tab across the session.
+  - **New wire contracts verified live** on the real app before the gate: `cleared` arrives as
+    `{"version":1,"scope":"all","beforeTs":null,"boundaryId":21}` at publish id 64, *after* the
+    deleted row's `completed` at id 63, and `GET /active` reports the same
+    `clear {version, scope, beforeTs, boundaryId}`.
+  - **Environment caveat (unchanged from Batches B/F/H).** While the Browser pane is hidden the
+    Electron renderer is throttled to 1 Hz and eventually discarded (`Render frame was
+    disposed`), and TanStack's `refetchInterval` pauses on a hidden document — which showed up
+    once as a stats bar reading 30,000 while the page's own `fetch` returned 40,000. Displaying
+    the pane rendered the correct 40,000 immediately. The gate figures above are all from
+    observations taken with `document.hidden === false`.
+- **I5 (truth pass).** `phase-3.md` D3's retired `boundaryId` ack entry struck through and
+  corrected; D5 gained the I0b(1) seq-allocation note, the versioned-clear contract (frame +
+  `/active`, with the necessary-not-sufficient reading of `boundaryId`), the "hello is the only
+  restart signal" rule, and `/active`'s new `clear` field; D6 gained the I0c coalescing note
+  with its measured numbers. In this plan, F2/F3 and H2/H3 are annotated in place as refined by
+  I0 — each round's reasoning is left standing and corrected where it was wrong, not rewritten.
+
+
+### Fourth-round closing conditions (§7 of code-review-phase-4.md)
+
+| # | Condition | Status | Where |
+| --- | --- | --- | --- |
+| 1 | Complete R11's response-freshness handling without deleting legitimate live entries | Met | I2 — a recovery response applies only while its own run id and its issuing request's run id both equal the current run; a mismatch is discarded, never read as a restart. Server-side, seq allocation moved inside `Register` under the publish lock, so the boundary rule is sound by construction. Restart / long-running / above-boundary controls unchanged and green |
+| 2 | Complete R23 across pending REST results, dropped clear events and buffer settlement, retaining the survivor/ID-reuse cases | Met | I3 — versioned clear state on the hub, reported by the `cleared` frame *and* `GET /active`; purged on arrival, re-applied at fetch settlement and buffer drain, learned from `/active` when the frame is lost. Both review orderings pinned; the three H3 orderings plus a new reused-id-across-refetch case still pass |
+| 3 | Fix R26 so cancellation during preparation cannot bypass lifecycle finalization | Met | I1 — `PrepareRequestBody` inside the guarded span; the raw-socket abort repro asserts an empty active set and a `client_disconnect` row (fails as `Collection: [1]` against the old placement) |
+| 4 | Keep all current tests passing and add these failing interaction cases; retain the round-three controls | Met | 271/271 backend ×3, 67/67 frontend ×3, `tsc -b` + `vite build` clean, lint at baseline (6). Every added case was confirmed red against the pre-fix behaviour; no existing assertion weakened |
+| 5 | Investigate the live-tab crash and demonstrate the 10k/100-tag gate without a reload or replacement tab; record any remaining environment limitation precisely | Met | I4 — cause measured before the fix (one 10.3 s task, heap 76 MB → 3.1 GB of a 4 GB limit, renderer unresponsive), I0c landed against it, gate re-run on the same document with the tab visible and connected: 10,000/10,000 OK, 0 stuck rows, worst task 92 ms, UI 53,000/0 failed matching the store. Pane-hidden throttling/disposal and TanStack's hidden-document `refetchInterval` pause recorded as the environment limits they are |
+| 6 | Correct stale API descriptions and acceptance claims in place | Met | I5 — `phase-3.md` D3 ack entry struck through, D5 given the seq-allocation, versioned-clear and hello-only-restart contracts plus `/active`'s `clear` field, D6 given the coalescing note; F2/F3 and H2/H3 annotated in place. The clean-publish claim is untouched by this batch and stays as Batch H left it — distinct from first-run/restart, which remains unverified |
+
 **Batch H landed 2026-08-28 — 269/269 backend green, 62/62 frontend green, `tsc -b` +
 `vite build` clean, lint unchanged at 6 warnings (baseline).** H0a and H0b were implemented
 verbatim; no lifecycle mechanism outside them. Notes and deviations:
@@ -1018,7 +1199,14 @@ verbatim; no lifecycle mechanism outside them. Notes and deviations:
   `CaptureWriterResilienceTests.WriterGiveUp_CompletesEveryDiscardedCaptureIdentity` (the drain
   path, with captures spilling from the failing batch into the drain). `TestVessel` gained a
   `Services` accessor and `TestCapture.Record` supports `with { Seq = … }` for these.
-- **H2 (R11).** `CaptureEvents.RunId` (a per-process GUID) rides on a new `hello` SSE frame
+- **H2 (R11).** *Refined by Batch I (I0b): both halves were sound but incomplete. (1) The
+  active set was coherent, yet a `seq` could still exist unregistered (allocated in the
+  `CaptureContext` constructor), so a snapshot could report a request neither active nor
+  unfinished — allocation now happens inside `CaptureEvents.Register`, under the publish
+  lock. (2) The `reconcile` guard below discarded the in-flight **map** when an `/active`
+  response's run id differed; that response is merely stale, and doing so erased the live
+  requests of the run actually connected. A mismatched response is now discarded instead,
+  and only `hello` signals a run change.* `CaptureEvents.RunId` (a per-process GUID) rides on a new `hello` SSE frame
   (the connection's first frame, deliberately **no `id:`** so it never moves the gap
   watermark), on `GET /active`, and on `GET /status`. The client (`useEvents` → `useLiveHistory`)
   discards its whole in-flight map on a run-id change and also guards `reconcile` against an
@@ -1035,7 +1223,12 @@ verbatim; no lifecycle mechanism outside them. Notes and deviations:
   in-flight rows from a prior run after a restart (run-id change)`). Two existing SSE tests
   (`Sse_StartedFirstTokenCompleted…`, `Sse_EveryFrameCarriesMonotonicEventId`) were taught to
   skip the new id-less `hello` frame rather than miscount it — no assertion weakened.
-- **H3 (R23).** The Batch F3 boundary/generation model is **retired**, not patched. The writer
+- **H3 (R23).** *Extended by Batch I (I0a): the in-band frame is right, but it was the
+  *only* carrier of deletion state on a feed that deliberately drops frames, and it purged
+  only what was already in the cache/buffer — so a dropped frame, or a pre-clear list
+  snapshot settling afterwards, restored deleted rows. The clear is now a versioned
+  predicate the hub keeps and `GET /active` reports, re-applied at fetch settlement.*
+  The Batch F3 boundary/generation model is **retired**, not patched. The writer
   publishes a `cleared {scope, beforeTs}` frame at clear-commit time under the publish lock, so
   a deleted row's `completed` always precedes `cleared` on the wire; `useLiveHistory` purges
   buffered + listed rows by the server's own predicate (`all`, or `startedAt < beforeTs`) and

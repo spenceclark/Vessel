@@ -1,4 +1,5 @@
-using System.Net;
+﻿using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
@@ -342,6 +343,57 @@ public class EventsTests
         Assert.Equal(helloRunId, statusDoc.RootElement.GetProperty("serverRunId").GetString());
     }
 
+    // R23/I0a — a clear is versioned, recoverable state, not just a frame. `GET /active` must
+    // report the latest clear's version and the predicate the server actually deleted by, with
+    // *no subscriber attached* — that is precisely the client whose `cleared` frame was dropped
+    // (or who was reconnecting) and must recover the same deletion state from recovery alone.
+    [Fact]
+    public async Task Active_ReportsLatestClearVersionAndPredicate_WithoutAnySubscriber()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        using JsonDocument before = JsonDocument.Parse(
+            await (await client.GetAsync($"{vessel.BaseUrl}/vessel/api/active", CT)).Content.ReadAsStringAsync(CT));
+        Assert.Equal(JsonValueKind.Null, before.RootElement.GetProperty("clear").ValueKind);
+
+        for (int i = 1; i <= 2; i++)
+        {
+            using HttpResponseMessage r = await client.GetAsync($"{vessel.BaseUrl}/echo?clearme{i}", CT);
+            Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        }
+
+        await CaptureDb.WaitUntil(vessel.DbPath, rows => rows.Count, count => count >= 2);
+
+        using (HttpResponseMessage cleared = await client.DeleteAsync($"{vessel.BaseUrl}/vessel/api/requests?scope=all", CT))
+        {
+            Assert.Equal(HttpStatusCode.OK, cleared.StatusCode);
+        }
+
+        using JsonDocument afterAll = JsonDocument.Parse(
+            await (await client.GetAsync($"{vessel.BaseUrl}/vessel/api/active", CT)).Content.ReadAsStringAsync(CT));
+        JsonElement clearAll = afterAll.RootElement.GetProperty("clear");
+        Assert.Equal(1, clearAll.GetProperty("version").GetInt64());
+        Assert.Equal("all", clearAll.GetProperty("scope").GetString());
+        Assert.Equal(JsonValueKind.Null, clearAll.GetProperty("beforeTs").ValueKind);
+        // Every row the clear deleted is at or below this id — the two above were ids 1 and 2.
+        Assert.Equal(2, clearAll.GetProperty("boundaryId").GetInt64());
+
+        string cutoff = DateTime.UtcNow.ToString("o");
+        using (HttpResponseMessage clearedBefore = await client.DeleteAsync(
+            $"{vessel.BaseUrl}/vessel/api/requests?before={Uri.EscapeDataString(cutoff)}", CT))
+        {
+            Assert.Equal(HttpStatusCode.OK, clearedBefore.StatusCode);
+        }
+
+        using JsonDocument afterBefore = JsonDocument.Parse(
+            await (await client.GetAsync($"{vessel.BaseUrl}/vessel/api/active", CT)).Content.ReadAsStringAsync(CT));
+        JsonElement clearBefore = afterBefore.RootElement.GetProperty("clear");
+        Assert.Equal(2, clearBefore.GetProperty("version").GetInt64()); // monotonic within the run
+        Assert.Equal("before", clearBefore.GetProperty("scope").GetString());
+        Assert.Equal(cutoff, clearBefore.GetProperty("beforeTs").GetString()); // the DELETE's own predicate
+    }
+
     // R11/H0b(2) — the concurrent-snapshot invariant probe, ported. GetActiveRequests must
     // return one coherent snapshot: every ODD seq at or below the returned watermark must be
     // present in the active set. The probe registers an odd seq that never completes, then
@@ -379,10 +431,10 @@ public class EventsTests
         const int iterations = 4000;
         for (int k = 1; k <= iterations; k++)
         {
-            long odd = (2 * k) - 1;
-            long even = 2 * k;
-            hub.Started(odd, "2026-08-28T00:00:00.0000000Z", 1, "POST", "/odd", "stub", []); // never completes
-            hub.Started(even, "2026-08-28T00:00:00.0000000Z", 1, "POST", "/even", "stub", []);
+            long odd = hub.Register("2026-08-28T00:00:00.0000000Z", 1, "POST", "/odd", "stub", []); // never completes
+            long even = hub.Register("2026-08-28T00:00:00.0000000Z", 1, "POST", "/even", "stub", []);
+            Assert.Equal((2 * k) - 1, odd); // the hub allocates in order, so the parity holds
+            Assert.Equal(2 * k, even);
             hub.Completed(even, null); // advances the watermark past `odd`
         }
 
@@ -434,6 +486,72 @@ public class EventsTests
         Assert.Empty(events.GetActiveRequests().ActiveSeqs);
 
         subscriber?.Dispose();
+    }
+
+    // R26/I1 — the review's real-HTTP repro. With injectStreamUsage on, request preparation
+    // reads the body before forwarding; it used to run *above* the handler's try/finally, so a
+    // client that vanished mid-upload threw past the finalizer: no record, no `completed`, and
+    // the registered seq stranded in the authoritative active set (the viewer showed it running
+    // forever, and reconciliation preserved it because the server still listed it). Preparation
+    // now runs inside the guarded span, so the aborted upload lands as a captured
+    // `client_disconnect` row and the seq reaches a terminal transition.
+    [Fact]
+    public async Task AbortedUsageInjectionUpload_LandsAsClientDisconnect_AndLeavesNoActiveEntry()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync(c =>
+        {
+            c.Backends["stub"].Type = "openai";
+            c.Backends["stub"].InjectStreamUsage = true;
+        });
+
+        var events = vessel.Services.GetRequiredService<CaptureEvents>();
+        string marker = $"m{Guid.NewGuid():N}";
+        var target = new Uri(vessel.BaseUrl);
+
+        // A raw socket, because this is about a half-sent body: announce 4096 bytes, send only a
+        // JSON prefix, wait until Vessel has registered the request, then reset the connection.
+        using (var tcp = new TcpClient())
+        {
+            await tcp.ConnectAsync(target.Host, target.Port, CT);
+            NetworkStream stream = tcp.GetStream();
+            byte[] prefix = System.Text.Encoding.UTF8.GetBytes(
+                $"POST /v1/chat/completions?marker={marker} HTTP/1.1\r\n"
+                + $"Host: {target.Authority}\r\n"
+                + "Content-Type: application/json\r\n"
+                + "Content-Length: 4096\r\n\r\n"
+                + """{"model":"m","stream":true,"messages":[{"role":"user","content":"tru""");
+            await stream.WriteAsync(prefix, CT);
+            await stream.FlushAsync(CT);
+
+            DateTime registeredBy = DateTime.UtcNow.AddSeconds(10);
+            while (events.GetActiveRequests().ActiveSeqs.Length == 0 && DateTime.UtcNow < registeredBy)
+            {
+                await Task.Delay(20, CT);
+            }
+
+            Assert.NotEmpty(events.GetActiveRequests().ActiveSeqs); // the upload is registered and mid-body
+
+            tcp.LingerState = new LingerOption(true, 0); // RST, not a graceful close
+        }
+
+        // Forwarding is independent of any of this: a normal request still succeeds.
+        using var client = new HttpClient();
+        using HttpResponseMessage control = await client.GetAsync($"{vessel.BaseUrl}/echo?control{marker}", CT);
+        Assert.Equal(HttpStatusCode.OK, control.StatusCode);
+
+        // The aborted request reached a terminal transition — nothing left registered.
+        DateTime terminalBy = DateTime.UtcNow.AddSeconds(10);
+        while (events.GetActiveRequests().ActiveSeqs.Length > 0 && DateTime.UtcNow < terminalBy)
+        {
+            await Task.Delay(25, CT);
+        }
+
+        Assert.Empty(events.GetActiveRequests().ActiveSeqs);
+
+        // ...and it was captured, with the interrupted-request error policy intact.
+        CapturedRow row = await CaptureDb.WaitForRow(vessel.DbPath, r => r.Path.Contains(marker) && r.Method == "POST");
+        Assert.Equal(Vessel.Api.VesselErrors.ClientDisconnect, row.Error);
+        Assert.Null(row.StatusCode); // no response was ever started
     }
 
     // R22 — the review's concurrent-publisher probe, ported as a regression test. An atomic

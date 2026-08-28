@@ -96,13 +96,12 @@ All read queries are indexed (`id` cursor, `session_id`); no query may scan bodi
   nobody will resolve; both also honour client cancellation. `GET /vessel/api/status`
   gains `capture: { recording: bool, stoppedReason?: string }` so that state is
   observable (the UI banner is a separate frontend item).
-- **Re-review addition** (Batch F, R23): `DELETE /requests` response gains
-  `boundaryId?: number` — the highest deleted id (omitted when nothing matched). It is
-  the deletion boundary the client uses to reconcile a clear against buffered live
-  completions: a completion buffered during an unsettled list fetch is discarded if the
-  clear removed its row (every row for clear-all, ids `≤ boundaryId` for clear-before) and
-  kept otherwise, so a clear can never be undone by a completion that was mid-flight when
-  it ran.
+- ~~**Re-review addition** (Batch F, R23): `DELETE /requests` response gains
+  `boundaryId?: number`~~ — **retired by Batch H (H0a)**. An id boundary cannot describe a
+  clear-before (ids follow persistence order, not start time), and an ack cannot be ordered
+  against completions at all. `DELETE /requests` now returns only `{ deleted: number }`, for
+  the UX toast; deletion scope travels on the ordered `cleared` SSE event and on
+  `GET /active` (D5 below, Batches H and I).
 - Errors follow the Phase 0 convention (`X-Vessel-Error` + `{"error":{...}}`).
 
 ### D4 — Sessions: current-session id is stamped at capture time
@@ -126,6 +125,17 @@ so the API can respond with it. No second write connection, no lock dance.
 - Every capture gets a process-lifetime sequence number `seq` (int64 counter),
   carried on `CaptureContext`/`CaptureRecord` — the correlation key while a request
   has no DB id yet.
+  **Fourth-round correction (Batch I, I0b(1)):** that counter lives on the
+  `CaptureEvents` hub, not on `CaptureContext`, and is allocated *inside* `Register`
+  under the publish lock — allocation **is** registration. When the seq was allocated in
+  the `CaptureContext` constructor, a handler could be descheduled between "seq exists"
+  and "seq registered"; a later request could complete in that window and advance the
+  watermark past the unregistered seq, and a snapshot taken there reported it neither
+  active nor unfinished — so reconciliation expired a request that was about to run
+  (the review reproduced exactly this with production types). Atomic allocation makes
+  that interleaving unrepresentable, which is what lets the client's rule "absent from
+  the active set **and** at/below the boundary ⇒ finished" be sound: a seq missing from a
+  coherent snapshot was necessarily allocated after it, hence above its boundary.
 - Events (named SSE events, JSON data): `started` `{seq, startedAt, sessionId, method,
   path, backend, tags}` — emitted at handler entry; `first_token` `{seq, ttftMs}` — emitted
   on the first-response-byte mark of streamed responses; `completed` `{seq, row:
@@ -166,8 +176,9 @@ so the API can respond with it. No second write connection, no lock dance.
     gone — removal is keyed directly on `seq`.
   - `started` carries `sessionId` (D05), so the UI scopes in-flight rows to the viewed
     session accurately instead of guessing.
-- **Re-review addition** (Batch F, R11/F2; extended by Batch H) — `GET /vessel/api/active`
-  → `{ activeSeqs: number[], newestCompletedSeq: number, serverRunId: string }`. The
+- **Re-review addition** (Batch F, R11/F2; extended by Batches H and I) —
+  `GET /vessel/api/active` → `{ activeSeqs: number[], newestCompletedSeq: number,
+  serverRunId: string, clear: ClearState|null }` (`clear` is Batch I, below). The
   server-authoritative in-flight set, sourced from the live `CaptureEvents` hub: a `seq`
   is added on `started` and removed on `completed`, independent of any SSE subscriber.
   Deliberately separate from `/status` (which is polled and cached) — this changes on
@@ -204,16 +215,43 @@ so the API can respond with it. No second write connection, no lock dance.
     stays independent of capture health. Without this, every proxied request after a
     give-up leaked a permanent active-set entry (the review's 32-retained-seqs probe).
   - **`cleared` event (H0a, R23).** Clearing is now an in-band SSE frame:
-    `event: cleared` / `data: {scope, beforeTs}` (`scope` is `"all"`|`"before"`;
-    `beforeTs` is the ISO-8601 cutoff, omitted for clear-all). The writer publishes it at
-    clear-commit time under the same lock as `completed`, so a row a clear deletes is
-    always seen `completed` *before* `cleared` (it had to be inserted to be deleted).
-    The client purges buffered + listed rows matching the server's own predicate (all, or
-    `startedAt < beforeTs`); anything received afterwards is post-clear by construction
-    (covering SQLite id reuse). This **retires** the Batch F3 boundary/generation model —
-    the `DELETE /requests` ack's `boundaryId` is gone (it was unsound: ids follow
-    persistence order, not start time, so a clear-before could not be described by an id
-    boundary), and the ack now carries only the deleted count, for the UX toast.
+    `event: cleared` / `data: {version, scope, beforeTs, boundaryId}` (`scope` is
+    `"all"`|`"before"`; `beforeTs` is the ISO-8601 cutoff, null for clear-all). The writer
+    publishes it at clear-commit time under the same lock as `completed`, so a row a clear
+    deletes is always seen `completed` *before* `cleared` (it had to be inserted to be
+    deleted). The client purges buffered + listed rows matching the server's own predicate;
+    anything received afterwards is post-clear by construction (covering SQLite id reuse).
+    This **retires** the Batch F3 boundary/generation model — the `DELETE /requests` ack's
+    `boundaryId` is gone (it was unsound: ids follow persistence order, not start time, so
+    a clear-before could not be described by an id boundary), and the ack now carries only
+    the deleted count, for the UX toast.
+- **Fourth-round re-review (Batch I, I0a/R23) — a clear is versioned, recoverable state;
+  the frame is only the fast path.** The frame rides the same deliberately lossy,
+  drop-oldest feed as everything else, and a client that misses it (a full queue, a
+  reconnect, a recovery in progress) must still end up with the same deletion state. So:
+  - The hub keeps the **latest clear** as `{version, scope, beforeTs, boundaryId}` under
+    the publish lock. `version` is monotonic within a run (it resets with the process, so
+    it is only comparable within one `serverRunId`); `boundaryId` is the largest row id
+    that existed when a **clear-all** ran (`SELECT MAX(id)` inside the delete's own
+    transaction; 0 for a clear-before, whose predicate is the timestamp cutoff itself).
+  - `GET /active` reports it as `clear: {version, scope, beforeTs, boundaryId} | null`,
+    identical in shape to the frame — so recovery learns a clear it never saw, and a
+    repeat is recognised by version rather than re-applied.
+  - `boundaryId` is a **necessary, not sufficient** condition: a clear-all empties the
+    table, so SQLite restarts row ids and a *fresh* row can sit below the boundary. The
+    client therefore pairs it with post-clear provenance (a row learned from a completion
+    published after the clear is exempt) — see the client contract in `useLiveHistory`.
+  - Client side, the predicate is applied on arrival, once more when every list fetch that
+    was outstanding at that moment has settled (a pending REST snapshot can be older than
+    the clear: TanStack reuses an unsettled *initial* fetch rather than replacing it on
+    invalidation), and on the completion buffer's drain. It is then retired — every later
+    response necessarily comes from a post-clear database.
+- **Fourth-round re-review (Batch I, I0b(2)) — `hello` is the only restart signal.** A
+  `/active` response whose `serverRunId` differs from the connection's is a *stale
+  response*, not evidence that the run we are connected to restarted: it is discarded
+  outright (its issuing request's run id must also still match). Treating it as restart
+  evidence deleted the live requests of the run that was actually running, and no later
+  snapshot restored them, because reconciliation only ever removes.
 - **Post-Phase-4 addition** (ui-spec.md §9.1 in-flight TODO, implemented): the
   contract gains a fourth event, `request_ready` `{seq, model}` — emitted once the
   request body has been fully read (a genuine EOF on the request tee, not YARP's
@@ -249,6 +287,15 @@ frontend/src/
   `started`, not yet `completed`) pin to the top with a running timer (one shared
   250 ms interval, not per-row) and a subtle pulse; `first_token` shows live TTFT.
   Infinite scroll via `nextBefore`.
+  **Fourth-round addition (Batch I, I0c):** SSE frames are *queued* and applied on a
+  ~100 ms (10 Hz) window — one state update and one list-cache write per window instead
+  of one per frame. Under a live 10,000-request burst with the tab connected, the
+  per-frame version blocked the main thread for **10.3 s in a single task** while the JS
+  heap climbed from 76 MB to **3.1 GB** (of a 4 GB limit) and the tab stopped responding;
+  coalesced, the same burst peaks at 184 MB with a 92 ms worst task. Ordering within a
+  window is preserved exactly, which is what keeps a `cleared` dividing the completions it
+  deletes from the ones it does not. Imperceptible for a monitoring UI — the elapsed-time
+  display already ticks on its own 250 ms interval.
 - **DetailPane** (right): tabs **Overview** (all Summary metrics laid out, warnings as
   labeled badges, timing breakdown incl. `vesselOverheadMs`), **Request** / **Response**
   (pretty-printed JSON in a scrollable `<pre>`, collapse toggle, copy button; Response

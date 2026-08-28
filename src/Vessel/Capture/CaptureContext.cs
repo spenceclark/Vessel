@@ -18,17 +18,14 @@ public sealed class CaptureContext
     /// <summary>Key under which the context is stashed in <c>HttpContext.Items</c>.</summary>
     public const string ItemsKey = "Vessel.CaptureContext";
 
-    private static long _seqCounter;
-
     private readonly DateTime _startedAtUtc = DateTime.UtcNow;
     private readonly long _startTimestamp = Stopwatch.GetTimestamp();
-    private readonly CaptureEvents? _events;
+    private readonly CaptureEvents _events;
     private readonly RequestModelSnifferService? _modelSniffer;
 
     public CaptureContext(
-        long maxBodyBytes, long sessionId, CaptureEvents? events = null, RequestModelSnifferService? modelSniffer = null)
+        long maxBodyBytes, long sessionId, CaptureEvents events, RequestModelSnifferService? modelSniffer = null)
     {
-        Seq = Interlocked.Increment(ref _seqCounter);
         SessionId = sessionId;
         _events = events;
         _modelSniffer = modelSniffer;
@@ -36,8 +33,13 @@ public sealed class CaptureContext
         ResponseBuffer = new CaptureBuffer(maxBodyBytes);
     }
 
-    /// <summary>Process-lifetime sequence number (D5) — assigned once per request, never reused.</summary>
-    public long Seq { get; }
+    /// <summary>
+    /// Process-lifetime sequence number (D5) — assigned once per request by
+    /// <see cref="Register"/>, never reused. Zero until then: I0b(1) moved allocation into the
+    /// hub so that a seq cannot exist unregistered, so nothing may read this before the
+    /// request has been registered.
+    /// </summary>
+    public long Seq { get; private set; }
 
     public long SessionId { get; }
 
@@ -74,6 +76,14 @@ public sealed class CaptureContext
 
     /// <summary>Set by <c>ProxyHandler</c> when it injected <c>stream_options.include_usage</c> (D11).</summary>
     public bool UsageInjected { get; set; }
+
+    /// <summary>
+    /// D5/I0b(1) — allocates this request's <see cref="Seq"/> and registers it as in-flight in
+    /// one atomic step, publishing <c>started</c>. Called from the handler as soon as the
+    /// backend and tags are known, and before anything reads <see cref="Seq"/>.
+    /// </summary>
+    public void Register(string method, string path, string backend, string[] tags) =>
+        Seq = _events.Register(StartedAtIso, SessionId, method, path, backend, tags);
 
     private double ElapsedMs => Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
 
@@ -125,7 +135,7 @@ public sealed class CaptureContext
     /// </summary>
     public void EmitFirstTokenIfStreamed(string? responseContentType)
     {
-        if (_events is null || FirstResponseByteMs is not double firstByte || !IsStreamedContentType(responseContentType))
+        if (FirstResponseByteMs is not double firstByte || !IsStreamedContentType(responseContentType))
         {
             return;
         }

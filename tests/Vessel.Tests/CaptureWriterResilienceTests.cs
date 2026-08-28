@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging.Abstractions;
+﻿using Microsoft.Extensions.Logging.Abstractions;
 using Vessel.Capture;
 using Vessel.Config;
 using Vessel.Formats;
@@ -62,7 +62,7 @@ public class CaptureWriterResilienceTests
         public SessionInfo CreateSession(string? name) =>
             new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name);
 
-        public int Clear(string? beforeIso) => 0;
+        public ClearResult Clear(string? beforeIso) => new(0, 0);
 
         public int SnapshotAttempts()
         {
@@ -260,11 +260,11 @@ public class CaptureWriterResilienceTests
         CaptureWriterService writer = NewWriter(channel, store, hub);
         await writer.StartAsync(TestContext.Current.CancellationToken);
 
-        long seq = 0;
         void Register(string path)
         {
-            seq++;
-            hub.Started(seq, "2026-08-28T00:00:00.0000000Z", 1, "POST", path, "stub", []);
+            // I0b(1) — the hub allocates the seq as it registers it; the capture carries the
+            // same identity the ProxyHandler would hand it.
+            long seq = hub.Register("2026-08-28T00:00:00.0000000Z", 1, "POST", path, "stub", []);
             channel.Enqueue(TestCapture.Record(path) with { Seq = seq });
         }
 
@@ -365,14 +365,14 @@ public class CaptureWriterResilienceTests
         public SessionInfo CreateSession(string? name) =>
             new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name);
 
-        public int Clear(string? beforeIso)
+        public ClearResult Clear(string? beforeIso)
         {
             lock (_lock)
             {
                 _operations.Add("clear");
                 int deleted = _live.Count;
                 _live.Clear();
-                return deleted;
+                return new ClearResult(deleted, _nextId - 1);
             }
         }
     }

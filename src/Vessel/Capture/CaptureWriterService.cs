@@ -311,15 +311,19 @@ public sealed class CaptureWriterService(
     {
         try
         {
-            int deleted = store.Clear(command.BeforeIso);
+            ClearResult result = store.Clear(command.BeforeIso);
 
             // R23/H0a — publish the in-band `cleared` event at clear-commit time, on the writer
             // thread, so its SSE id orders after every `completed` this clear could have
             // deleted (those rows were inserted, and their `completed` published, earlier in
             // this same FIFO stream). That ordering is what lets the client purge exactly the
             // cleared rows and treat later completions as post-clear.
-            events.Cleared(command.BeforeIso);
-            command.Completion.TrySetResult(deleted);
+            //
+            // I0a — the same call records the clear as versioned server state, so a client that
+            // never receives this frame (a dropped queue, a reconnect) learns it from
+            // `GET /active` instead. The frame is the fast path, not the contract.
+            events.Cleared(command.BeforeIso, result.BoundaryId);
+            command.Completion.TrySetResult(result.Deleted);
         }
         catch (Exception ex)
         {
