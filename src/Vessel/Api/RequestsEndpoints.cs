@@ -84,16 +84,16 @@ public static class RequestsEndpoints
         }
 
         var channel = context.RequestServices.GetRequiredService<CaptureChannel>();
-        var completion = new TaskCompletionSource<ClearOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         channel.Enqueue(new ClearCommand(beforeIso, completion));
 
-        ClearOutcome outcome;
+        int deleted;
         try
         {
             // R06 — bounded: the writer either runs this or fails it. Before, a give-up left
             // this awaiting a completion nobody would resolve, and HTTP cancellation didn't
             // bound the wait either.
-            outcome = await completion.Task.WaitAsync(context.RequestAborted);
+            deleted = await completion.Task.WaitAsync(context.RequestAborted);
         }
         catch (CaptureStoppedException ex)
         {
@@ -104,7 +104,7 @@ public static class RequestsEndpoints
 
         context.Response.ContentType = "application/json; charset=utf-8";
         await JsonSerializer.SerializeAsync(
-            context.Response.Body, new ClearResponse(outcome.Deleted, outcome.MaxDeletedId),
+            context.Response.Body, new ClearResponse(deleted),
             ApiJsonContext.Default.ClearResponse, context.RequestAborted);
     }
 

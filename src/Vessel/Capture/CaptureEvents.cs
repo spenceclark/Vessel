@@ -35,14 +35,22 @@ public sealed class CaptureEvents
     private readonly ConcurrentDictionary<long, Channel<SseEvent>> _subscribers = new();
     private long _nextSubscriberId;
 
-    // R22 — id allocation and the channel fan-out happen together under this lock, so every
-    // subscriber observes ids in strictly increasing order. An atomic counter alone makes ids
-    // *unique* but not *ordered*: two publishers could allocate N and N+1 and enqueue them
-    // reversed, which the client reads as frame loss and answers with a needless
-    // reconciliation for every reversal — a storm during the exact burst reconciliation is
-    // meant to recover from. The lock is held for microseconds and never waits on a
-    // subscriber (drop-oldest's TryWrite never blocks), so the non-blocking proxy contract is
-    // unchanged.
+    // R22/R11 — this single lock guards *all* of the hub's shared lifecycle state: the publish
+    // id, the fan-out to subscriber channels, the in-flight set, and the completed watermark.
+    //
+    // R22 (ordering): id allocation and the channel fan-out happen together under it, so every
+    // subscriber observes ids strictly increasing. An atomic counter alone makes ids *unique*
+    // but not *ordered* — two publishers could allocate N and N+1 and enqueue them reversed,
+    // which the client reads as frame loss and answers with a needless reconciliation per
+    // reversal (a storm during the exact burst reconciliation is meant to recover from).
+    //
+    // R11/H0b(2) (coherence): the in-flight set and the completed watermark are read *and*
+    // mutated under this same lock, so `GetActiveRequests` returns one coherent snapshot. Read
+    // separately (a concurrent dictionary + an interlocked long), a snapshot could report a
+    // watermark that already covers a still-running seq missing from the returned key array —
+    // the review's 187/571 torn-snapshot probe — and reconciliation would then wrongly expire
+    // a legitimate request. The lock is held for microseconds and never waits on a subscriber
+    // (drop-oldest's TryWrite never blocks), so the non-blocking proxy contract is unchanged.
     private readonly object _publishLock = new();
     private long _publishId;
 
@@ -51,9 +59,22 @@ public sealed class CaptureEvents
     // subscribed to the SSE feed. Reconciliation reads this to decide, authoritatively, which
     // client-side in-flight rows are genuinely still running versus finished-or-lost — the
     // client cannot infer that from paginated history alone (a completion off the loaded
-    // pages, filtered out, or for a since-cleared row is simply invisible there).
-    private readonly ConcurrentDictionary<long, byte> _active = new();
+    // pages, filtered out, or for a since-cleared row is simply invisible there). Guarded by
+    // _publishLock (H0b(2)), never a concurrent collection, so it stays coherent with the
+    // watermark read in the same critical section.
+    private readonly HashSet<long> _active = [];
     private long _newestCompletedSeq;
+
+    /// <summary>
+    /// H0b(1) — an id unique to this server process (a fresh GUID per <see cref="CaptureEvents"/>
+    /// construction, i.e. per Vessel run). Exposed on the SSE <c>hello</c> event and the
+    /// <c>/active</c>/<c>/status</c> endpoints so a client can tell a restart from a mere
+    /// reconnect: process-lifetime <c>seq</c>s reset when the process does, so after a restart
+    /// the old in-flight seqs are meaningless and the client must discard them wholesale — a
+    /// boundary comparison against the fresh process's watermark can't, since an old high seq
+    /// sits above the new low watermark and looks "just started".
+    /// </summary>
+    public string RunId { get; } = Guid.NewGuid().ToString("n");
 
     public CaptureSubscription Subscribe()
     {
@@ -79,8 +100,16 @@ public sealed class CaptureEvents
     /// client before the next reconciliation observes it as active) from being expired as if
     /// it had finished.
     /// </summary>
-    public ActiveRequests GetActiveRequests() =>
-        new(_active.Keys.ToArray(), Interlocked.Read(ref _newestCompletedSeq));
+    public ActiveRequests GetActiveRequests()
+    {
+        lock (_publishLock)
+        {
+            // Both fields read in one critical section — the whole point of H0b(2). RunId is
+            // immutable, but travels with the snapshot so the client can reject a snapshot from
+            // a different process lifetime.
+            return new ActiveRequests([.. _active], _newestCompletedSeq, RunId);
+        }
+    }
 
     /// <summary>
     /// Emitted at handler entry, once the backend/tags are resolved (request path).
@@ -90,20 +119,29 @@ public sealed class CaptureEvents
     public void Started(
         long seq, string startedAt, long sessionId, string method, string path, string backend, string[] tags)
     {
-        // Register before publishing (and unconditionally, regardless of subscribers): a
-        // client that receives this `started` frame must be able to trust that the server had
-        // the seq in its active set at that moment, so the only reason a later reconciliation
-        // finds it absent is a genuine completion (R11/F2).
-        _active[seq] = 0;
+        // Serialize outside the lock (touches no shared state) — but only if someone is
+        // watching, keeping the zero-subscriber hot path free of JSON work. A subscriber that
+        // connects in the tiny window between this check and the lock simply misses this one
+        // `started` frame, which is exactly the drop/gap case its own reconciliation covers.
+        string? json = _subscribers.IsEmpty
+            ? null
+            : JsonSerializer.Serialize(
+                new StartedEvent(seq, startedAt, sessionId, method, path, backend, tags),
+                EventsJsonContext.Default.StartedEvent);
 
-        if (_subscribers.IsEmpty)
+        lock (_publishLock)
         {
-            return;
+            // Register unconditionally (regardless of subscribers): a client that receives this
+            // `started` frame must be able to trust the server had the seq in its active set at
+            // that moment, so the only reason a later reconciliation finds it absent is a
+            // genuine completion (R11/F2). The registration and the fan-out share the lock, so
+            // a concurrent GetActiveRequests can never observe the frame without the seq.
+            _active.Add(seq);
+            if (json is not null)
+            {
+                PublishLocked("started", json);
+            }
         }
-
-        Publish("started", JsonSerializer.Serialize(
-            new StartedEvent(seq, startedAt, sessionId, method, path, backend, tags),
-            EventsJsonContext.Default.StartedEvent));
     }
 
     /// <summary>
@@ -143,49 +181,72 @@ public sealed class CaptureEvents
     /// </summary>
     public void Completed(long seq, Summary? row)
     {
-        // Leave the active set and advance the completed watermark unconditionally (a drop
-        // still calls this with row == null), so reconciliation sees the request as finished
-        // even for a client that was never subscribed when it ran (R11/F2).
-        _active.TryRemove(seq, out _);
-        AdvanceNewestCompleted(seq);
+        // Serialize outside the lock (see Started for the subscriber-race rationale).
+        string? json = _subscribers.IsEmpty
+            ? null
+            : JsonSerializer.Serialize(new CompletedEvent(seq, row), EventsJsonContext.Default.CompletedEvent);
 
+        lock (_publishLock)
+        {
+            // Leave the active set and advance the watermark unconditionally (a drop still calls
+            // this with row == null), so reconciliation sees the request as finished even for a
+            // client that was never subscribed when it ran (R11/F2). Both mutations, and the
+            // fan-out, are in the one critical section GetActiveRequests reads under.
+            _active.Remove(seq);
+            if (seq > _newestCompletedSeq)
+            {
+                _newestCompletedSeq = seq;
+            }
+
+            if (json is not null)
+            {
+                PublishLocked("completed", json);
+            }
+        }
+    }
+
+    /// <summary>
+    /// H0a/R23 — the in-band clear notification. Emitted by the writer at clear-commit time,
+    /// under the same publish lock as <c>completed</c>, so its id orders correctly against
+    /// every completion. Because a row can only be *deleted* by a clear if it was inserted
+    /// (hence its <c>completed</c> published) before the clear ran, the client is guaranteed to
+    /// see <c>completed</c> for a doomed row before this <c>cleared</c> frame — the ordering is
+    /// what lets it purge exactly the cleared rows and treat everything after as post-clear by
+    /// construction (covering SQLite id reuse). Replaces the retired boundary/generation model.
+    /// </summary>
+    public void Cleared(string? beforeIso)
+    {
         if (_subscribers.IsEmpty)
         {
             return;
         }
 
-        Publish("completed", JsonSerializer.Serialize(
-            new CompletedEvent(seq, row), EventsJsonContext.Default.CompletedEvent));
-    }
-
-    private void AdvanceNewestCompleted(long seq)
-    {
-        long current = Interlocked.Read(ref _newestCompletedSeq);
-        while (seq > current)
-        {
-            long observed = Interlocked.CompareExchange(ref _newestCompletedSeq, seq, current);
-            if (observed == current)
-            {
-                break;
-            }
-
-            current = observed;
-        }
+        Publish("cleared", JsonSerializer.Serialize(
+            new ClearedEvent(beforeIso is null ? "all" : "before", beforeIso),
+            EventsJsonContext.Default.ClearedEvent));
     }
 
     private void Publish(string name, string json)
     {
-        // R22 — allocate the id and fan out in one critical section, so every subscriber's
-        // queue receives frames in id order. One id per published frame, shared by every
-        // subscriber: all subscribers receive the same fan-out, so a per-subscriber gap in
-        // this sequence means that subscriber's queue dropped frames (R11).
         lock (_publishLock)
         {
-            var evt = new SseEvent(Interlocked.Increment(ref _publishId), name, json);
-            foreach (Channel<SseEvent> channel in _subscribers.Values)
-            {
-                channel.Writer.TryWrite(evt); // drop-oldest mode never blocks
-            }
+            PublishLocked(name, json);
+        }
+    }
+
+    /// <summary>
+    /// R22 — allocate the id and fan out in one critical section (the caller already holds
+    /// <see cref="_publishLock"/>), so every subscriber's queue receives frames in id order.
+    /// One id per published frame, shared by every subscriber: all subscribers receive the same
+    /// fan-out, so a per-subscriber gap in this sequence means that subscriber's queue dropped
+    /// frames (R11).
+    /// </summary>
+    private void PublishLocked(string name, string json)
+    {
+        var evt = new SseEvent(++_publishId, name, json);
+        foreach (Channel<SseEvent> channel in _subscribers.Values)
+        {
+            channel.Writer.TryWrite(evt); // drop-oldest mode never blocks
         }
     }
 }
@@ -194,9 +255,11 @@ public sealed class CaptureEvents
 /// R11/F2 — a point-in-time view of the server's in-flight requests for reconciliation.
 /// <paramref name="ActiveSeqs"/> is the set of request seqs currently running;
 /// <paramref name="NewestCompletedSeq"/> is the highest seq that has finished, used as the
-/// boundary below which an absent seq is definitely finished rather than just newly started.
+/// boundary below which an absent seq is definitely finished rather than just newly started;
+/// <paramref name="ServerRunId"/> (H0b(1)) identifies the process lifetime the seqs belong to,
+/// so a client can discard the whole set when it came from a different Vessel run.
 /// </summary>
-public sealed record ActiveRequests(long[] ActiveSeqs, long NewestCompletedSeq);
+public sealed record ActiveRequests(long[] ActiveSeqs, long NewestCompletedSeq, string ServerRunId);
 
 /// <summary>One SSE connection's subscription; disposing unregisters it from the hub.</summary>
 public sealed class CaptureSubscription : IDisposable
@@ -225,9 +288,20 @@ internal sealed record FirstTokenEvent(long Seq, double TtftMs);
 
 internal sealed record CompletedEvent(long Seq, Summary? Row);
 
+/// <summary>
+/// H0a/R23 — the <c>cleared</c> event payload. <paramref name="Scope"/> is <c>"all"</c> or
+/// <c>"before"</c>; <paramref name="BeforeTs"/> is the ISO-8601 cutoff for a clear-before
+/// (null for clear-all), the same predicate the server deleted by, so the client purges
+/// exactly the rows the server removed.
+/// </summary>
+internal sealed record ClearedEvent(
+    string Scope,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? BeforeTs);
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(StartedEvent))]
 [JsonSerializable(typeof(RequestReadyEvent))]
 [JsonSerializable(typeof(FirstTokenEvent))]
 [JsonSerializable(typeof(CompletedEvent))]
+[JsonSerializable(typeof(ClearedEvent))]
 internal sealed partial class EventsJsonContext : JsonSerializerContext;

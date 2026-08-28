@@ -37,22 +37,36 @@ public sealed class CaptureChannel
 
     public bool IsStopped => _stoppedReason is not null;
 
-    public void Enqueue(CaptureRecord record) => Enqueue(new CapturedRequest(record));
+    /// <summary>
+    /// Admits a captured request. Returns false when admission is closed (the writer gave up)
+    /// so the caller can drive the capture's lifecycle to a terminal state itself — the writer
+    /// will never emit <c>completed</c> for a capture it never received, and a registered-but-
+    /// never-completed seq leaks in the active set forever (R25).
+    /// </summary>
+    public bool Enqueue(CaptureRecord record) => Enqueue(new CapturedRequest(record));
 
-    public void Enqueue(CaptureWork work)
+    /// <summary>
+    /// Admits one unit of work. Returns true when it was queued for the writer, false when
+    /// admission is closed (a command is failed fast in that case; a capture is simply dropped,
+    /// which is what "capture stopped" means — the caller owns its terminal transition, R25).
+    /// </summary>
+    public bool Enqueue(CaptureWork work)
     {
         if (_stoppedReason is string reason)
         {
             // Never queue behind a consumer that is gone. A command still gets a definite
-            // answer; a capture is simply dropped, which is what "capture stopped" means.
+            // answer; a capture is simply dropped.
             FailIfCommand(work, reason);
-            return;
+            return false;
         }
 
         if (!_channel.Writer.TryWrite(work))
         {
             FailIfCommand(work, "capture queue is closed");
+            return false;
         }
+
+        return true;
     }
 
     /// <summary>

@@ -83,7 +83,7 @@ public sealed class CaptureWriterService(
 
             if (!Flush(batch))
             {
-                await DrainAfterStop(reader, batch);
+                await DrainAfterStop(reader);
                 return;
             }
         }
@@ -97,7 +97,7 @@ public sealed class CaptureWriterService(
             {
                 if (!Flush(batch))
                 {
-                    await DrainAfterStop(reader, batch);
+                    await DrainAfterStop(reader);
                     return;
                 }
 
@@ -107,25 +107,21 @@ public sealed class CaptureWriterService(
 
         if (!Flush(batch))
         {
-            await DrainAfterStop(reader, batch);
+            await DrainAfterStop(reader);
         }
     }
 
     /// <summary>
     /// R06 — after give-up, nothing will ever be written again, so the queue must not be
     /// left to grow with a consumer that has gone away. <c>CaptureChannel.Stop</c> already
-    /// closed admission; this fails anything that raced through before that took effect,
-    /// then drains to completion so pending items are released rather than retained.
+    /// closed admission; <see cref="Flush"/> already released the failing batch's own
+    /// remaining items, so this only drains what races in through the channel afterwards,
+    /// giving each a terminal transition (R25): a command is failed, and a discarded capture
+    /// reaches <c>completed{row:null}</c> so its seq leaves the active set instead of leaking.
     /// </summary>
-    private async Task DrainAfterStop(ChannelReader<CaptureWork> reader, List<CaptureWork> unflushed)
+    private async Task DrainAfterStop(ChannelReader<CaptureWork> reader)
     {
         string reason = channel.StoppedReason ?? "capture stopped";
-
-        // The batch that failed still holds commands whose callers are waiting.
-        foreach (CaptureWork item in unflushed)
-        {
-            CaptureChannel.FailIfCommand(item, reason);
-        }
 
         try
         {
@@ -133,13 +129,31 @@ public sealed class CaptureWriterService(
             {
                 while (reader.TryRead(out CaptureWork? item))
                 {
-                    CaptureChannel.FailIfCommand(item, reason);
+                    TerminateDiscarded(item, reason);
                 }
             }
         }
         catch (ChannelClosedException)
         {
             // Completed underneath us — nothing left to release.
+        }
+    }
+
+    /// <summary>
+    /// R25 — the terminal transition for a unit of work the writer discards after give-up: a
+    /// command's caller is released with <see cref="CaptureStoppedException"/>; a captured
+    /// request's seq is completed with <c>row: null</c>, so the hub's active set (and every
+    /// client's in-flight view) stops showing it as forever-running.
+    /// </summary>
+    private void TerminateDiscarded(CaptureWork item, string reason)
+    {
+        if (item is CapturedRequest request)
+        {
+            events.Completed(request.Record.Seq, null);
+        }
+        else
+        {
+            CaptureChannel.FailIfCommand(item, reason);
         }
     }
 
@@ -165,8 +179,9 @@ public sealed class CaptureWriterService(
         }
 
         var pending = new List<CaptureRecord>(batch.Count);
-        foreach (CaptureWork item in batch)
+        for (int i = 0; i < batch.Count; i++)
         {
+            CaptureWork item = batch[i];
             if (item is CapturedRequest request)
             {
                 pending.Add(request.Record);
@@ -176,6 +191,11 @@ public sealed class CaptureWriterService(
             // A command observes every capture queued before it, and none queued after.
             if (!InsertPending(pending))
             {
+                // Gave up: `pending` (the captures since the last command) was already
+                // completed(null) inside InsertPending, and everything before it was inserted
+                // or ran. Every item from this command onward never ran — give each a terminal
+                // transition (R25) instead of letting the drain re-touch already-settled items.
+                TerminateAfterGiveUp(batch, i);
                 return false;
             }
 
@@ -192,7 +212,26 @@ public sealed class CaptureWriterService(
             }
         }
 
+        // The trailing captures give up as their own batch; InsertPending already completed
+        // them (null) on failure, and there is nothing after them to release.
         return InsertPending(pending);
+    }
+
+    /// <summary>
+    /// R25/R06 — on give-up mid-batch, release every item at or after <paramref name="from"/>
+    /// that never ran: a captured request reaches <c>completed{row:null}</c> (its seq leaves
+    /// the active set), a command's caller is failed. Items before <paramref name="from"/> were
+    /// already settled — inserted, run, or completed(null) by the failing InsertPending — so
+    /// they are deliberately not touched here (re-completing a stored row would wrongly flag it
+    /// as dropped).
+    /// </summary>
+    private void TerminateAfterGiveUp(List<CaptureWork> batch, int from)
+    {
+        string reason = channel.StoppedReason ?? "capture stopped";
+        for (int i = from; i < batch.Count; i++)
+        {
+            TerminateDiscarded(batch[i], reason);
+        }
     }
 
     /// <summary>
@@ -272,7 +311,15 @@ public sealed class CaptureWriterService(
     {
         try
         {
-            command.Completion.TrySetResult(store.Clear(command.BeforeIso));
+            int deleted = store.Clear(command.BeforeIso);
+
+            // R23/H0a — publish the in-band `cleared` event at clear-commit time, on the writer
+            // thread, so its SSE id orders after every `completed` this clear could have
+            // deleted (those rows were inserted, and their `completed` published, earlier in
+            // this same FIFO stream). That ordering is what lets the client purge exactly the
+            // cleared rows and treat later completions as post-clear.
+            events.Cleared(command.BeforeIso);
+            command.Completion.TrySetResult(deleted);
         }
         catch (Exception ex)
         {

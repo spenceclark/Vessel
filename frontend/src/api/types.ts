@@ -93,6 +93,8 @@ export interface StatusPayload {
   defaultBackend: string
   backends: StatusBackend[]
   capture: CaptureHealth
+  /** H0b — this Vessel process's run id (a restart changes it). */
+  serverRunId: string
 }
 
 /** The `session` scope this UI is currently viewing: a specific session's id, or "all" history. */
@@ -133,19 +135,21 @@ export interface FacetsResponse {
 }
 
 export interface ClearResponse {
+  /** R23/H0a — count deleted, for the UX toast only; the client purges cleared rows on the in-band `cleared` SSE event, not on a boundary in this ack. */
   deleted: number
-  /** R23 — the highest deleted id, so a buffered completion above it survives a clear-before; omitted when nothing matched. */
-  boundaryId?: number
 }
 
 /**
  * R11/F2 — the server's authoritative in-flight set. Reconciliation removes any client-side
  * in-flight row whose seq is absent here and at or below `newestCompletedSeq`; the boundary
- * spares a request that started after this snapshot was taken.
+ * spares a request that started after this snapshot was taken. `serverRunId` (H0b) identifies
+ * the process lifetime: a mismatch means these seqs are from a different Vessel run and the
+ * client discards its whole in-flight map rather than boundary-comparing across processes.
  */
 export interface ActiveRequestsResponse {
   activeSeqs: number[]
   newestCompletedSeq: number
+  serverRunId: string
 }
 
 export interface BackendConfigDto {
@@ -202,4 +206,24 @@ export interface FirstTokenEvent {
 export interface CompletedEvent {
   seq: number
   row: Summary | null
+}
+
+/**
+ * H0b(1) — the first SSE frame on every connection, carrying this process's run id. A run-id
+ * change across a reconnect means Vessel restarted and the client's in-flight seqs are from a
+ * dead process, so it discards them wholesale. Carries no `id:` field, so it never affects the
+ * gap-detection watermark.
+ */
+export interface HelloEvent {
+  serverRunId: string
+}
+
+/**
+ * H0a/R23 — the in-band clear notification, ordered on the SSE stream against completions. On
+ * receipt the client purges buffered + listed rows matching the server's own predicate (`all`,
+ * or `startedAt < beforeTs`); completions received after it are post-clear by construction.
+ */
+export interface ClearedEvent {
+  scope: 'all' | 'before'
+  beforeTs: string | null
 }

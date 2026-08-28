@@ -75,10 +75,16 @@ export function DetailPane({ id }: { id: number | null }) {
 
   const detail = query.data
   const isError = detail.error != null || (detail.statusCode ?? 0) >= 400
-  // The raw-stream toggle only swaps in responseRaw when it's actually being viewed;
-  // rendered mode always reads from responseBody (what MessageView is extracted from).
+  // R24 — the *effective* raw mode, not the toggle state. When extraction returns null there
+  // is no rendered view (and no Rendered/Raw toggle), so the response tab is showing raw
+  // regardless of `responseDisplay` (which stays at its 'rendered' default, unreachable).
+  // Keying off `responseDisplay === 'raw'` alone left the "Raw stream" sub-toggle inert in
+  // that branch — it flipped `responseView` but the body stayed `responseBody` (null for a
+  // streamed response), so raw streams showed "No response body". The decode notice, wired to
+  // the shown body below, follows the same effective mode.
+  const responseInRawView = !responseRendered || responseDisplay === 'raw'
   const responseBodyShown =
-    responseDisplay === 'raw' && responseView === 'raw' ? detail.responseRaw : detail.responseBody
+    responseInRawView && responseView === 'raw' ? detail.responseRaw : detail.responseBody
 
   return (
     <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} className="flex h-full flex-col">

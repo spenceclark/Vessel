@@ -126,7 +126,18 @@ public sealed class ProxyHandler
 
             // Fire-and-forget from the request's point of view; redaction happens
             // inside BuildRecord, so plaintext secrets never reach the channel.
-            _captureChannel.Enqueue(capture.BuildRecord(context, decision));
+            //
+            // R25/H0b(3) — "registered → terminal" is owned here, at the registration site.
+            // `Started` (above) put this seq in the hub's active set; the writer normally
+            // removes it via `completed`. But when admission is closed (the writer gave up),
+            // the capture is dropped and the writer will never emit `completed` for it, so the
+            // seq would leak in the active set and the viewer would show it as forever-running.
+            // Complete it here so every registered request reaches a terminal transition,
+            // regardless of capture health — forwarding already succeeded either way.
+            if (!_captureChannel.Enqueue(capture.BuildRecord(context, decision)))
+            {
+                _captureEvents.Completed(capture.Seq, null);
+            }
         }
     }
 

@@ -14,7 +14,7 @@ const CONFIRM_WORD = 'DELETE'
 export function DataPanel({
   onCleared,
 }: {
-  onCleared?: (scope: { all: true } | { before: string }, boundaryId: number | null) => void
+  onCleared?: (scope: { all: true } | { before: string }) => void
 }) {
   const queryClient = useQueryClient()
   const [mode, setMode] = useState<'idle' | 'all' | 'before'>('idle')
@@ -34,11 +34,11 @@ export function DataPanel({
     try {
       const result = await api.deleteRequests(scope)
       setMessage(`Deleted ${result.deleted} request${result.deleted === 1 ? '' : 's'}.`)
-      // R14a/R23 — report the clear *before* invalidating, so the live-history generation is
-      // bumped before the refetch below settles and drains its completion buffer (a buffered
-      // completion for a cleared row must not survive that drain). The selected row's own
-      // cache and selection are the caller's concern (App owns both).
-      onCleared?.(scope, result.boundaryId ?? null)
+      // R14a — evict the selected row's stale detail cache / selection (App owns both). The
+      // live list + completion-buffer purge is driven separately by the server's in-band
+      // `cleared` SSE event (R23/H0a), which orders correctly against completions; this ack is
+      // UX only. The refetch below just refreshes stats/facets and the authoritative list.
+      onCleared?.(scope)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['requests'] }),
         queryClient.invalidateQueries({ queryKey: ['stats'] }),

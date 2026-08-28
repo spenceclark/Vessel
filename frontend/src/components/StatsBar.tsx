@@ -25,7 +25,7 @@ export function StatsBar({
   currentSessionId: number | null
   onScopeChange: (scope: SessionScope) => void
   onReset: () => Promise<void>
-  onDataCleared?: (scope: { all: true } | { before: string }, boundaryId: number | null) => void
+  onDataCleared?: (scope: { all: true } | { before: string }) => void
   /** D8 (review §4 risk) — the SSE connection state `useEvents` already tracked but no one displayed. */
   connected: boolean
 }) {

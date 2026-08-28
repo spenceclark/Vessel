@@ -23,6 +23,17 @@ public static class EventsEndpoint
         CancellationToken aborted = context.RequestAborted;
         using CaptureSubscription subscription = hub.Subscribe();
 
+        // H0b(1) — the hello frame is the first thing on the wire, before any lifecycle frame,
+        // so the client learns this process's run id up front. On a reconnect that lands on a
+        // *restarted* Vessel, the new run id tells the client its in-flight seqs belong to a
+        // dead process and must be discarded wholesale (a watermark comparison can't tell that:
+        // an old high seq sits above the fresh process's low watermark and looks "just
+        // started"). Deliberately carries no `id:` field, so it never perturbs the client's
+        // gap-detection watermark. It bypasses the hub (written straight to the response), so
+        // it is always ordered before any channel frame the loop below reads.
+        await context.Response.WriteAsync($"event: hello\ndata: {{\"serverRunId\":\"{hub.RunId}\"}}\n\n", aborted);
+        await context.Response.Body.FlushAsync(aborted);
+
         try
         {
             while (!aborted.IsCancellationRequested)

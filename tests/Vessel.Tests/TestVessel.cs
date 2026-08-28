@@ -20,6 +20,9 @@ public sealed class TestVessel : IAsyncDisposable
 
     public string ConfigPath { get; private set; } = null!;
 
+    /// <summary>The running app's DI container — for tests that need to reach a singleton directly.</summary>
+    public IServiceProvider Services => _app.Services;
+
     public static async Task<TestVessel> StartAsync(Action<VesselConfig>? mutate = null)
     {
         var vessel = new TestVessel

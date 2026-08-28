@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using System.Threading.Channels;
+using Microsoft.Extensions.DependencyInjection;
 using Vessel.Capture;
 using Xunit;
 
@@ -51,7 +52,9 @@ public class EventsTests
 
                 if (line.Length == 0)
                 {
-                    if (currentEvent is not null)
+                    // Skip the `hello` frame (H0b server identity): these tests count lifecycle
+                    // events, and hello is not one — it is the connection's first frame.
+                    if (currentEvent is not null && currentEvent != "hello")
                     {
                         events.Add((currentEvent, string.Join("\n", dataLines)));
                     }
@@ -206,13 +209,14 @@ public class EventsTests
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
         cts.CancelAfter(TimeSpan.FromSeconds(10));
 
-        // Read raw lines until two complete frames have been seen.
+        // Read raw lines until three complete frames have been seen — the first is the
+        // id-less `hello` frame (H0b), so two lifecycle frames (started + completed) follow.
         Task<List<string>> linesTask = Task.Run(
             async () =>
             {
                 var collected = new List<string>();
                 int frames = 0;
-                while (frames < 2)
+                while (frames < 3)
                 {
                     string? line = await reader.ReadLineAsync(cts.Token);
                     if (line is null) break;
@@ -234,15 +238,19 @@ public class EventsTests
             .Select(l => long.Parse(l["id:".Length..].Trim()))
             .ToList();
 
-        Assert.True(ids.Count >= 2, $"expected an id: line per frame, got {ids.Count} in:\n{string.Join("\n", lines)}");
+        // The hello frame has no id:, so only the two lifecycle frames contribute ids.
+        Assert.True(ids.Count >= 2, $"expected an id: line per lifecycle frame, got {ids.Count} in:\n{string.Join("\n", lines)}");
         // Monotonically increasing, so a client can tell "next" from "dropped some".
         Assert.Equal(ids.OrderBy(x => x).ToList(), ids);
         Assert.Equal(ids.Distinct().Count(), ids.Count);
 
-        // The id must precede its event, or EventSource won't associate the two.
+        // Within any real frame the id: line must immediately precede its event: line, or
+        // EventSource won't associate the two. (Checked on the first id-bearing frame, since
+        // the hello frame legitimately carries an event: with no id:.)
         int firstId = lines.FindIndex(l => l.StartsWith("id:", StringComparison.Ordinal));
-        int firstEvent = lines.FindIndex(l => l.StartsWith("event:", StringComparison.Ordinal));
-        Assert.True(firstId < firstEvent, "id: must come before event: within a frame");
+        Assert.True(
+            firstId >= 0 && firstId + 1 < lines.Count && lines[firstId + 1].StartsWith("event:", StringComparison.Ordinal),
+            $"id: must immediately precede event: within a frame; lines:\n{string.Join("\n", lines)}");
     }
 
     // R11/F2 — GET /vessel/api/active is the server-authoritative lifecycle source the
@@ -280,6 +288,152 @@ public class EventsTests
 
         Assert.True(newestCompleted >= 1, "a completed request must advance newestCompletedSeq");
         Assert.Equal(0, activeCount); // no traffic is in flight, so nothing remains active
+    }
+
+    // R11/H0b(1) — every server-identity surface reports the same run id within one process:
+    // the SSE `hello` frame (first on the wire, no `id:` so it never perturbs gap detection),
+    // `GET /active`, and `GET /status`. A client uses a run-id change to tell a restart from a
+    // reconnect and discard a dead process's in-flight seqs wholesale.
+    [Fact]
+    public async Task ServerRunId_ConsistentAcrossHelloActiveAndStatus()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        // The hello frame is the first thing the SSE endpoint writes.
+        using HttpResponseMessage events = await client.GetAsync(
+            $"{vessel.BaseUrl}/vessel/api/events", HttpCompletionOption.ResponseHeadersRead, CT);
+        await using Stream stream = await events.Content.ReadAsStreamAsync(CT);
+        using var reader = new StreamReader(stream);
+
+        string? helloRunId = null;
+        using (var cts = CancellationTokenSource.CreateLinkedTokenSource(CT))
+        {
+            cts.CancelAfter(TimeSpan.FromSeconds(10));
+            string? currentEvent = null;
+            while (helloRunId is null)
+            {
+                string? line = await reader.ReadLineAsync(cts.Token);
+                if (line is null) break;
+                if (line.StartsWith("id:", StringComparison.Ordinal))
+                {
+                    Assert.Fail("the hello frame must not carry an id: field");
+                }
+                else if (line.StartsWith("event:", StringComparison.Ordinal))
+                {
+                    currentEvent = line["event:".Length..].Trim();
+                }
+                else if (line.StartsWith("data:", StringComparison.Ordinal) && currentEvent == "hello")
+                {
+                    using JsonDocument doc = JsonDocument.Parse(line["data:".Length..].Trim());
+                    helloRunId = doc.RootElement.GetProperty("serverRunId").GetString();
+                }
+            }
+        }
+
+        Assert.False(string.IsNullOrEmpty(helloRunId), "expected a hello frame carrying serverRunId");
+
+        using JsonDocument activeDoc = JsonDocument.Parse(
+            await (await client.GetAsync($"{vessel.BaseUrl}/vessel/api/active", CT)).Content.ReadAsStringAsync(CT));
+        using JsonDocument statusDoc = JsonDocument.Parse(
+            await (await client.GetAsync($"{vessel.BaseUrl}/vessel/api/status", CT)).Content.ReadAsStringAsync(CT));
+
+        Assert.Equal(helloRunId, activeDoc.RootElement.GetProperty("serverRunId").GetString());
+        Assert.Equal(helloRunId, statusDoc.RootElement.GetProperty("serverRunId").GetString());
+    }
+
+    // R11/H0b(2) — the concurrent-snapshot invariant probe, ported. GetActiveRequests must
+    // return one coherent snapshot: every ODD seq at or below the returned watermark must be
+    // present in the active set. The probe registers an odd seq that never completes, then
+    // registers and completes the following even seq (which advances the watermark past the
+    // odd one). Reading the active keys and the watermark separately (a concurrent dictionary +
+    // an interlocked long) let a snapshot report a watermark covering a still-running odd seq
+    // absent from the keys — the review saw 187/571 snapshots violate this. Under one lock, the
+    // invariant holds with zero violations.
+    [Fact]
+    public async Task Active_SnapshotStaysCoherent_UnderConcurrentRegisterAndComplete()
+    {
+        var hub = new CaptureEvents();
+        var violations = new System.Collections.Concurrent.ConcurrentBag<string>();
+        using var stop = new CancellationTokenSource();
+
+        Task[] readers = Enumerable.Range(0, 4).Select(_ => Task.Run(
+            () =>
+            {
+                while (!stop.IsCancellationRequested)
+                {
+                    ActiveRequests snap = hub.GetActiveRequests();
+                    var active = new HashSet<long>(snap.ActiveSeqs);
+                    for (long odd = 1; odd <= snap.NewestCompletedSeq; odd += 2)
+                    {
+                        if (!active.Contains(odd))
+                        {
+                            violations.Add($"odd {odd} absent though watermark is {snap.NewestCompletedSeq}");
+                            break;
+                        }
+                    }
+                }
+            },
+            CT)).ToArray();
+
+        const int iterations = 4000;
+        for (int k = 1; k <= iterations; k++)
+        {
+            long odd = (2 * k) - 1;
+            long even = 2 * k;
+            hub.Started(odd, "2026-08-28T00:00:00.0000000Z", 1, "POST", "/odd", "stub", []); // never completes
+            hub.Started(even, "2026-08-28T00:00:00.0000000Z", 1, "POST", "/even", "stub", []);
+            hub.Completed(even, null); // advances the watermark past `odd`
+        }
+
+        stop.Cancel();
+        await Task.WhenAll(readers);
+
+        Assert.Empty(violations);
+    }
+
+    // R25/H0b(3) — once capture admission is closed, every proxied request still forwards, and
+    // its registered seq must reach a terminal transition (ProxyHandler completes it on the
+    // drop) instead of leaking in the active set forever. With and without an SSE subscriber:
+    // removal is independent of subscribers.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StoppedAdmission_ProxiedRequestsForward_ButLeaveNoActiveEntries(bool withSubscriber)
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        HttpResponseMessage? subscriber = null;
+        if (withSubscriber)
+        {
+            subscriber = await client.GetAsync(
+                $"{vessel.BaseUrl}/vessel/api/events", HttpCompletionOption.ResponseHeadersRead, CT);
+            await Task.Delay(50, CT); // let the subscription register
+        }
+
+        // Enter the terminal admission state directly (the review's probe shape), rather than
+        // inducing five real disk failures.
+        vessel.Services.GetRequiredService<CaptureChannel>().Stop("test: admission closed");
+        var events = vessel.Services.GetRequiredService<CaptureEvents>();
+
+        const int count = 32;
+        for (int i = 0; i < count; i++)
+        {
+            using HttpResponseMessage r = await client.GetAsync($"{vessel.BaseUrl}/echo?stopped{i}", CT);
+            Assert.Equal(HttpStatusCode.OK, r.StatusCode); // forwarding is independent of capture health
+        }
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
+        while (events.GetActiveRequests().ActiveSeqs.Length > 0 && !cts.IsCancellationRequested)
+        {
+            await Task.Delay(25, cts.Token);
+        }
+
+        Assert.Empty(events.GetActiveRequests().ActiveSeqs);
+
+        subscriber?.Dispose();
     }
 
     // R22 — the review's concurrent-publisher probe, ported as a regression test. An atomic

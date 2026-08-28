@@ -362,30 +362,13 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     /// oldest-<c>N</c> limit. <c>incremental_vacuum</c> runs after commit so the file
     /// actually shrinks.
     /// </summary>
-    public ClearOutcome Clear(string? beforeIso)
+    public int Clear(string? beforeIso)
     {
         SqliteConnection connection = Connected();
         using SqliteTransaction transaction = connection.BeginTransaction();
 
         string filter = beforeIso is null ? "" : "WHERE started_at < $before";
         string matching = $"SELECT id FROM requests {filter}";
-
-        // R23 — capture the deletion boundary (highest id being removed) inside the same
-        // transaction, before the rows are gone, so the client can tell a completion the
-        // clear invalidated from one that finished above the boundary.
-        long? maxDeletedId;
-        using (SqliteCommand max = connection.CreateCommand())
-        {
-            max.Transaction = transaction;
-            max.CommandText = $"SELECT MAX(id) FROM requests {filter}";
-            if (beforeIso is not null)
-            {
-                AddTo(max, "$before").Value = beforeIso;
-            }
-
-            object? result = max.ExecuteScalar();
-            maxDeletedId = result is null or DBNull ? null : Convert.ToInt64(result);
-        }
 
         using (SqliteCommand fts = connection.CreateCommand())
         {
@@ -414,7 +397,7 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
 
         transaction.Commit();
         Execute("PRAGMA incremental_vacuum");
-        return new ClearOutcome(deleted, maxDeletedId);
+        return deleted;
     }
 
     private static SqliteParameter AddTo(SqliteCommand command, string name)

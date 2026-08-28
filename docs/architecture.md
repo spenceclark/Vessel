@@ -157,10 +157,24 @@ background writer:
 
 ### 4.4 In-flight visibility
 
-Capture emits lifecycle events onto the SSE feed: `started`, `request_ready`,
-`first_token`, `completed`. The UI shows in-flight requests live with a running timer,
-plus a lightweight client-side detail (method/path/backend/model/tags/elapsed — no REST
-fetch, since a request that hasn't completed has no response to show yet).
+Capture emits lifecycle events onto the SSE feed: `hello` (connection identity),
+`started`, `request_ready`, `first_token`, `completed`, and `cleared`. The UI shows
+in-flight requests live with a running timer, plus a lightweight client-side detail
+(method/path/backend/model/tags/elapsed — no REST fetch, since a request that hasn't
+completed has no response to show yet).
+
+**Lifecycle authority (code-review Batch H, R11/R23/R25).** Reconciliation is
+server-authoritative, not history-derived: `GET /vessel/api/active` returns the live
+in-flight set `{ activeSeqs, newestCompletedSeq, serverRunId }`, read under the hub's one
+lock so the set and its watermark are always coherent. `serverRunId` (a per-process GUID,
+also on `hello` and `/status`) lets the client distinguish a restart from a reconnect and
+discard a dead process's `seq`s wholesale. Every registered request is guaranteed a
+terminal transition — the writer completes it, or (when capture admission is closed)
+`ProxyHandler` and the writer's drain do — so a `seq` can never leak in the active set
+while forwarding stays independent of capture health. Clearing is the in-band `cleared`
+event (published under the same lock as `completed`, so it orders correctly against
+completions); the client purges the rows the server deleted by the server's own predicate,
+with no client-side id boundary or generation counter. Full contract in phase-3.md D5.
 
 **Accepted scope (post-Phase-4 addition, code review E2).** `request_ready {seq, model}`
 was added after Phase 3/4 landed (ui-spec.md §9.1's in-flight-detail TODO): emitted once
@@ -326,7 +340,8 @@ Everything Vessel-owned lives under `/vessel/` (impossible to collide with `/v1/
 | `GET /vessel/api/requests/{id}/curl` | request as a copy-pasteable curl command |
 | `GET /vessel/api/sessions` · `POST /vessel/api/sessions` | list / reset (create marker) |
 | `GET /vessel/api/stats?session=` | totals, failures, avg latency / tok/s / ttft, token totals in/out/cached (accepted scope, post-Phase-4 addition — phase-3.md D3) |
-| `GET /vessel/api/events` | SSE: `started`, `request_ready`, `first_token`, `completed` lifecycle events (§4.4) |
+| `GET /vessel/api/events` | SSE lifecycle feed: `hello`, `started`, `request_ready`, `first_token`, `completed`, `cleared` (§4.4) |
+| `GET /vessel/api/active` | server-authoritative in-flight set `{ activeSeqs, newestCompletedSeq, serverRunId }` for reconciliation (§4.4, Batch F/H) |
 | `GET/PUT /vessel/api/config` | backends, retention, ports, redaction — persisted to `vessel.json` |
 | `GET /vessel/api/ollama/ps` | (Ollama backends) proxied `ollama ps` — loaded models, memory |
 

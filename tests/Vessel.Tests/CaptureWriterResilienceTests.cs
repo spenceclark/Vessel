@@ -62,7 +62,7 @@ public class CaptureWriterResilienceTests
         public SessionInfo CreateSession(string? name) =>
             new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name);
 
-        public ClearOutcome Clear(string? beforeIso) => new(0, null);
+        public int Clear(string? beforeIso) => 0;
 
         public int SnapshotAttempts()
         {
@@ -81,8 +81,9 @@ public class CaptureWriterResilienceTests
         }
     }
 
-    private static CaptureWriterService NewWriter(CaptureChannel channel, ICaptureStore store) =>
-        new(channel, store, new FormatEnricher(new VesselConfig()), new CaptureEvents(), new CurrentSession(),
+    private static CaptureWriterService NewWriter(
+        CaptureChannel channel, ICaptureStore store, CaptureEvents? events = null) =>
+        new(channel, store, new FormatEnricher(new VesselConfig()), events ?? new CaptureEvents(), new CurrentSession(),
             NullLogger<CaptureWriterService>.Instance);
 
     private static async Task WaitFor(Func<bool> condition)
@@ -191,7 +192,7 @@ public class CaptureWriterResilienceTests
 
         await WaitFor(() => channel.IsStopped);
 
-        var clear = new TaskCompletionSource<ClearOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clear = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         channel.Enqueue(new ClearCommand(null, clear));
         var session = new TaskCompletionSource<SessionInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
         channel.Enqueue(new CreateSessionCommand("after", session));
@@ -232,13 +233,62 @@ public class CaptureWriterResilienceTests
 
         Assert.False(channel.IsStopped); // one failure short
 
-        var clear = new TaskCompletionSource<ClearOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clear = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         channel.Enqueue(TestCapture.Record("/fail-final"));
         channel.Enqueue(new ClearCommand(null, clear));
 
         await Assert.ThrowsAsync<CaptureStoppedException>(
             () => clear.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
         Assert.True(channel.IsStopped);
+
+        await writer.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    // R25/H0b(3): every registered lifecycle must reach a terminal transition even when the
+    // writer gives up and discards captures. Register each seq on the hub (as ProxyHandler does
+    // via `started`), enqueue its record, and make every write fail. Failures count per *batch*,
+    // so records are fed one at a time to walk to the give-up threshold; the tripping step then
+    // submits several captures together, so give-up must complete *all* of them — the ones in
+    // the failing batch (InsertPending's catch) and any that spill into the drain — leaving no
+    // seq leaked in the active set.
+    [Fact]
+    public async Task WriterGiveUp_CompletesEveryDiscardedCaptureIdentity()
+    {
+        var hub = new CaptureEvents();
+        var channel = new CaptureChannel();
+        var store = new FakeStore { ThrowOnAttempt = _ => true };
+        CaptureWriterService writer = NewWriter(channel, store, hub);
+        await writer.StartAsync(TestContext.Current.CancellationToken);
+
+        long seq = 0;
+        void Register(string path)
+        {
+            seq++;
+            hub.Started(seq, "2026-08-28T00:00:00.0000000Z", 1, "POST", path, "stub", []);
+            channel.Enqueue(TestCapture.Record(path) with { Seq = seq });
+        }
+
+        // One failure short of give-up, one record (= one failing batch) at a time.
+        for (int i = 1; i < CaptureWriterService.MaxConsecutiveFailures; i++)
+        {
+            Register($"/fail-{i}");
+            int expected = i;
+            await WaitFor(() => store.SnapshotAttempts() >= expected);
+        }
+
+        Assert.False(channel.IsStopped); // still one short
+
+        // The tripping step: several captures at once. Some land in the failing batch; the rest
+        // race into the channel and must be released by the drain.
+        for (int j = 0; j < 8; j++)
+        {
+            Register($"/trip-{j}");
+        }
+
+        await WaitFor(() => channel.IsStopped);
+        await WaitFor(() => hub.GetActiveRequests().ActiveSeqs.Length == 0);
+
+        Assert.Empty(hub.GetActiveRequests().ActiveSeqs);
 
         await writer.StopAsync(TestContext.Current.CancellationToken);
     }
@@ -255,18 +305,18 @@ public class CaptureWriterResilienceTests
 
         // One batch, in this order: capture, clear, capture.
         channel.Enqueue(TestCapture.Record("/before-clear"));
-        var clear = new TaskCompletionSource<ClearOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clear = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         channel.Enqueue(new ClearCommand(null, clear));
         channel.Enqueue(TestCapture.Record("/after-clear"));
 
         await writer.StartAsync(TestContext.Current.CancellationToken);
 
-        ClearOutcome outcome = await clear.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        int deleted = await clear.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await WaitFor(() => store.Operations.Contains("insert:/after-clear"));
         await writer.StopAsync(TestContext.Current.CancellationToken);
 
         // Exactly the earlier capture was visible to the clear, and the later one was not.
-        Assert.Equal(1, outcome.Deleted);
+        Assert.Equal(1, deleted);
         Assert.Equal(
             ["insert:/before-clear", "clear", "insert:/after-clear"],
             store.Operations);
@@ -315,14 +365,14 @@ public class CaptureWriterResilienceTests
         public SessionInfo CreateSession(string? name) =>
             new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name);
 
-        public ClearOutcome Clear(string? beforeIso)
+        public int Clear(string? beforeIso)
         {
             lock (_lock)
             {
                 _operations.Add("clear");
                 int deleted = _live.Count;
                 _live.Clear();
-                return new ClearOutcome(deleted, deleted == 0 ? null : deleted);
+                return deleted;
             }
         }
     }

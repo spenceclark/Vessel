@@ -31,10 +31,8 @@ public sealed partial class ApiJsonContext : JsonSerializerContext;
 public sealed record CreateSessionRequest(string? Name);
 
 /// <summary>
-/// D6 — <c>DELETE /requests</c> response. <c>BoundaryId</c> (R23) is the highest deleted id,
-/// so the client can drop buffered completions the clear invalidated while keeping ones that
-/// finished above it; null when nothing matched.
+/// D6 — <c>DELETE /requests</c> response: the count deleted, for the UX toast. R23/H0a: no
+/// deletion boundary here — the client purges cleared rows on the in-band <c>cleared</c> SSE
+/// event, which orders correctly against completions, so the ack is UX only.
 /// </summary>
-public sealed record ClearResponse(
-    int Deleted,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? BoundaryId);
+public sealed record ClearResponse(int Deleted);

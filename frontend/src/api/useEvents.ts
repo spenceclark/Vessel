@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import type { CompletedEvent, FirstTokenEvent, RequestReadyEvent, StartedEvent } from './types'
+import type {
+  ClearedEvent,
+  CompletedEvent,
+  FirstTokenEvent,
+  HelloEvent,
+  RequestReadyEvent,
+  StartedEvent,
+} from './types'
 
 export interface InFlightRequest {
   seq: number
@@ -18,6 +25,10 @@ export interface EventHandlers {
   onRequestReady: (data: RequestReadyEvent) => void
   onFirstToken: (data: FirstTokenEvent) => void
   onCompleted: (data: CompletedEvent) => void
+  /** H0a/R23 — the server cleared history; purge matching buffered + listed rows. */
+  onCleared: (data: ClearedEvent) => void
+  /** H0b — the first frame of every connection: this process's run id (a change means a restart). */
+  onHello: (data: HelloEvent) => void
   /** R11 — frames were dropped between the last one and this one; the caller must reconcile. */
   onGap: (missed: number) => void
   /** The EventSource reconnected after a drop: everything during the gap was missed. */
@@ -97,6 +108,17 @@ export function useEvents(handlers: EventHandlers) {
     )
     source.addEventListener('completed', (e: MessageEvent<string>) =>
       receive<CompletedEvent>(e, (data) => handlersRef.current.onCompleted(data)),
+    )
+    // `cleared` is a real published frame (it carries an `id:`), so it flows through `receive`
+    // and participates in gap detection — a dropped clear is detectable like any other loss.
+    source.addEventListener('cleared', (e: MessageEvent<string>) =>
+      receive<ClearedEvent>(e, (data) => handlersRef.current.onCleared(data)),
+    )
+    // `hello` deliberately carries no `id:` (see the server), so it must NOT go through
+    // `receive` — it is server identity, not a lifecycle frame, and must never move the gap
+    // watermark.
+    source.addEventListener('hello', (e: MessageEvent<string>) =>
+      handlersRef.current.onHello(JSON.parse(e.data) as HelloEvent),
     )
 
     return () => source.close()

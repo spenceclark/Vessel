@@ -41,7 +41,7 @@ export default function App() {
 
   // R10/R11/D05 — live history (in-flight map, completion merging, reconciliation) is one
   // model, owned by one hook. App only supplies scope/filters and handles selection.
-  const { inFlight, connected, newSinceFilter, clearNewSinceFilter, notifyCleared } = useLiveHistory({
+  const { inFlight, connected, newSinceFilter, clearNewSinceFilter } = useLiveHistory({
     scope,
     filters,
     onCompleted: (row, seq) => {
@@ -65,13 +65,10 @@ export default function App() {
   // schema change to prevent reuse; documented in architecture.md §6 as a known caveat).
   // Every clear evicts every cached detail unconditionally (cheap, and the only way to be
   // sure none of them can resurface via reuse); the selection itself only clears when the
-  // clear actually reached the selected row.
+  // clear actually reached the selected row. (The live list/buffer purge is server-driven,
+  // via the in-band `cleared` SSE event in useLiveHistory — R23/H0a — not this callback.)
   const handleDataCleared = useCallback(
-    (clearedScope: { all: true } | { before: string }, boundaryId: number | null) => {
-      // R23 — bump the live-history generation for this clear so buffered completions it
-      // invalidated don't restore cleared rows when the post-clear refetch drains them.
-      notifyCleared(clearedScope, boundaryId)
-
+    (clearedScope: { all: true } | { before: string }) => {
       const cachedDetails = queryClient.getQueriesData<RequestDetail>({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
       queryClient.removeQueries({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
 
@@ -87,7 +84,7 @@ export default function App() {
         return survived ? sel : null
       })
     },
-    [queryClient, notifyCleared],
+    [queryClient],
   )
 
   return (

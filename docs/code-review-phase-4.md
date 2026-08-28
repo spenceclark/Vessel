@@ -1,283 +1,263 @@
-# Code review through Phase 4 — verification of fixes
+# Code review through Phase 4 — round-two verification
 
-**Re-review date:** 28 August 2026
+**Review date:** 28 August 2026
 
-**Reviewed remediation:** `b4c5d63` (`Code review feedback`)
+**Reviewed remediation:** `14c5c5e` — `Code review feedback round 2`
+
+**Previous remediation:** `b4c5d63` — `Code review feedback`
 
 **Original review baseline:** `3db797a`
 
-**Scope:** verify R01–R21 and D01–D05 against the brief, architecture, Phase 0–4 specifications, plan, and approved remediation decisions.
+**Scope:** verify previous findings against the current code, brief, architecture,
+Phase 0–4 specifications, plan, and accepted remediation decisions. Future phases are
+not acceptance requirements for this review.
 
 ## Assessment
 
-**Most fixes are effective, but the findings are not all closed.** Of the 21 original
-findings, 17 original failure scenarios are resolved and four remain partially addressed
-(R05, R09, R11, R18). Two additional regressions in the remediation need fixes:
-out-of-order SSE publication IDs (R22) and buffered completions restoring cleared history
-(R23). There are **six current P2 code findings**, detailed below. R05's original P1
-unbounded-allocation problem is fixed; its remaining issue is a P2 display-integrity gap.
+**The findings are not all fixed.** Four of the six findings outstanding after the first
+re-review are now resolved: **R05, R09, R18 and R22**. The original off-page recovery and
+buffer-before-clear examples also pass, but **R11 and R23 remain partially resolved**
+under other valid event orderings. Two regressions need correction: **R24**, which hides
+raw response streams, and **R25**, which retains active-request entries after capture
+stops. There are **four current P2 findings**, detailed in §2.
 
-The backend suite passed **255/255 in three consecutive runs**, without failures or skips.
-The existing frontend suite passed **25/25**, and its production build passed. Five
-additional checks against the real frontend hook/renderers all failed; a separate C#
-probe also confirmed out-of-order event IDs and lost Ollama generate thinking.
+The repository's backend suite passed **264/264 in three consecutive runs**, without
+failures or skips. The frontend suite passed **56/56**. The production build and current
+clean-publish smoke passed. Separate probes using the production frontend hook/components
+produced **two passing controls and five failing assertions**. Backend probes additionally
+confirmed inconsistent lifecycle snapshots, incorrect clear-before boundary assumptions,
+and retained active entries after admission stops.
 
-**Do not mark the Phase 4 acceptance gate complete yet.** The 10,000-row/100-tag layout
-now works, but the browser renderer crashed during the live burst. That observation
-does not establish its cause. Independently reproduced event-consistency defects are
-sufficient to keep the live-history gate open.
+The live 10,000-request exercise did not reproduce the previous browser crash. The same
+tab eventually showed stored history and usable 100-tag filters without a manual reload,
+with no running rows observed after settlement. There was a visible backlog, delayed
+facets, and a later **Disconnected** indicator. This is positive evidence, but not proof
+of uninterrupted live operation or a root cause for the old crash.
 
-This document replaces the old assessment in place; the original report remains in Git
-history. This review changes only this report, not application code or repository tests,
-and makes no commit. Separate edits to
-[ui-spec.md](E:/Code/Vessel/docs/ui-spec.md),
-[MessageView.tsx](E:/Code/Vessel/frontend/src/components/MessageView.tsx),
-[MessageView.test.ts](E:/Code/Vessel/frontend/src/components/MessageView.test.ts), and
-[StatsBar.tsx](E:/Code/Vessel/frontend/src/components/StatsBar.tsx)
-appeared during the review and were left untouched. Published-build/browser evidence
-below is for the isolated copy of `b4c5d63`, not those concurrent UI changes.
+**Phase 4 should not be signed off while the four findings remain.** The overall
+architecture remains appropriate; the defects concern lifecycle consistency, deletion
+ordering across interfaces, and the raw-view fallback.
 
-## 1. Status of every original finding
+This review changes only this report. No application code or repository tests were
+modified, and no commit was made. A concurrent edit to
+[plan.md](E:/Code/Vessel/docs/plan.md) added future replay decisions; it was left untouched
+and is outside this review's scope. Earlier report versions remain in Git history.
 
-“Resolved” means the original defect has a corresponding code correction and the
-evidence stated here. It is not a claim that every related edge case has been exhausted.
+## 1. Status of prior findings
 
-| ID | Status | Verification and qualification |
+“Resolved” refers to the reported defect and the stated verification, not every possible
+failure of the surrounding feature. Findings closed in round one were checked against
+the current changes and rerun suites; their earlier interactive checks were not all
+repeated. Of R01–R23, **21 are resolved and two remain partial**; R24–R25 are new below.
+
+| ID | Status | Current evidence and qualification |
 | --- | --- | --- |
-| **R01 — Clean publish omits UI** | **Resolved; smoke caveat** | [Vessel.csproj](E:/Code/Vessel/src/Vessel/Vessel.csproj) builds the frontend before resource collection/compilation. A clean copy without dist/bin/obj/node_modules produced a 102.9 MB executable containing the UI. A separate launch served the SPA, JS and CSS assets, status, proxy traffic, and the unknown-backend error correctly. The complete smoke script did fail during restart; see §5. |
-| **R02 — Stale live-config routing** | **Resolved** | [ConfigStore.cs](E:/Code/Vessel/src/Vessel/Config/ConfigStore.cs) publishes one config/version snapshot. [BackendRegistry.cs](E:/Code/Vessel/src/Vessel/Proxy/BackendRegistry.cs) resolves the requested snapshot and prevents cache regression; routing and limits use the same snapshot. Config concurrency and live-apply tests passed in all three backend runs. |
-| **R03 — Markdown makes automatic requests** | **Resolved** | [MessageView.tsx](E:/Code/Vessel/frontend/src/components/MessageView.tsx) renders URL images as inert placeholders and links without navigable hrefs; control-plane CSP adds protection. In the browser, the captured Markdown/structured-image case initially had no image sources or links. Clicking the embedded image created only its captured data URI. Component and CSP tests passed. |
-| **R04 — Settings steals input focus** | **Resolved** | [dialog.tsx](E:/Code/Vessel/frontend/src/components/ui/dialog.tsx) no longer reinstalls the focus lifecycle for changing callbacks; the clock is scoped to consumers. The numeric input retained its value and focus across subsequent updates. Typed DELETE enabled confirmation; the action was cancelled. |
-| **R05 — Unbounded content decoding** | **Partial** | Streaming decode budgets and all-codec/stacked-encoding boundary tests fix the original allocation issue. The new read-time `decodeTruncated` flag is not consumed by the frontend; see §2.4. |
-| **R06 — Writer gives up but queue accepts forever** | **Resolved** | [CaptureChannel.cs](E:/Code/Vessel/src/Vessel/Capture/CaptureChannel.cs) closes admission, releases queued/future commands with an error, and exposes stopped health. Writer resilience tests cover terminal failure and pending commands; API waits are cancellation-aware, and the health banner exists. |
-| **R07 — Clear overtakes queued captures** | **Resolved** | [CaptureWriterService.cs](E:/Code/Vessel/src/Vessel/Capture/CaptureWriterService.cs) flushes preceding captures before executing a command. `ClearRunsAfterCapturesQueuedBeforeIt` passed, as did clear/FTS tests. This is separate from the new client-side R23 race. |
-| **R08 — Transport errors discard partial response enrichment** | **Resolved** | Response provenance distinguishes Vessel-authored errors from captured upstream bytes. `ClientDisconnectMidStream_KeepsReassemblyResponseTextAndFts` and the pre-response-error exclusion test passed. Partial upstream content remains searchable and inspectable. |
-| **R09 — Ollama tools/thinking lost** | **Partial** | Chat tool batches and thinking are accumulated, rendered and indexed; tests and the newly checked-in real Ollama fixture pass. The generate branch still loses thinking; see §2.5. |
-| **R10 — Completion during initial fetch disappears** | **Original scenario resolved** | [useLiveHistory.ts](E:/Code/Vessel/frontend/src/api/useLiveHistory.ts) buffers completions while list fetches are unsettled and merges after settlement. Existing race tests pass. The new buffer does not respect a history clear: R23 remains a related regression. |
-| **R11 — Lost events leave permanent running rows** | **Partial** | Reconnect/gap handling now refetches history, stats and facets, but only reconciles against cached history pages. A missed completion beyond those pages remains running. See §2.1; R22 also undermines the gap detector. |
-| **R12 — Tags hide history list** | **Resolved** | [FilterBar.tsx](E:/Code/Vessel/frontend/src/components/FilterBar.tsx) caps the tag region and offers expansion; the list has a minimum height. At 1280×720 with 10,000 persisted rows and 100 tags, history retained a 391 px viewport both collapsed and expanded. Selecting tag 050 worked. |
-| **R13 — Backend rename overwrites another** | **Resolved** | [ConfigPanel.tsx](E:/Code/Vessel/frontend/src/components/ConfigPanel.tsx) rejects case-insensitive collisions before mutating the draft. Renaming `review-second` to `OLLAMA` showed an inline error and kept both backend rows/default selection. No save was made. |
-| **R14 — Clear leaves stale detail identity** | **Original same-tab scenario resolved** | [App.tsx](E:/Code/Vessel/frontend/src/App.tsx:64) removes detail queries and clears affected selection. The approved decision explicitly retains SQLite ID reuse without a schema migration; stale other tabs remain an accepted caveat. R23 is a distinct same-tab list-buffer defect, not that accepted caveat. |
-| **R15 — Null config sections return 500** | **Resolved** | [ConfigLoader.cs](E:/Code/Vessel/src/Vessel/Config/ConfigLoader.cs) rejects null sections and null backend entries as validation errors. Loader and PUT tests passed, including preservation of existing config. |
-| **R16 — Repeated save loses restart warning** | **Resolved** | The bound listener is recorded after startup and compared with desired configuration. GET includes pending restart state, so reopening the editor does not erase it. Repeated-save, listen-change and no-listen-change tests passed. |
-| **R17 — Malformed messages blank app** | **Resolved** | [validate.ts](E:/Code/Vessel/frontend/src/render/validate.ts) validates normalized render data, and local error boundaries preserve raw fallback. A real captured request with an object-valued role opened as raw JSON; the viewer remained usable and another capture rendered normally. Validation/boundary tests passed. |
-| **R18 — Image preview absent** | **Partial** | Image sources and click-to-preview exist for supported chat/provider blocks. A captured Ollama chat image previewed from a data URI without a remote source. Top-level Ollama generate images are still omitted; see §2.6. |
-| **R19 — SSE EOF accepted as blank line** | **Resolved** | [SseParser.cs](E:/Code/Vessel/src/Vessel/Formats/SseParser.cs) distinguishes a real blank line from the synthetic final split item. LF/CRLF terminal matrices and adapter incomplete-stream warning tests passed. |
-| **R20 — Intermittent stats assertion** | **Resolved for the reported rounding failure** | The deterministic seeded-duration test checks the average within `1e-9`; the live integration test uses an explicit `0.001 ms` tolerance instead of comparing separately rounded values. Counts/session/null/token assertions remain. All three full runs passed. This changes the comparison strategy; it is not an unchanged assertion or proof of unlimited suite stability. |
-| **R21 — Failed save destroys valid config** | **Resolved** | Config saves write a temporary sibling and atomically replace/move into place before publishing the snapshot. Read-only-destination and successful-save cleanup tests passed. This verifies normal failure preservation, not power-loss durability. |
+| **R01 — Clean publish omits UI** | **Resolved** | A clean source copy with no build outputs or node_modules produced a 102.9 MB win-x64 executable. Resource inspection, executable launch, SPA/JS serving and proxy assertions passed. The current smoke has narrower startup coverage; see §5. |
+| **R02 — Stale live-config routing** | **Resolved** | Atomic ConfigSnapshot publication and request-scoped backend resolution remain intact. Concurrency tests passed in all three runs. Architecture §9.1 now describes the implemented model. |
+| **R03 — Markdown makes automatic requests** | **Resolved** | Inert captured URLs, explicit embedded-image previews and control-plane CSP remain. MessageView and CSP tests pass; generate images reuse the same preview policy. |
+| **R04 — Settings steals input focus** | **Resolved** | The stable dialog lifecycle and scoped clock remain unchanged. Prior interactive focus/confirmation evidence still applies; not independently repeated this round. |
+| **R05 — Unbounded decoding / invisible read-time truncation** | **Resolved; related regression R24** | Bounded decoding remains covered. The body flag is now mirrored and displayed. A 4 MiB gzip capture reopened with a 1 MiB cap showed a body-local warning despite an untruncated summary. R24 separately breaks raw-stream selection. |
+| **R06 — Writer stops but queue accepts forever** | **Resolved for original queue defect** | Admission closes and commands fail fast; resilience tests pass. R25 is a new leak in the active registry, not a recurrence of the retained-body queue. |
+| **R07 — Clear overtakes queued captures** | **Resolved** | Writer FIFO and atomic clear/FTS tests pass. R23 concerns client merge semantics after the correctly ordered clear. |
+| **R08 — Transport error loses partial enrichment** | **Resolved** | Partial-response and pre-response-error integration tests pass; upstream content provenance remains intact. |
+| **R09 — Ollama tools/thinking lost** | **Resolved** | Generate now accumulates top-level thinking as well as chat thinking/tools. Adapter/golden and renderer tests pass. An independent probe retains thinking in reassembly and searchable text. |
+| **R10 — Completion during initial fetch disappears** | **Resolved for original fetch race** | Buffered-completion tests pass. Clear ordering remains separately tracked as R23. |
+| **R11 — Lost events leave running rows** | **Partial** | The off-page case now passes against the active-request endpoint. Restart identity and snapshot consistency remain defective; see §2.1. |
+| **R12 — Tags hide history list** | **Resolved** | At 1280×720, the 100-tag picker stayed at 84 px and history retained a 385 px viewport, collapsed and expanded. Tag 050 selected correctly. Delayed facet availability is qualified in §5. |
+| **R13 — Backend rename overwrites another** | **Resolved** | Case-insensitive collision validation remains unchanged; prior browser verification still applies. No save was made against the user's configuration. |
+| **R14 — Clear leaves stale detail identity** | **Resolved for original same-tab selection case** | Detail eviction/selection clearing remain; the clear callback now precedes list invalidation. The accepted cross-tab SQLite ID-reuse caveat is unchanged. R23 is a separate same-tab list defect. |
+| **R15 — Null config sections return 500** | **Resolved** | Loader and PUT validation tests pass, preserving existing config on invalid input. |
+| **R16 — Repeated save loses restart warning** | **Resolved** | Bound-listener comparison and GET restart state remain; repeated-save/listen-change tests pass. |
+| **R17 — Malformed messages blank app** | **Resolved** | Normalized-view validation and local error boundaries remain; component tests pass. R24 breaks raw-stream selection without removing the error boundary. |
+| **R18 — Image preview absent** | **Resolved** | Generate extracts top-level images, including image-only requests, into the captured-image preview. Generate malformed-entry and MessageView preview tests pass. |
+| **R19 — SSE EOF treated as blank line** | **Resolved** | Terminal LF/CRLF and incomplete-stream parser/adapter cases pass. |
+| **R20 — Intermittent stats assertion** | **Resolved for reported rounding failure** | Deterministic and explicit-tolerance assertions remain. Three full runs passed; no tests were skipped, weakened or rerun to conceal a failure. |
+| **R21 — Failed save destroys valid config** | **Resolved** | Atomic replacement and failure-preservation tests pass. This does not claim power-loss durability. |
+| **R22 — Concurrent SSE IDs arrive out of order** | **Resolved** | Allocation and fan-out share the publish lock; the client never rewinds its watermark. Concurrent-publisher, genuine-drop and coalesced-recovery tests pass. Snapshot consistency is a distinct R11 issue. |
+| **R23 — Completions restore cleared history** | **Partial** | The exact buffer-before-clear case passes. Receipt-time generations and maximum deleted ID cannot describe all valid clear/SSE orderings; see §2.2. |
 
 ## 2. Remaining code findings
 
-### R11 — P2: Reconciliation cannot remove completed requests outside loaded pages
+### 2.1 R11 — P2: Active-state recovery is not consistent across snapshots or restart
 
-**Locations:** [useLiveHistory.ts:135](E:/Code/Vessel/frontend/src/api/useLiveHistory.ts:135),
-[RequestList.tsx:54](E:/Code/Vessel/frontend/src/components/RequestList.tsx:54).
+**Locations:** [CaptureEvents.cs:82](E:/Code/Vessel/src/Vessel/Capture/CaptureEvents.cs:82),
+[CaptureContext.cs:21](E:/Code/Vessel/src/Vessel/Capture/CaptureContext.cs:21),
+[useLiveHistory.ts:171](E:/Code/Vessel/frontend/src/api/useLiveHistory.ts:171),
+[useEvents.ts:56](E:/Code/Vessel/frontend/src/api/useEvents.ts:56).
 
-The reconciliation path is described as authoritative, but its only evidence of completion
-is the set of request identities present in cached list pages. Refetching a paginated
-query refreshes its loaded pages; it does not enumerate all stored history or provide
-the server's active-request set.
+The endpoint fixes the previous dependence on loaded history pages. However, its
+`activeSeqs` and `newestCompletedSeq` are not one coherent snapshot, and its process-local
+sequence numbers do not identify which server process supplied them.
 
-**Reproduction:** using the production hook with a real QueryClient/infinite query,
-deliver `started` for request 1, omit its completion, then reconnect after 100 newer
-requests have been stored. The refreshed first page contains requests 101 through 2
-and points to an older page. Request 1 remains in `inFlight` after refetch settles.
-The added assertion expecting it to leave fails.
+**Reproduction A — restart:** deliver `started(seq=100)`, then reconnect after a restart
+with `{ activeSeqs: [], newestCompletedSeq: 0 }`. The production hook retains request 100:
+it only removes absent sequences at or below the new completed boundary. The external
+regression assertion fails. CaptureContext's static counter resets with the process;
+resetting the SSE ID watermark does not reset the hook's map. Without further traffic,
+the old request remains running indefinitely. Phase 4's reconnect carry-in explicitly
+includes a Vessel restart.
 
-The same limitation applies when loaded queries exclude a completed row by filters,
-and a cleared, retained-away or unpersisted row cannot be found in history at all.
-Repeatedly fetching the same first page will not resolve those cases. Session scoping
-does not solve this lifecycle problem.
+**Reproduction B — concurrent snapshot:** GetActiveRequests copies active keys, then
+separately reads the completed watermark. Between those reads, another request can
+register and a later sequence can finish. The returned watermark can therefore cover a
+still-running request missing from the returned key array.
 
-**Required outcome:** reconciliation must distinguish active from finished requests
-independently of visible filters and pagination, while retaining legitimate long-running
-requests. Choose and document the authoritative lifecycle mechanism; do not expire
-legitimate requests by an arbitrary timer. Add page-boundary, filtered-history,
-clear/retention, and long-running-request cases to the existing hook tests.
+A probe repeatedly registered an odd sequence that never completes, then registered and
+completed the following even sequence. A consistent snapshot must contain every odd
+sequence at or below its watermark. **187 of 571 snapshots violated that invariant**;
+one reported watermark 464 but contained only 230 of the 232 required active odd entries.
+All omitted odd requests were still running. If the corresponding started frame reaches
+the client before that API response, reconciliation wrongly removes a legitimate request.
+The publish lock does not cover these state reads/writes.
 
-### R22 — P2: Concurrent publication breaks the SSE ID ordering assumption
+**Required outcome:** provide a coherent lifecycle snapshot and a boundary that can be
+compared safely with incoming events, including an explicit way to distinguish server
+lifetimes. Preserve legitimate long requests while removing abandoned prior-process
+entries. Add restart and concurrent-snapshot cases to the existing lifecycle tests;
+serial active-set assertions and the passing off-page control do not establish this.
 
-**New regression in the R11 remediation.**
+### 2.2 R23 — P2: Clear boundaries can resurrect deleted rows or discard survivors
 
-**Locations:** [CaptureEvents.cs:118](E:/Code/Vessel/src/Vessel/Capture/CaptureEvents.cs:118),
-[useEvents.ts:71](E:/Code/Vessel/frontend/src/api/useEvents.ts:71),
-[useLiveHistory.ts:229](E:/Code/Vessel/frontend/src/api/useLiveHistory.ts:229).
+**Locations:** [useLiveHistory.ts:151](E:/Code/Vessel/frontend/src/api/useLiveHistory.ts:151),
+[useLiveHistory.ts:284](E:/Code/Vessel/frontend/src/api/useLiveHistory.ts:284),
+[useLiveHistory.ts:301](E:/Code/Vessel/frontend/src/api/useLiveHistory.ts:301),
+[DataPanel.tsx:36](E:/Code/Vessel/frontend/src/components/DataPanel.tsx:36),
+[SqliteCaptureStore.cs:370](E:/Code/Vessel/src/Vessel/Storage/SqliteCaptureStore.cs:370).
 
-`Interlocked.Increment` makes IDs unique; it does not make ID assignment and channel
-publication one ordered operation. Two publishers can allocate IDs N and N+1 and enqueue
-them in the opposite order. The client treats forward jumps as loss and also moves
-`lastId` backwards on a late lower ID, so later frames can cause further false gaps.
+The local generation advances when the DELETE response reaches the browser; completions
+are stamped when their SSE frames reach the browser. Those independent response streams
+need not arrive in database-operation order. Clear-before also deletes by started_at,
+whereas the client treats MAX(deleted id) as a deleted prefix. IDs follow persistence
+order, not request start time.
 
-**Reproduction:** a C# probe published 100 batches of 128 events through the real hub,
-with up to 16 concurrent publishers. Each batch was fully drained before the next;
-the subscriber capacity is 256, so this test did not require dropping any frame.
-All **12,800** events arrived, with **3,535 adjacent ID reversals**, including
-`11 → 2` and `12 → 7`.
+Three external tests using the real hook and QueryClient fail:
 
-Each false gap can trigger another uncoordinated history/stats/facets reconciliation.
-That creates unnecessary work during the exact burst the mechanism should recover from.
-The existing monotonic-ID test sends requests sequentially and does not cover this.
-
-**Required outcome:** give loss detection an ordering guarantee that matches actual
-delivery, preserving the nonblocking proxy contract. Coalesce overlapping recovery
-work. Test concurrent producers, complete delivery without false gaps, and real drops.
-Do not treat a unique atomic counter alone as proof of ordered publication.
-
-The browser crash during the 10k burst is recorded in §5. It has **not** been traced
-to this defect and is not used as proof of that causal connection.
-
-### R23 — P2: Buffered completions can restore a row after it was cleared
-
-**New regression introduced by the R10 buffer; affects clear-history correctness.**
-
-**Locations:** [useLiveHistory.ts:78](E:/Code/Vessel/frontend/src/api/useLiveHistory.ts:78),
-[useLiveHistory.ts:120](E:/Code/Vessel/frontend/src/api/useLiveHistory.ts:120),
-[DataPanel.tsx:28](E:/Code/Vessel/frontend/src/components/DataPanel.tsx:28),
-[App.tsx:64](E:/Code/Vessel/frontend/src/App.tsx:64).
-
-The clear handler invalidates list queries and evicts detail queries, but does not
-invalidate `pendingRef`. When a pending list fetch settles, every buffered completion
-is merged into the list, even if the clear has already deleted it.
-
-**Reproduction:** keep the initial history query pending; deliver completion for row 1;
-model a successful clear using the same request-list invalidation as DataPanel; resolve
-the history query with an empty post-clear page. The production hook's cache becomes
-`[1]`, not `[]`. This is a hook/cache reproduction of the race, not a claim that the
-browser delete interaction was exercised.
-
-The UI can therefore show deleted history again. Its detail may be missing, or a reused
-SQLite ID may refer to a later capture. Evicting detail caches alone cannot prevent the
-list resurrection.
-
-**Required outcome:** clearing and live completion merging must share a deletion boundary
-or generation model. Discard completions invalidated by the clear while preserving
-requests that finish outside its scope. Cover clear-all and clear-before across both
-initial fetch and refetch settlement, including captures that legitimately survive.
-
-### R05 — P2 remainder: Read-time truncation is invisible in the viewer
-
-**Locations:** [types.ts:38](E:/Code/Vessel/frontend/src/api/types.ts:38),
-[PrettyJson.tsx:12](E:/Code/Vessel/frontend/src/components/PrettyJson.tsx:12),
-[SqliteReadStore.cs:259](E:/Code/Vessel/src/Vessel/Storage/SqliteReadStore.cs:259),
-[Summary.cs:52](E:/Code/Vessel/src/Vessel/Storage/Summary.cs:52).
-
-The backend now returns `BodyPayload.decodeTruncated`, but the mirrored TypeScript type
-has only `text` and `base64`. No frontend consumer handles the new flag. Capture-time
-`body_truncated` warnings do not cover a later reduction of the display decode budget.
-
-**API reproduction:** capture a gzip response expanding to 4 MiB with the 32 MiB limit,
-then reduce `capture.maxBodyMb` to 1 and request the same detail again:
-
-| Field | Before limit change | After limit change |
+| Valid ordering | Expected | Actual |
 | --- | --- | --- |
-| Decoded text length | 4,194,304 | 1,048,576 |
-| Body `decodeTruncated` | false/omitted | true |
-| Summary `truncated` | false | false |
-| Summary warnings | empty | empty |
+| Clear commits; its response and empty list refresh arrive; a delayed completion for deleted row 1 then arrives over SSE. | List stays empty. | Row 1 is merged back. It has the current receipt generation, or bypasses the buffer entirely. |
+| Initial list snapshot is pending; clear commits; a new surviving row completes before the DELETE acknowledgment; that acknowledgment advances the generation; the old snapshot settles empty. | New row remains visible. | Its buffered completion is discarded as pre-clear. This also applies when SQLite reuses a deleted ID. |
+| A newer fast request is persisted as ID 1; an older slow request becomes ID 2; clear-before deletes only ID 2 while both completions are buffered. | Surviving ID 1 is merged. | Both are dropped because both IDs are at or below boundary 2. |
 
-The API budget works. The viewer lacks the information needed to explain that its body
-is now only a prefix. A component check rendering `{ text: 'partial body',
-decodeTruncated: true }` found no truncation/limit warning.
+The third ordering was also checked through the real API: an older slow stream and a
+newer fast request produced IDs 2 and 1 respectively. DELETE returned
+`{ deleted: 1, boundaryId: 2 }`; the subsequent database-backed list correctly contained
+**ID 1**. The server clear was correct; the client's inferred predicate was not.
 
-**Required outcome:** add the field to the API mirror and display a body-local warning
-in every applicable view, including raw response streams. Keep capture truncation and
-display/decode truncation distinguishable. Test changing the cap after capture.
+**Required outcome:** clear scope and completion identity/order must be defined by the
+server operation, not the order of browser callbacks. Respect the timestamp predicate
+for clear-before and preserve post-clear captures. Cover both sides of the acknowledgment,
+delayed SSE, initial fetch/refetch settlement, out-of-order completion and accepted ID
+reuse. Retaining the current predicate longer cannot fix its ordering or scope assumptions.
 
-### R09 — P2 remainder: Ollama generate thinking is still lost
+This follows the remediation plan's maximum-ID approach, so that plan needs a design
+correction too. No schema migration or alternative protocol is selected by this report;
+choose and approve the correction before implementation.
 
-**Locations:** [OllamaAdapter.cs:87](E:/Code/Vessel/src/Vessel/Formats/OllamaAdapter.cs:87),
-[OllamaAdapter.cs:119](E:/Code/Vessel/src/Vessel/Formats/OllamaAdapter.cs:119),
-[ollama.ts:50](E:/Code/Vessel/frontend/src/render/ollama.ts:50).
+### 2.3 R24 — P2: Raw stream selection fails without a rendered response
 
-The fix handles `message.thinking` for chat, but generate uses top-level
-`thinking`. That is a documented Ollama response field.
-[Ollama generate API](https://docs.ollama.com/api/generate),
-[Ollama thinking documentation](https://docs.ollama.com/capabilities/thinking).
+**New regression in the decode-warning wiring.**
 
-**Backend reproduction:**
+**Location:** [DetailPane.tsx:80](E:/Code/Vessel/frontend/src/components/DetailPane.tsx:80).
 
-```json
-{"model":"review","thinking":"considering","response":"","done":false}
-{"model":"review","response":"answer","done":true}
-```
+`responseBodyShown` selects responseRaw only when both responseDisplay and responseView
+are raw. But responseDisplay defaults to rendered, and its toggle only exists when
+responseRendered exists. When extraction returns null, the fallback appears without
+changing that state. Clicking **Raw stream** changes only responseView; the body remains
+responseBody instead of responseRaw.
 
-The real enricher produces `{"model":"review","response":"answer","done":true}`
-and response text `answer`. The earlier thinking is absent from reassembly and
-searchable text, though the raw stream is retained. Separately, providing a complete
-generate response containing both `response` and `thinking` to the frontend renderer
-produces no thinking block.
+**Reproduction:** capture unknown-format streamed NDJSON containing three JSON lines.
+The detail API returns streamed=true, responseBody=null, and those lines in responseRaw.
+Open Response and select Raw stream. The actual browser still shows **No response body**.
+A separate DetailPane test likewise finds no rendered body after the click. Before this
+change, the fallback selected the stream independently of rendered/raw display state.
 
-**Required outcome:** accumulate top-level generate thinking, retain it in the
-synthesized response and intended search text, and expose it in the rendered response.
-Extend the Ollama tests with generate, non-streamed, and interrupted-stream variants.
-The real chat fixture is useful evidence, but does not exercise this branch.
+This breaks the brief's graceful raw fallback and
+[Phase 4 D4](E:/Code/Vessel/docs/phase-4.md:102), which keeps raw inspection available
+regardless of format. It also prevents the new warning from following a selected raw
+stream in this branch.
 
-### R18 — P2 remainder: Ollama generate images have no preview path
+**Required outcome:** resolve the effective fallback mode when choosing the displayed
+body and its warning. Test unknown-format streams and known formats whose extraction
+fails, including a decode-truncated raw payload. Preserve the passing normal-body warning.
 
-**Location:** [ollama.ts:26](E:/Code/Vessel/frontend/src/render/ollama.ts:26).
+### 2.4 R25 — P2: Stopped capture retains every later request in the active registry
 
-The generate request branch creates a block for `prompt` only. It never examines
-top-level `images`, whereas chat's `requestMessage` now does. Ollama's generate API
-supports an array of base64 images.
-[Ollama generate API](https://docs.ollama.com/api/generate).
+**New regression introduced by the server active-request set.**
 
-**Reproduction:** render an `ollama-generate` request containing a prompt and a valid
-one-pixel PNG in `images`. The normalized view contains no image block; consequently
-the existing safe preview component cannot be reached.
+**Locations:** [CaptureEvents.cs:97](E:/Code/Vessel/src/Vessel/Capture/CaptureEvents.cs:97),
+[ProxyHandler.cs:129](E:/Code/Vessel/src/Vessel/Proxy/ProxyHandler.cs:129),
+[CaptureChannel.cs:44](E:/Code/Vessel/src/Vessel/Capture/CaptureChannel.cs:44),
+[CaptureWriterService.cs:120](E:/Code/Vessel/src/Vessel/Capture/CaptureWriterService.cs:120).
 
-**Required outcome:** reuse the captured-image extraction/preview path for generate
-requests, including an image with an empty prompt and malformed image entries. Retain
-the no-network policy. This closes the remaining supported-format gap without changing
-the approved image-preview design.
+Every proxied request registers in _active, even without SSE subscribers. Removal depends
+on CaptureEvents.Completed, normally called by the writer. Once admission stops,
+CaptureChannel.Enqueue drops captures without a terminal lifecycle notification. The
+writer's stop-drain path also releases commands without completing discarded capture
+identities.
 
-## 3. Contract and documentation decisions
+**Reproduction:** run the real app with a temporary config/database and local stub, then
+call CaptureChannel.Stop to enter the production terminal admission state. Send 32 normal
+proxy requests. All return HTTP 200, but the active snapshot retains all **32 sequences**,
+and the completed watermark stays unchanged. The probe ran without an SSE subscriber.
+It exercises stopped admission directly; it did not induce five actual disk failures.
 
-The approval table in
+Forwarding continues as intended, but every subsequent finished request adds permanent
+registry state. The viewer shows false running requests; reconciliation cannot repair
+them because the authority says they are active. Memory grows with traffic even when
+the viewer is closed. R06's body-queue fix does not release this new dictionary state.
+
+**Required outcome:** every registered lifecycle must reach a terminal transition when
+a capture is persisted, dropped, rejected, or drained after shutdown/failure. Keep
+forwarding independent of capture health. Extend writer/admission tests to assert
+lifecycle cleanup with and without subscribers, including records racing stop.
+
+## 3. Brief, architecture and plan alignment
+
+The accepted decisions in
 [code-review-phase-4-plan.md](E:/Code/Vessel/docs/code-review-phase-4-plan.md:15)
-is treated as the accepted contract, not as a fresh request for design approval.
+remain the contract. This review does not reopen approved product choices.
 
-| Item | Re-review |
+| Decision | Current assessment |
 | --- | --- |
-| **D01 — Wire versus decoded storage** | Resolved at the storage boundary. Original compressed wire bytes are retained; enrichment/display decode bounded scratch data. Storage/API regression tests passed. R05 above is the remaining display warning issue. |
-| **D02 — Non-streamed non-Ollama tok/s** | Resolved. The fallback based on whole-request duration was removed; null throughput is restored. Updated golden expectations reflect the approved contract. Exact Ollama evaluation-duration throughput remains valid. |
-| **D03 — Host/browser-origin policy** | Implemented for the control plane. Host/Origin, hostile-host, cross-origin mutation, allowed loopback and proxy-exclusion tests passed. This is not authentication and does not promise safe public exposure. |
-| **D04 — Acceptance/documentation accuracy** | Still open. The remediation plan checks the full 10k/100-tag gate while its own explanation says that combined case was not rerun. The reconnect gate is also overstated given R11/R22. Architecture §9.1 still describes separate snapshot/version publication rather than the atomic `ConfigSnapshot` unit. Correct the owning text and checkboxes in place. |
-| **D05 — In-flight filters** | Implemented as approved: session scope applies; other active filters collapse in-flight rows to a count. Existing hook tests cover scoping/filter behavior. Correct presentation of that count still depends on fixing R11. |
-| **R14b — SQLite identity reuse** | Accepted caveat, not reopened as a migration request. It does not justify R23's same-tab resurrection of cleared rows. |
+| **D01 — Wire versus decoded storage** | Resolved. Wire bytes remain stored and scratch decoding bounded; the read-time warning now exists. R24 separately blocks selecting some raw streams. |
+| **D02 — Non-streamed non-Ollama tok/s** | Resolved. Unsupported whole-request estimates remain absent; exact Ollama evaluation-duration throughput is preserved. |
+| **D03 — Host/browser-origin policy** | Implemented and covered by passing guard tests. It is not authentication or permission to expose the app publicly. |
+| **D04 — Documentation/acceptance accuracy** | **Partial.** Architecture §9.1 is corrected, and the plan records burst runs and smoke changes. Its [closing table](E:/Code/Vessel/docs/code-review-phase-4-plan.md:913) still declares R11 and R23 fully met; those claims must be revised in place given the reproductions above. |
+| **D05 — In-flight filters** | Session-only scoping and filtered-view counts remain as approved. Their correctness still depends on R11/R25 lifecycle state. |
+| **R14b — SQLite ID reuse** | Accepted caveat remains. R23 requires correct same-tab behavior without assuming IDs can never be reused. |
 
-The original architecture direction remains sound: YARP forwarding, capture tees,
-off-path enrichment, a single SQLite writer, parameterized reads/FTS, provider adapters,
-and the embedded React UI. The unresolved issues are at lifecycle and representation
-boundaries, rather than evidence that the overall architecture needs replacing.
+The implementation retains the intended YARP forwarding, capture tees, off-path
+enrichment, single SQLite writer, parameterized history/FTS, provider adapters and embedded
+React UI. Round two improves publication ordering and provider fidelity without changing
+that direction. The remaining bugs do not justify replacing the architecture.
 
-Replay, diff, copy-as-curl, pricing, live token tailing, release CI, the multi-platform
-release matrix and the Phase 6 bind-address banner remain future-plan work. They are
-not counted as Phase 4 defects.
+Replay, diff, copy-as-curl, pricing, live token tailing, release CI, the platform release
+matrix and the Phase 6 bind-address banner remain future work, not Phase 4 findings.
+Concurrent future replay additions to plan.md were not implemented or reviewed here.
 
-## 4. Test coverage and engineering assessment
+## 4. Coverage and engineering assessment
 
-The remediation adds useful coverage at the right seams: concurrent config publication,
-writer shutdown/FIFO, decompression budgets, real transport interruption, malformed render
-models, and a real Ollama chat fixture. Those are material improvements over the
-original review baseline.
+The new concurrent-publisher test, coalesced recovery tests, off-page control, clear-buffer
+cases, generate fixtures and decode-warning tests cover the original failures usefully.
+The gaps are at interaction boundaries:
 
-Remaining coverage gaps correspond directly to the failures above:
+- Lifecycle tests need simultaneous mutation/snapshot reads and a process restart, not
+  only sequential calls using one sequence namespace.
+- Clear tests need server operation order separated from HTTP/SSE delivery order, and
+  persistence order separated from start-time order.
+- Warning tests need the actual DetailPane fallback/toggle interaction, not just the
+  notice component or a body that already renders.
+- Stopped-writer tests must assert registry cleanup as well as channel admission,
+  retained bodies and waiting commands.
 
-- Reconciliation tests account for rows inside the refreshed page, not completed rows
-  outside the loaded/filtered history or rows no longer persisted.
-- The SSE ordering test does not use concurrent publishers.
-- Buffer tests and clear/detail invalidation are tested separately rather than together.
-- The hand-maintained API mirror omitted the newly added body flag.
-- Ollama chat coverage does not establish equivalent generate behavior.
+Extend the existing suites at these seams. External failing probes were retained and
+were not skipped or changed to accept the defects. The seven frontend probes include
+passing controls for off-page recovery and the newly visible normal-body warning.
 
-Extend those existing suites rather than adding tests that merely restate implementation
-constants. Preserve the current passing tests and the failing regression cases until the
-behavior is corrected. A green aggregate count alone cannot close these gaps.
-
-The existing lint command completed with **six warnings**: virtualizer/compiler
-compatibility and hook dependencies in RequestList, plus set-state-in-effect warnings
-in App, DetailPane and ConfigPanel. These are follow-up maintainability concerns,
-not additional demonstrated blockers in this re-review.
+Lint completed with **six warnings**, in RequestList, App, DetailPane and ConfigPanel.
+The build also reports a **502.33 kB minified JS chunk**, above the 500 kB warning
+threshold. These are not additional demonstrated correctness findings; neither command
+should be described as warning-free.
 
 ## 5. Verification actually performed
 
@@ -285,104 +265,105 @@ not additional demonstrated blockers in this re-review.
 
 | Check | Result |
 | --- | --- |
-| `dotnet test --solution Vessel.sln` | Three consecutive successful full runs: 255 passed, 0 failed, 0 skipped each; approximately 12.2, 13.8 and 11.6 seconds. First run used the workspace; subsequent runs used the isolated source copy. |
-| `npm test` | Existing suite: 25 passed across five files. |
-| `npm run build` | Passed TypeScript and production Vite build. |
-| `npm run lint` | Completed with six warnings, not a warning-free result. |
-| Additional frontend reproductions | Five assertions failed: off-page reconciliation, clear/buffer resurrection, decode warning, generate images and generate thinking. They were run outside the repository and were not skipped or converted to passing expectations. |
-| C# concurrency/adapter probes | All 12,800 SSE frames received but 3,535 adjacent ID reversals; generate thinking absent from reassembly. |
-| Read-time decode API check | 4 MiB capture read back as a 1 MiB prefix after lowering the cap, with body flag true but summary truncation false and no warnings. |
+| `dotnet test --solution Vessel.sln` | Three consecutive workspace runs: **264 passed, 0 failed, 0 skipped** each; 12.228, 11.869 and 11.773 seconds. |
+| `npm test` | **56 passed** across eight repository test files. |
+| `npm run build` | TypeScript and production build passed; chunk-size warning noted above. |
+| `npm run lint` | Completed with six warnings. |
+| External frontend regressions | **2 controls passed, 5 assertions failed**: restart recovery, three clear orderings, raw-stream selection. Production hook/components and real QueryClient; event/API delivery is controlled. |
+| C# / real API probes | Clear-before survivor below maximum deleted ID; 32 retained active entries after stop; 187 inconsistent snapshots out of 571; generate thinking retained. Diagnostic probes, not additional passing repository tests. |
+| Decode + browser | A 4 MiB gzip capture reopened under a 1 MiB cap displays 1,048,576 text characters and the decode-limit alert; summary truncation remains false. |
 
-### Clean publish and executable checks
+### Clean publish and executable
 
-A copy containing tracked and nonignored source, but no build outputs or node_modules,
-built the frontend **before** compiling the backend and produced the 102.9 MB win-x64
-single-file executable. The assembly resource check found the SPA and assets.
+The current smoke passed using a clean source copy containing 326 source files and no
+pre-existing dist/bin/obj/node_modules. It built the frontend before backend compilation
+and produced a **102.9 MB** self-contained win-x64 executable. Embedded resources,
+status/backend listing, intact proxy path/body, unknown-backend 404, SPA shell and hashed
+JS asset checks passed.
 
-The smoke script's assertions were preserved in an external copy; only source-root
-selection and cleanup were adjusted to retain evidence. Its complete run **failed**:
+An external copy preserved every current smoke assertion. Only source-root selection
+and cleanup were adjusted to retain evidence. The default port was not used.
 
-- First launch created the default config, but its log also reported that port 4550
-  was already in use. The script's first-run config assertion alone does not establish
-  a successful first-run host startup.
-- The second launch failed in SQLite initialization with `SQLite Error 10: disk I/O
-  error`; the script then timed out waiting for status.
-- The cause of that SQLite failure was not established. Existing user processes were
-  not stopped to free the default port.
+**Coverage qualification:** round two changed the smoke from two launches with a reused
+directory to one launch with a prewritten config and fresh database on an ephemeral port.
+The current smoke passes, but it does **not** independently exercise first-run config
+creation or same-database restart. Config creation has a passing unit test; the prior
+SQLite restart I/O error was neither reproduced nor root-caused by this one-launch test.
+Avoiding that sequence is not proof that restarting against an existing database is
+fixed or verified.
 
-A **separate launch of that same published executable with a fresh temporary config
-and database** succeeded on an ephemeral port. It returned status, served the SPA and
-hashed JS/CSS with HTTP 200, proxied the synthetic traffic, and returned the expected
-404/`unknown_backend` error. Thus R01's missing-resource defect is fixed, but this
-is not a claim that the complete smoke script passed. A further restart command was
-rejected by execution policy and provides no additional verification.
+### Live browser and 10,000-request exercise
 
-### Browser and 10,000-row exercise
+Browser checks used the clean source's real VesselApp and embedded production UI with
+a temporary database/config and local stub, separate from the executable smoke.
+**10,000 synthetic requests at concurrency 24** cycled 100 tags and five models.
+Submission took **3.584 seconds**; retention left **10,000 stored rows**, zero failures,
+and 100 tag facets. This local exercise is not a production throughput claim.
 
-The published executable accepted 10,000 synthetic requests at concurrency 24 in
-approximately **5.07 seconds**; the API subsequently reported all 10,000 stored and
-100 distinct tag facets. This is a local stress/seed exercise, not a production
-throughput benchmark.
+The tab was open before the burst and was not manually reloaded afterwards. At the first
+post-burst observation, visible requests still had running timers around 11 seconds and
+the header had its old count. Later observations showed 10,000 requests and no visible
+running rows; the active endpoint returned an empty set with completed boundary 10002.
+Facets populated later still. The same tab then expanded all 100 tags and filtered tag
+050. At 1280×720, collapsed and expanded states retained a **385 px history viewport**
+and an **84 px tag region**.
 
-At 1280×720, a fresh browser tab over that seeded database retained a **391 px history
-viewport** with the tag picker both collapsed and expanded. Tag 050 selected correctly.
-Settings focus, duplicate backend-name rejection, typed confirmation without executing
-deletion, malformed-role raw fallback, inert Markdown URLs, and an embedded image
-preview were checked interactively.
+No crash screen was observed. A **Disconnected** indicator appeared during later
+observations while the host remained available. Recovery latency and the disconnect
+were not traced. This supports eventual history recovery and usable layout without a
+reload, not an uninterrupted connection, an immediate-settlement performance guarantee,
+or a causal explanation for the earlier crash. The independent code reproductions,
+rather than an inferred crash cause, determine the verdict.
 
-However, the tab connected **during the live burst** reached the browser's
-“This page crashed” screen. A fresh tab afterwards loaded the persisted history.
-No browser crash dump or root-cause trace was obtained. Therefore the exercise verifies
-storage and post-burst layout, **not** the uninterrupted live-view/zero-stuck-row gate.
+Seven serial API samples after the burst:
 
-Seven serial samples per endpoint on the seeded database gave:
-
-| API operation | Median | Maximum |
+| Operation | Median | Maximum |
 | --- | ---: | ---: |
-| First history page | 2.12 ms | 3.24 ms |
-| FTS search for `needle` | 43.87 ms | 52.33 ms |
-| Exact tag 050 | 19.85 ms | 21.61 ms |
-| Model + successful status | 2.48 ms | 3.36 ms |
-| Facets, including 100 tags | 61.00 ms | 74.64 ms |
-| All-session statistics | 20.12 ms | 24.61 ms |
+| First history page | 1.60 ms | 3.66 ms |
+| FTS search for needle | 28.92 ms | 30.75 ms |
+| Exact tag 050 | 15.26 ms | 17.87 ms |
+| Model + successful status | 1.85 ms | 3.70 ms |
+| Facets, including 100 tags | 53.78 ms | 57.70 ms |
+| All-session statistics | 12.77 ms | 13.57 ms |
 
-A live model/tool call and the under-ten-second Phase 4 litmus were not independently
-rerun here. The checked-in real Ollama fixture was exercised by the backend suite.
-This report does not substitute those fixtures for a fresh end-to-end model test.
+A real-model multi-turn/tool session and the literal under-ten-second search litmus were
+not independently repeated. Checked-in fixtures are regression evidence, not substitutes
+for those manual acceptance exercises. The isolated host and stub were stopped after
+testing; the user's running instance and database were not modified.
 
 ## 6. Evidence retained locally
 
-The review created only synthetic traffic and used temporary databases/configs. Logs and
-probe source are retained outside the repository:
+All probe sources, synthetic databases/configs and logs are outside the repository.
 
-- [Backend test log](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-rereview/backend-tests.log),
-  [second run](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-rereview/backend-tests-repeat.log),
-  [third run](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-rereview/backend-tests-third.log).
-- [Final frontend regression output](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-rereview/frontend-residuals-final.log)
-  and [reproduction source](C:/Users/spenc/AppData/Local/Temp/vessel-clean-44bd313424bc476d88ca2c5c4f1d1fc7/frontend/src/api/review-residual.test.ts).
-  These reuse the existing hook-test fixtures with real QueryClient behavior; they are
-  separate from the repository's 25-test passing suite.
-- [C# probes](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-rereview/probes/Program.cs),
-  [probe output](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-rereview/backend-probes.log),
-  [API probe output](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-rereview/api-probes.log).
-- [Publish log](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-rereview/publish.log),
-  [second-launch error](C:/Users/spenc/AppData/Local/Temp/vessel-smoke-9cc320337db44c69bef9c141ba4945dc/stderr2.log),
-  [10k seed and timing output](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-rereview/seed.log).
+- Backend suites: [run 1](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-round2-review/backend-tests-1.log),
+  [run 2](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-round2-review/backend-tests-2.log),
+  [run 3](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-round2-review/backend-tests-3.log).
+- Frontend: [tests](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-round2-review/frontend-tests.log),
+  [build](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-round2-review/frontend-build.log),
+  [lint](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-round2-review/frontend-lint.log).
+- [Frontend probe output](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-round2-review/frontend-probes-final.log),
+  [hook source](C:/Users/spenc/AppData/Local/Temp/vessel-clean-c0819a64eb1a4b1f92d78b43bd62ba5d/frontend/src/api/round2-review.test.ts),
+  [DetailPane source](C:/Users/spenc/AppData/Local/Temp/vessel-clean-c0819a64eb1a4b1f92d78b43bd62ba5d/frontend/src/components/round2-detail-review.test.ts).
+- [C# probe source](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-round2-review/probes/Program.cs)
+  and [results](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-round2-review/backend-probes.log).
+- [Publish log](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-round2-review/publish.log),
+  [decode/raw API cases](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-round2-review/ui-cases.log),
+  [10k seed/timings](C:/Users/spenc/AppData/Local/Temp/vessel-phase4-round2-review/seed.log).
 
-These temporary paths are review evidence, not permanent project dependencies. The
-reproduction steps in §2 are sufficient to transfer the cases into the existing suites.
+These temporary paths are evidence, not project dependencies. Section 2 describes each
+failure sufficiently to transfer its regression into the existing repository suites.
 
 ## 7. Conditions for closing this review
 
-1. Resolve R11/R22 together: recover completed/abandoned lifecycle entries independently
-   of visible history, and make gap detection correct under concurrent publication.
-2. Resolve R23 and verify clear ordering across the writer, query cache and completion
-   buffer as one interaction.
-3. Surface decode truncation (R05) and finish generate thinking/images (R09/R18).
-4. Keep all existing tests passing and add the missing regression cases.
-5. Rerun the complete executable smoke, investigate the observed live-burst crash, and
-   pass the literal 10k-row/100-tag live-history scenario without a reload workaround.
-6. Correct D04's acceptance claims and atomic-snapshot description in their owning
-   documents, then record only the gates actually demonstrated.
+1. Complete R11: coherent snapshots and restart-safe lifecycle identity, without expiring
+   legitimate active requests.
+2. Complete R23: correct deletion scope and ordering across server operations, SSE,
+   acknowledgments and list settlement, including survivors and reused IDs.
+3. Fix R24's raw-stream fallback selection/warning and R25's terminal lifecycle cleanup.
+4. Keep existing suites passing and add the failing interaction cases to existing tests.
+   Re-run the live gate and record connection/recovery behavior explicitly.
+5. Correct the remediation plan's R11/R23 closure claims in place. Keep the successful
+   current smoke distinct from unverified first-run/restart behavior; do not claim a root
+   cause for the earlier browser crash without a trace.
 
-No application fixes or new design choices are implemented by this report.
+No application fixes or new product/design decisions are implemented by this report.

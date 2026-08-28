@@ -58,7 +58,9 @@ public sealed record StatusPayload(
     string Listen,
     string DefaultBackend,
     StatusBackend[] Backends,
-    CaptureHealth Capture);
+    CaptureHealth Capture,
+    // H0b(1) — this process's run id, so a client can distinguish a restart from a reconnect.
+    string ServerRunId);
 
 public sealed record StatusBackend(string Name, string BaseUrl, string Type, bool Default);
 

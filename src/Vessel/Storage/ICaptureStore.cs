@@ -24,17 +24,14 @@ public interface ICaptureStore
 
     /// <summary>
     /// D6 — deletes <c>requests</c> rows (and their FTS rows) matching
-    /// <paramref name="beforeIso"/>, or every row when null. Returns the number of
-    /// <c>requests</c> rows deleted and the highest id among them (R23: the client uses that
-    /// boundary to discard buffered completions the clear invalidated while keeping ones that
-    /// finished above it).
+    /// <paramref name="beforeIso"/>, or every row when null, and returns the count deleted.
+    /// <para>
+    /// R23/H0a: the client no longer infers a deletion boundary from a max-id here — that
+    /// approach was wrong (ids follow persistence order, not start time, so a clear-before
+    /// couldn't be described by an id boundary). The client instead purges on the in-band
+    /// <c>cleared</c> SSE event, using the server's own <c>started_at &lt; beforeIso</c>
+    /// predicate; the returned count is UX only (the "Deleted N" toast).
+    /// </para>
     /// </summary>
-    ClearOutcome Clear(string? beforeIso);
+    int Clear(string? beforeIso);
 }
-
-/// <summary>
-/// R23 — the result of a clear. <paramref name="MaxDeletedId"/> is the highest <c>requests</c>
-/// id that was deleted (null when nothing matched), the deletion boundary a clear-before
-/// hands the client so a completion buffered for a row above it survives.
-/// </summary>
-public readonly record struct ClearOutcome(int Deleted, long? MaxDeletedId);

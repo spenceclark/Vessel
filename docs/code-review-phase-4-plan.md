@@ -711,7 +711,12 @@ deviations:
   and complete 1..N delivery; it was validated by reintroducing the defect (removing the
   lock → it fails deterministically). A companion test pins that a genuine overflow still
   drops-oldest as a *detectable* id gap.
-- **F2 (R11).** Reconciliation is now server-authoritative, not history-derived. The hub
+- **F2 (R11).** *Superseded in part by Batch H (H0b): the re-re-review found this snapshot was
+  not coherent (`activeSeqs` and the watermark read separately) and lacked server identity, so
+  it wrongly expired requests under concurrent load and across a restart. H2 put both fields
+  and the fan-out under one lock and added `serverRunId` (hello/active/status). The
+  server-authoritative direction below stands; the specifics are corrected there, not rewritten
+  here.* Reconciliation is now server-authoritative, not history-derived. The hub
   tracks a live in-flight set (`_active`, added on `started`, removed on `completed`,
   independent of subscribers) plus `_newestCompletedSeq`, exposed at a new
   `GET /vessel/api/active` → `{ activeSeqs, newestCompletedSeq }`. The client removes any
@@ -730,7 +735,13 @@ deviations:
   `Active_CompletedRequestLeavesActiveSet_AndAdvancesBoundary`; frontend cases cover the
   review's off-page repro, filtered/cleared history (the active set is filter-agnostic by
   construction), a long-running survivor, and a freshly-started row above the boundary.
-- **F3 (R23).** Clears and completion-merging share a generation model owned by
+- **F3 (R23).** *Superseded by Batch H (H0a): this generation + max-deleted-id design was
+  found wrong by the re-re-review — the DELETE ack and the SSE completions are independent
+  streams that need not arrive in DB-operation order, and a clear-before boundary can't be an
+  id (ids follow persistence order, not start time). H3 replaced the whole scheme with an
+  in-band `cleared` event ordered against completions on the one SSE stream, and retired
+  `boundaryId`/`ClearOutcome`. The description below is the retired design, kept for the
+  record.* Clears and completion-merging share a generation model owned by
   `useLiveHistory`. A clear bumps a generation and records a deletion predicate; a buffered
   completion is stamped at buffer time and discarded at drain if a later clear removed its
   row (every row for clear-all; ids ≤ boundary for clear-before). The boundary is a new
@@ -936,3 +947,148 @@ Sonnet total: C1–C8, D1–D8, E1–E4, G1–G5 (well-specified fixes with visi
 test-pinned failure modes). If running lean, C and D — and later F and G — are
 safely parallel sessions; F and G overlap only on `useLiveHistory` documentation
 references, not code.
+
+---
+
+# Third-round remediation (Batch H)
+
+> Source: the re-re-review (same doc, updated in place). R05/R09/R18/R22 closed; still
+> open: R11 (restart identity + torn snapshots), R23 (clear ordering — **the plan's own
+> F3 boundary design was wrong and is corrected below**), R24 (raw-stream selection
+> regression), R25 (active-registry leak — fallout of F2's design missing a terminal
+> guarantee). The review requires the R23 correction to be chosen and approved before
+> implementation; H0 records that choice.
+
+## H0 — Design corrections
+
+> **Status: BOTH APPROVED, 2026-08-28.** H0a and H0b are the decided designs —
+> implementing agents treat this table as authoritative; H5's truth pass records
+> them into the owning docs (phase-3.md D5, architecture §4.4/§9.1 as applicable).
+
+| # | Correction | Design |
+|---|---|---|
+| H0a | **R23: in-band `cleared` event replaces the boundary/generation model.** | The writer publishes a `cleared {scope, beforeTs}` SSE event under the existing publish lock at clear-commit time. The per-subscriber channel preserves true order, so the client rule is: on `cleared`, purge buffered + listed rows matching the server's own predicate (all, or `startedAt < beforeTs` — Summary carries `startedAt`); completions received after the event are post-clear **by construction** (covers ID reuse). No generation counter, no `boundaryId`; the DELETE ack is UX only. F3's max-id predicate is retired. |
+| H0b | **R11/R25: lifecycle authority gets identity, coherence, and a terminal invariant.** | (1) `serverRunId` (startup GUID) on the status/active endpoint and as an SSE hello event; run-id mismatch → client discards all lifecycle state and refetches (covers restart). (2) Registry add/remove, completed watermark, and snapshot reads all inside the existing publish lock — one coherent snapshot (kills the 187/571 torn-snapshot probe). (3) **Registered → terminal is an invariant owned at the registration site**: `Register` returns a token; `ProxyHandler`'s `finally` guarantees a terminal transition when capture admission is closed (unregister + `completed {row:null}`); the writer's stop-drain completes every identity it discards. Forwarding stays independent of capture health. |
+
+## Batch H — Opus: lifecycle third pass (one session, H0 designs verbatim)
+
+- [x] **H1 · R25 — Terminal invariant first.** Implement H0b(3); it underpins
+  everything else. Tests: the review's probe (stop admission, 32 proxied requests →
+  active set empty, all 200s), with and without SSE subscribers, records racing stop,
+  drain path completing discards.
+- [x] **H2 · R11 — Run identity + coherent snapshots.** Implement H0b(1)+(2). SSE
+  contract change (hello event) recorded in phase-3.md D5. Tests: restart repro
+  (started → reconnect to fresh run-id → entry leaves without new traffic); the
+  concurrent-snapshot invariant probe ported as a test (every odd seq ≤ watermark
+  present); long-running request still survives.
+- [x] **H3 · R23 — In-band clear.** Implement H0a. Tests: all three failing orderings
+  from the review (delayed SSE after empty refresh; survivor completing before ack;
+  clear-before with inverted id/start order), plus ID-reuse, initial-fetch and
+  refetch settlement. Client purge logic lives beside the buffer it governs.
+- [x] **H4 · R24 — Effective display mode.** No rendered view → the raw toggle maps
+  the shown body to `responseRaw`; the decode warning follows the shown body. Tests:
+  unknown-format stream, known format with failed extraction, decode-truncated raw
+  payload; normal-body warning preserved. (Sonnet-sized; folded here because H3
+  touches the same detail-pane state.)
+- [x] **H5 — Gate re-run.** Full suites + the ported probes green; the F4 burst
+  re-run repeated (lifecycle code changed again); review §5 conditions re-checked;
+  D04-style truth pass on this plan's own checkboxes — F2/F3 entries annotated as
+  superseded by H0, not silently rewritten.
+
+**Exit:** the re-re-review's §"conditions" items on R11/R23/R24/R25 all demonstrated;
+no new lifecycle mechanism invented outside H0.
+
+**Batch H landed 2026-08-28 — 269/269 backend green, 62/62 frontend green, `tsc -b` +
+`vite build` clean, lint unchanged at 6 warnings (baseline).** H0a and H0b were implemented
+verbatim; no lifecycle mechanism outside them. Notes and deviations:
+
+- **H1 (R25).** `CaptureChannel.Enqueue` now returns whether the work was admitted;
+  `ProxyHandler`'s `finally` completes a dropped capture itself (`_captureEvents.Completed(seq,
+  null)`) when admission is closed, and the writer's give-up path completes every capture it
+  discards — `Flush` releases the failing batch's own remaining items via a new
+  `TerminateAfterGiveUp` (a capture reaches `completed{row:null}`, a command is failed), and
+  `DrainAfterStop` does the same for anything that races into the channel afterwards. **Design
+  note worth recording:** the terminal completion is split across exactly those two owners on
+  purpose (a capture is *either* dropped at admission → ProxyHandler completes it, *or*
+  admitted-then-discarded → the writer completes it, never both), so `completed{row:null}` is
+  never emitted twice for one seq without needing an idempotency guard or a literal
+  registration "token" object — the seq ProxyHandler already holds *is* the token. New backend
+  tests: `EventsTests.StoppedAdmission_ProxiedRequestsForward_ButLeaveNoActiveEntries`
+  (`[Theory]` with/without subscriber, real `VesselApp`, the review's 32-request probe) and
+  `CaptureWriterResilienceTests.WriterGiveUp_CompletesEveryDiscardedCaptureIdentity` (the drain
+  path, with captures spilling from the failing batch into the drain). `TestVessel` gained a
+  `Services` accessor and `TestCapture.Record` supports `with { Seq = … }` for these.
+- **H2 (R11).** `CaptureEvents.RunId` (a per-process GUID) rides on a new `hello` SSE frame
+  (the connection's first frame, deliberately **no `id:`** so it never moves the gap
+  watermark), on `GET /active`, and on `GET /status`. The client (`useEvents` → `useLiveHistory`)
+  discards its whole in-flight map on a run-id change and also guards `reconcile` against an
+  `/active` response whose `serverRunId` differs from the connection's. Coherence (H0b(2)): the
+  in-flight set became a plain `HashSet<long>` and the watermark a plain `long`, both now
+  mutated and read only under the existing `_publishLock` (id allocation and fan-out already
+  lived there), so `GetActiveRequests` returns one coherent snapshot. **Perf note:** event JSON
+  is still serialized *outside* the lock (guarded by an `_subscribers.IsEmpty` check), so the
+  zero-subscriber hot path stays free of both JSON work and, for `started`/`completed`, anything
+  but a single set mutation under the lock. New tests: `EventsTests.ServerRunId_ConsistentAcross
+  HelloActiveAndStatus`, `EventsTests.Active_SnapshotStaysCoherent_UnderConcurrentRegisterAnd
+  Complete` (the ported 4-reader invariant probe — zero violations with the lock; the pre-fix
+  concurrent-dictionary read would violate it), and a frontend restart repro (`discards
+  in-flight rows from a prior run after a restart (run-id change)`). Two existing SSE tests
+  (`Sse_StartedFirstTokenCompleted…`, `Sse_EveryFrameCarriesMonotonicEventId`) were taught to
+  skip the new id-less `hello` frame rather than miscount it — no assertion weakened.
+- **H3 (R23).** The Batch F3 boundary/generation model is **retired**, not patched. The writer
+  publishes a `cleared {scope, beforeTs}` frame at clear-commit time under the publish lock, so
+  a deleted row's `completed` always precedes `cleared` on the wire; `useLiveHistory` purges
+  buffered + listed rows by the server's own predicate (`all`, or `startedAt < beforeTs`) and
+  treats everything after as post-clear by construction (covering SQLite id reuse). The
+  `DELETE /requests` ack's `boundaryId` and the whole `ClearOutcome` struct are gone —
+  `ICaptureStore.Clear` now returns a plain `int` count, swept through the endpoint, both fake
+  stores, and the client (`ClearResponse.deleted` only). `App.handleDataCleared` keeps its R14a
+  detail-cache/selection hygiene (still driven by the ack, correctly — that concerns the
+  *selected* row, not completion ordering) but no longer bumps a generation. The three existing
+  F3 frontend clear tests were rewritten to drive the in-band event and now match the review's
+  exact orderings (delayed completion before the clear frame; inverted id/start clear-before
+  survivor; post-clear id-reuse).
+- **H4 (R24).** One-line effective-mode fix in `DetailPane`: `responseInRawView = !responseRendered
+  || responseDisplay === 'raw'`, so when extraction returns null (no Rendered/Raw toggle exists)
+  the "Raw stream" sub-toggle actually swaps in `responseRaw`, and the decode notice (wired to
+  the shown body) follows it. New `DetailPane.test.ts` exercises the actual tab/toggle
+  interaction (unknown-format stream, known-format-with-failed-extraction, decode-truncated raw,
+  normal-body warning preserved).
+- **Live burst (F4 re-run) — run this session and passed.** A real Vessel (Debug build, port
+  4550, an *isolated temp config + DB in the session scratchpad* — the user's daily-driver
+  `vessel.db` was never touched) was pointed at a fast local Node upstream (~20–80 ms/response),
+  the Vite dev UI opened in the in-app Browser pane connected live, and four bursts of
+  10k/10k/10k/3k requests at concurrency 24 across 100 distinct tags were sent with the tab
+  connected and never reloaded. Results:
+  - **New wire contracts verified live** (before the burst, via raw `curl` on the real app): the
+    SSE feed opens with `event: hello` / `{serverRunId}` and **no `id:`**; `started`(id1) →
+    `request_ready`(id2) → `completed`(id3) carry the row; a `DELETE …?scope=all` returns
+    `{deleted:1}` (no `boundaryId`) and publishes `event: cleared` / `{scope:"all"}` at id4,
+    correctly ordered *after* the completion. `/status` and `/active` both carry the same
+    `serverRunId`.
+  - **Zero stuck in-flight rows.** Mid-burst the live page rendered in-flight rows (15
+    `.pulse-dot`s sampled) with the SSE staying connected (no "Disconnected" indicator); after
+    settle the page showed **0** `.pulse-dot`s and `GET /active` returned an **empty** set after
+    every burst, with `newestCompletedSeq` advancing 10001 → 33001. No reload needed.
+  - **Server lifecycle clean, no failures, no crash.** 33,000/33,000 requests returned 200, **0
+    failed**, the store held all 33,000 rows with **100 distinct tag facets**, and the Vessel log
+    contained no error/exception/crash — only the startup line. `serverRunId` was stable
+    throughout (no spurious restart). The tag picker was bounded (12 chips + "+88 more",
+    `max-height: 84px`) at 100 real facets (R12).
+  - **Environment caveat (unchanged from Batch B/F).** The in-app Browser pane's Electron
+    renderer is discarded while the pane is hidden, which surfaced as one `Render frame was
+    disposed` when reading the DOM between observations; a forced re-navigation re-woke it and
+    every *displayed* observation showed a healthy app. This is the same pane-lifecycle artifact
+    those batches recorded — not a Vessel/React crash (no page-crash screen ever appeared).
+- **Superseded-by-H0 annotations** (H5's truth-pass requirement) added in place to the Batch F
+  landing notes (F2/F3).
+
+### Third-round closing conditions (§7 of code-review-phase-4.md)
+
+| # | Condition | Status | Where |
+| --- | --- | --- | --- |
+| 1 | Complete R11: coherent snapshots + restart-safe lifecycle identity, without expiring legitimate active requests | Met | H2 (one-lock coherent snapshot; `serverRunId` on hello/active/status; long-running-survivor + fresh-above-boundary tests unchanged and green) |
+| 2 | Complete R23: correct deletion scope/ordering across server op, SSE, ack, and list settlement, incl. survivors + reused ids | Met | H3 (in-band `cleared` event ordered against completions; `boundaryId` retired; the three review orderings + id-reuse pinned in `useLiveHistory.test.ts`) |
+| 3 | Fix R24's raw-stream fallback + R25's terminal lifecycle cleanup | Met | H4 (`DetailPane` effective-mode fix + `DetailPane.test.ts`); H1 (terminal invariant + `StoppedAdmission…`/`WriterGiveUp…` tests) |
+| 4 | Keep existing suites passing; add the failing interaction cases to existing tests | Met | 269/269 backend (incl. the ported concurrent-snapshot + terminal probes), 62/62 frontend, `tsc -b` + `vite build` clean, lint at baseline (6) |
+| 5 | Correct the plan's R11/R23 closure claims in place; keep the smoke distinct from unverified first-run/restart | Met | F2/F3 landing notes annotated as superseded by H0 (above); the live 10k/100-tag burst (4×, connected tab) was re-run this session and passed — zero stuck in-flight rows, 0 failed of 33,000, no crash (see the live-burst note above) |

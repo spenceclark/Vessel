@@ -118,6 +118,22 @@ under ten seconds: filter warnings-only, or search a phrase, click, read.
 
 - [ ] **Replay** (§7): re-send with optional backend/model override; `replay_of` link both
       directions in the UI; **Copy as curl**. *The killer feature — do it first.*
+      Decisions pre-agreed for the phase spec:
+      - **Same wire format only in v1** — replay to any backend speaking the captured
+        format (Ollama/LM Studio/llama.cpp/live all speak OpenAI format via `/v1`, so
+        cross-backend comparison works broadly). Cross-provider replay needs
+        **wire-format transformers** (ollama-native ⇄ openai-chat ⇄ anthropic-messages,
+        incl. non-1:1 params like `num_predict` vs `max_tokens`) — explicitly a later
+        item, noted here so it isn't rediscovered.
+      - **Auth is never stored** (redaction stands; vessel.json/vessel.db stay
+        credential-free). Local no-auth backends replay with auth omitted. Otherwise
+        Vessel re-attaches from **environment variables on the Vessel process**, the
+        standard names apps already look for — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` —
+        with an optional per-backend `authEnv` config field naming the variable for
+        key-requiring OpenAI-compat backends (e.g. Unsloth Desktop). Header shape
+        follows backend type: `Authorization: Bearer` for openai-type,
+        **`x-api-key` (+ `anthropic-version`) for anthropic-type — not Bearer**.
+        Missing env var → replay dialog says which variable to set; no paste-and-store.
 - [ ] **Diff**: pick two requests, side-by-side message/param diff. Pairs naturally with
       replay ("same prompt, two models").
 - [ ] **Warning badges polish**: cold-load detection via Ollama `load_duration`,

@@ -166,14 +166,54 @@ so the API can respond with it. No second write connection, no lock dance.
     gone — removal is keyed directly on `seq`.
   - `started` carries `sessionId` (D05), so the UI scopes in-flight rows to the viewed
     session accurately instead of guessing.
-- **Re-review addition** (Batch F, R11/F2) — `GET /vessel/api/active` →
-  `{ activeSeqs: number[], newestCompletedSeq: number }`. The server-authoritative
-  in-flight set, sourced from the live `CaptureEvents` hub: a `seq` is added on `started`
-  and removed on `completed`, independent of any SSE subscriber. Deliberately separate
-  from `/status` (which is polled and cached) — this changes on every request and is
-  fetched on demand during reconciliation. `newestCompletedSeq` is the boundary below
-  which an absent `seq` is definitely finished rather than just newly started, so a
-  request that started after the snapshot is never expired.
+- **Re-review addition** (Batch F, R11/F2; extended by Batch H) — `GET /vessel/api/active`
+  → `{ activeSeqs: number[], newestCompletedSeq: number, serverRunId: string }`. The
+  server-authoritative in-flight set, sourced from the live `CaptureEvents` hub: a `seq`
+  is added on `started` and removed on `completed`, independent of any SSE subscriber.
+  Deliberately separate from `/status` (which is polled and cached) — this changes on
+  every request and is fetched on demand during reconciliation. `newestCompletedSeq` is
+  the boundary below which an absent `seq` is definitely finished rather than just newly
+  started, so a request that started after the snapshot is never expired. `serverRunId`
+  (Batch H) identifies the process lifetime, so a client can reject a snapshot from a
+  different Vessel run rather than boundary-comparing across processes. All three fields
+  are read under the hub's one lock, so the snapshot is coherent (H0b(2)).
+- **Third-round re-review (Batch H, R11/R23/R25)** — the lifecycle authority gains
+  identity, coherence, and a terminal invariant, and clearing becomes an in-band event:
+  - **`hello` event (H0b(1)).** Every SSE connection's *first* frame is
+    `event: hello` / `data: {serverRunId}`, carrying this Vessel process's run id (a
+    fresh GUID per process). It deliberately carries **no `id:` field**, so it never
+    perturbs the gap-detection watermark. `serverRunId` is also on `GET /active` and
+    `GET /status`. A run-id change across a reconnect means Vessel *restarted*: the
+    client's in-flight `seq`s are from a dead process (process-lifetime `seq`s reset, so
+    an old high `seq` sits above the fresh process's low watermark and looks "just
+    started"), so the client discards its whole in-flight map rather than boundary-
+    comparing across lifetimes. This replaces the previous reliance on the reconnect
+    handler alone, which could not distinguish a restart from an ordinary reconnect.
+  - **Coherent active snapshot (H0b(2)).** The in-flight set, the completed watermark,
+    the publish id, and the fan-out are now all guarded by the *one* hub lock, so
+    `GET /active` returns a single coherent snapshot. Read separately (a concurrent
+    dictionary + an interlocked long, as before) a snapshot could report a watermark
+    already covering a still-running `seq` missing from the returned keys — the review's
+    187/571 torn-snapshot probe — and reconciliation would then wrongly expire a
+    legitimate request.
+  - **Terminal invariant (H0b(3), R25).** "Registered → terminal" is owned at the
+    registration site. `started` registers the `seq`; the writer normally removes it via
+    `completed`. When capture admission is closed (the writer gave up), `ProxyHandler`'s
+    `finally` completes the dropped capture itself (`completed{row:null}`), and the
+    writer's give-up/drain path completes every capture identity it discards. Forwarding
+    stays independent of capture health. Without this, every proxied request after a
+    give-up leaked a permanent active-set entry (the review's 32-retained-seqs probe).
+  - **`cleared` event (H0a, R23).** Clearing is now an in-band SSE frame:
+    `event: cleared` / `data: {scope, beforeTs}` (`scope` is `"all"`|`"before"`;
+    `beforeTs` is the ISO-8601 cutoff, omitted for clear-all). The writer publishes it at
+    clear-commit time under the same lock as `completed`, so a row a clear deletes is
+    always seen `completed` *before* `cleared` (it had to be inserted to be deleted).
+    The client purges buffered + listed rows matching the server's own predicate (all, or
+    `startedAt < beforeTs`); anything received afterwards is post-clear by construction
+    (covering SQLite id reuse). This **retires** the Batch F3 boundary/generation model —
+    the `DELETE /requests` ack's `boundaryId` is gone (it was unsound: ids follow
+    persistence order, not start time, so a clear-before could not be described by an id
+    boundary), and the ack now carries only the deleted count, for the UX toast.
 - **Post-Phase-4 addition** (ui-spec.md §9.1 in-flight TODO, implemented): the
   contract gains a fourth event, `request_ready` `{seq, model}` — emitted once the
   request body has been fully read (a genuine EOF on the request tee, not YARP's

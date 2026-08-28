@@ -21,11 +21,15 @@ public static class ActiveRequestsEndpoint
         context.Response.ContentType = "application/json; charset=utf-8";
         return JsonSerializer.SerializeAsync(
             context.Response.Body,
-            new ActiveRequestsPayload(active.ActiveSeqs, active.NewestCompletedSeq),
+            new ActiveRequestsPayload(active.ActiveSeqs, active.NewestCompletedSeq, active.ServerRunId),
             ApiJsonContext.Default.ActiveRequestsPayload,
             context.RequestAborted);
     }
 }
 
-/// <summary>Wire shape for <see cref="ActiveRequestsEndpoint"/> (mirrored in <c>types.ts</c>).</summary>
-public sealed record ActiveRequestsPayload(long[] ActiveSeqs, long NewestCompletedSeq);
+/// <summary>
+/// Wire shape for <see cref="ActiveRequestsEndpoint"/> (mirrored in <c>types.ts</c>).
+/// <paramref name="ServerRunId"/> (H0b(1)) lets reconciliation reject a snapshot from a
+/// different Vessel run rather than mis-comparing this process's seqs against another's.
+/// </summary>
+public sealed record ActiveRequestsPayload(long[] ActiveSeqs, long NewestCompletedSeq, string ServerRunId);

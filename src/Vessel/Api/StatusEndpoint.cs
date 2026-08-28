@@ -18,6 +18,7 @@ public static class StatusEndpoint
     {
         var registry = context.RequestServices.GetRequiredService<BackendRegistry>();
         var captureChannel = context.RequestServices.GetRequiredService<CaptureChannel>();
+        var captureEvents = context.RequestServices.GetRequiredService<CaptureEvents>();
         var server = context.RequestServices.GetRequiredService<IServer>();
         string listen = server.Features.Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault() ?? "";
 
@@ -33,7 +34,8 @@ public static class StatusEndpoint
                 .OrderBy(b => b.Name, StringComparer.OrdinalIgnoreCase)
                 .Select(b => new StatusBackend(b.Name, b.BaseUrl, b.Type, b.IsDefault))
                 .ToArray(),
-            new CaptureHealth(!captureChannel.IsStopped, captureChannel.StoppedReason));
+            new CaptureHealth(!captureChannel.IsStopped, captureChannel.StoppedReason),
+            captureEvents.RunId);
 
         context.Response.ContentType = "application/json; charset=utf-8";
         return JsonSerializer.SerializeAsync(

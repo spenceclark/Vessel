@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useIsFetching, useQueryClient, type InfiniteData } from '@tanstack/react-query'
 import {
   filtersActive,
+  type ClearedEvent,
   type RequestFilters,
   type RequestListResponse,
   type SessionScope,
@@ -26,15 +27,21 @@ import { useEvents, type InFlightRequest } from './useEvents'
  *    server no longer lists as active (below the completed-seq boundary, so a request that
  *    started after the snapshot is never expired). A genuinely long-running request survives
  *    because it is genuinely in the set — never expired by a timer or a distance heuristic.
- * 3. **Loss detection is ordered, and recovery is coalesced** (R22/F1). The server publishes
+ * 3. **Server identity is explicit** (R11/H0b). Every SSE connection opens with a `hello`
+ *    carrying the process run id, and `/active` echoes it. A run-id change means Vessel
+ *    restarted: the client's in-flight seqs belong to a dead process (their low watermark
+ *    can't be boundary-compared against old high seqs), so it discards the whole map.
+ * 4. **Loss detection is ordered, and recovery is coalesced** (R22/F1). The server publishes
  *    SSE ids under a lock, so a gap means real loss rather than a reordering; the client
  *    never rewinds its watermark, and a burst of gaps collapses (debounced, single-flight)
  *    into one recovery instead of a reconciliation storm.
- * 4. **Clearing and completion-merging share a generation boundary** (R23/F3). A clear bumps
- *    a generation; a buffered completion is stamped at buffer time and dropped at drain if a
- *    later clear deleted its row (all rows for clear-all; ids at or below the boundary for
- *    clear-before), so a completion can never restore a row the user just cleared.
- * 5. **In-flight rows obey session scope and nothing else** (D05). `started` carries
+ * 5. **Clearing is an in-band, ordered event** (R23/H0a). The server publishes `cleared`
+ *    under the same lock as `completed`, so a row a clear deletes is always seen `completed`
+ *    *before* `cleared`. On `cleared` the client purges buffered + listed rows matching the
+ *    server's own predicate (all, or `startedAt < beforeTs`); anything received afterwards is
+ *    post-clear by construction (covers SQLite id reuse). No generation counter, no id
+ *    boundary — those couldn't describe every valid clear/SSE ordering.
+ * 6. **In-flight rows obey session scope and nothing else** (D05). `started` carries
  *    `sessionId`; other filters can't apply to a row with no final status/model, so the list
  *    collapses them to a count.
  */
@@ -42,17 +49,7 @@ import { useEvents, type InFlightRequest } from './useEvents'
 /** How long to wait after the first gap before reconciling, so a burst coalesces into one run. */
 const RECONCILE_DEBOUNCE_MS = 150
 
-/** One clear's effect on the completion buffer: the generation it produced and which rows it removed. */
-interface ClearBoundary {
-  generation: number
-  deletes: (row: Summary) => boolean
-}
-
-/** A completion held while a list fetch is unsettled, stamped with the generation at buffer time. */
-interface BufferedCompletion {
-  row: Summary
-  generation: number
-}
+type ListCache = InfiniteData<RequestListResponse, number | undefined>
 
 export interface LiveHistory {
   /** In-flight requests within the viewed session scope, in arrival order. */
@@ -61,12 +58,6 @@ export interface LiveHistory {
   /** Completions that arrived while a filter was active, so the list is knowingly stale. */
   newSinceFilter: number
   clearNewSinceFilter: () => void
-  /**
-   * R23/F3 — call after a successful clear (with the DELETE response's boundary id, or null
-   * for clear-all) so completions buffered before it are discarded rather than restoring
-   * cleared rows.
-   */
-  notifyCleared: (scope: { all: true } | { before: string }, boundaryId: number | null) => void
 }
 
 export function useLiveHistory({
@@ -94,13 +85,14 @@ export function useLiveHistory({
     onCompletedRef.current = onCompleted
   })
 
-  // R23/F3 — clears bump this; buffered completions are stamped with it and dropped at drain
-  // if a later clear removed their row. `clearsRef` holds the boundaries still relevant to
-  // buffered completions (reset once the buffer drains, or when a clear finds it empty).
-  const generationRef = useRef(0)
-  const clearsRef = useRef<ClearBoundary[]>([])
-  const pendingRef = useRef<BufferedCompletion[]>([])
+  // R10 — completions held while a list fetch is unsettled, drained on the falling edge.
+  const pendingRef = useRef<Summary[]>([])
   const listFetching = useIsFetching({ queryKey: REQUESTS_QUERY_ROOT })
+
+  // R11/H0b — the run id the current SSE connection last announced via `hello`. A `/active`
+  // response (or a later hello) carrying a different id means a restart, and every in-flight
+  // seq we hold is from the dead process.
+  const serverRunIdRef = useRef<string | null>(null)
 
   // Scoped to the view it was counted for, so switching scope/filters resets it without an
   // effect (a setState-in-effect here would cascade a second render on every switch).
@@ -126,7 +118,7 @@ export function useLiveHistory({
       }
 
       const key = requestsQueryKey(currentScope, filtersRef.current)
-      queryClient.setQueryData<InfiniteData<RequestListResponse, number | undefined>>(key, (old) => {
+      queryClient.setQueryData<ListCache>(key, (old) => {
         if (!old) return old
         const first = old.pages[0]
         if (first.rows.some((r) => r.id === row.id)) return old
@@ -141,18 +133,13 @@ export function useLiveHistory({
   // R10 — drain the buffer once every list fetch has settled. Doing this on the falling
   // edge (and not while fetching) is the whole point: a fetch resolving with a snapshot
   // older than the completion would otherwise overwrite the row back out of the cache.
+  // R23/H0a — the buffer was already purged of cleared rows when the `cleared` frame arrived,
+  // and everything still here is post-clear, so draining just merges.
   useEffect(() => {
     if (listFetching > 0 || pendingRef.current.length === 0) return
     const buffered = pendingRef.current
     pendingRef.current = []
-    // The buffer is now empty, so no pending completion references these boundaries anymore.
-    const clears = clearsRef.current
-    clearsRef.current = []
-    for (const { row, generation } of buffered) {
-      // R23 — discard a completion any clear that landed *after* it was buffered removed.
-      const invalidated = clears.some((c) => c.generation > generation && c.deletes(row))
-      if (!invalidated) mergeRow(row)
-    }
+    for (const row of buffered) mergeRow(row)
   }, [listFetching, mergeRow])
 
   /**
@@ -168,21 +155,28 @@ export function useLiveHistory({
       return // transient; the next gap or reconnect retries
     }
 
-    const activeSet = new Set(active.activeSeqs)
-    setInFlightMap((prev) => {
-      let changed = false
-      const next = new Map(prev)
-      for (const seq of prev.keys()) {
-        // Absent from the server's active set and at/below the completed boundary: finished
-        // or dropped. A seq above the boundary may just have started after the snapshot.
-        if (!activeSet.has(seq) && seq <= active.newestCompletedSeq) {
-          next.delete(seq)
-          changed = true
+    if (serverRunIdRef.current !== null && active.serverRunId !== serverRunIdRef.current) {
+      // R11/H0b — the active set is from a different Vessel run than our SSE connection knows;
+      // our seqs are meaningless against its watermark. Discard the whole in-flight map rather
+      // than boundary-comparing across process lifetimes.
+      setInFlightMap((prev) => (prev.size === 0 ? prev : new Map()))
+    } else {
+      const activeSet = new Set(active.activeSeqs)
+      setInFlightMap((prev) => {
+        let changed = false
+        const next = new Map(prev)
+        for (const seq of prev.keys()) {
+          // Absent from the server's active set and at/below the completed boundary: finished
+          // or dropped. A seq above the boundary may just have started after the snapshot.
+          if (!activeSet.has(seq) && seq <= active.newestCompletedSeq) {
+            next.delete(seq)
+            changed = true
+          }
         }
-      }
 
-      return changed ? next : prev
-    })
+        return changed ? next : prev
+      })
+    }
 
     await Promise.all([
       queryClient.refetchQueries({ queryKey: REQUESTS_QUERY_ROOT }),
@@ -225,6 +219,36 @@ export function useLiveHistory({
       if (reconcileTimerRef.current !== null) window.clearTimeout(reconcileTimerRef.current)
     },
     [],
+  )
+
+  /**
+   * R23/H0a — purge the rows a clear removed. Runs when the ordered `cleared` frame arrives:
+   * everything cleared has already been seen `completed` (so it is buffered or listed by now),
+   * and everything received after is post-clear. Matches the server's own predicate exactly.
+   */
+  const applyCleared = useCallback(
+    (data: ClearedEvent) => {
+      const removed = (row: Summary) =>
+        data.scope === 'all' ||
+        (data.beforeTs !== null && new Date(row.startedAt) < new Date(data.beforeTs))
+
+      if (pendingRef.current.length > 0) {
+        pendingRef.current = pendingRef.current.filter((row) => !removed(row))
+      }
+
+      for (const [key, cache] of queryClient.getQueriesData<ListCache>({ queryKey: REQUESTS_QUERY_ROOT })) {
+        if (!cache) continue
+        let changed = false
+        const pages = cache.pages.map((page) => {
+          const rows = page.rows.filter((r) => !removed(r))
+          if (rows.length === page.rows.length) return page
+          changed = true
+          return { ...page, rows }
+        })
+        if (changed) queryClient.setQueryData<ListCache>(key, { ...cache, pages })
+      }
+    },
+    [queryClient],
   )
 
   const { connected } = useEvents({
@@ -279,16 +303,29 @@ export function useLiveHistory({
         }
       }
 
-      // R10 — a list fetch is in flight, and it may be about to resolve with a snapshot
-      // taken before this row existed. Hold the row (stamped with the current generation,
-      // R23) and merge it after settlement rather than writing into a cache about to be
-      // replaced.
+      // R10 — a list fetch is in flight, and it may be about to resolve with a snapshot taken
+      // before this row existed. Hold the row and merge it after settlement rather than
+      // writing into a cache about to be replaced. A `cleared` arriving before the drain will
+      // purge it if the clear removed it (R23/H0a).
       if (queryClient.isFetching({ queryKey: REQUESTS_QUERY_ROOT }) > 0) {
-        pendingRef.current.push({ row: data.row, generation: generationRef.current })
+        pendingRef.current.push(data.row)
         return
       }
 
       mergeRow(data.row)
+    },
+    onCleared: (data) => {
+      applyCleared(data)
+    },
+    onHello: (data) => {
+      const prev = serverRunIdRef.current
+      serverRunIdRef.current = data.serverRunId
+      if (prev !== null && prev !== data.serverRunId) {
+        // R11/H0b — Vessel restarted under this reconnecting connection. Every in-flight seq
+        // is from the dead process; discard them, then reconcile against the fresh server.
+        setInFlightMap((current) => (current.size === 0 ? current : new Map()))
+        scheduleReconcile()
+      }
     },
     onGap: () => {
       scheduleReconcile()
@@ -297,22 +334,6 @@ export function useLiveHistory({
       scheduleReconcile()
     },
   })
-
-  const notifyCleared = useCallback(
-    (clearedScope: { all: true } | { before: string }, boundaryId: number | null) => {
-      const generation = generationRef.current + 1
-      generationRef.current = generation
-      const deletes: ClearBoundary['deletes'] =
-        'all' in clearedScope
-          ? () => true
-          : (row) => boundaryId !== null && row.id <= boundaryId
-      // With nothing buffered, older boundaries can't affect any pending completion — keep
-      // only this one so the list doesn't accumulate across idle clears.
-      const boundary: ClearBoundary = { generation, deletes }
-      clearsRef.current = pendingRef.current.length === 0 ? [boundary] : [...clearsRef.current, boundary]
-    },
-    [],
-  )
 
   // D05 — in-flight rows are scoped to the viewed session and nothing else.
   const inFlight = Array.from(inFlightMap.values()).filter(
@@ -324,7 +345,6 @@ export function useLiveHistory({
     connected,
     newSinceFilter,
     clearNewSinceFilter: useCallback(() => setNewSince({ signature: '', count: 0 }), []),
-    notifyCleared,
   }
 }
 
