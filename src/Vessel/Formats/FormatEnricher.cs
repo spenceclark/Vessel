@@ -77,6 +77,7 @@ public sealed class FormatEnricher
     public static Dictionary<string, IFormatAdapter> DefaultAdapters() => new()
     {
         [FormatNames.OpenAiChat] = new OpenAiChatAdapter(),
+        [FormatNames.OpenAiResponses] = new OpenAiResponsesAdapter(),
         [FormatNames.AnthropicMessages] = new AnthropicMessagesAdapter(),
         [FormatNames.OllamaChat] = new OllamaAdapter(generate: false),
         [FormatNames.OllamaGenerate] = new OllamaAdapter(generate: true),
@@ -103,6 +104,17 @@ public sealed class FormatEnricher
         byte[]? responseWire = record.Streamed ? record.ResponseRaw : record.ResponseBody;
         BodyDecoder.Result response = BodyDecoder.Decode(
             responseWire, HeaderValue(record.ResponseHeadersJson, "Content-Encoding"));
+
+        // Store the decoded bytes, not the wire-compressed ones, so a compressed backend
+        // response (OpenAI/Cloudflare routinely br- or gzip-encodes) reads as JSON instead
+        // of tripping SqliteReadStore's UTF-8 check and rendering as opaque base64. This is
+        // Vessel's own captured copy only — ResponseTeeStream already forwarded the original
+        // compressed bytes to the caller untouched, and response_raw (the streamed "Raw
+        // stream" toggle, §5) is deliberately left wire-accurate here.
+        if (!record.Streamed && response.Status == BodyDecoder.DecodeStatus.Ok && response.Bytes is not null)
+        {
+            record = record with { ResponseBody = response.Bytes };
+        }
 
         if (request.Status == BodyDecoder.DecodeStatus.Failed || response.Status == BodyDecoder.DecodeStatus.Failed)
         {
@@ -158,7 +170,14 @@ public sealed class FormatEnricher
             result.ReassembledResponse, result.PromptText, result.ResponseText);
     }
 
-    /// <summary>Ollama's exact figure when present; otherwise wire timing for streamed rows (D6).</summary>
+    /// <summary>
+    /// Ollama's exact figure when present; otherwise wire timing for streamed rows (D6).
+    /// A non-streamed response has no wire timing worth using — the backend computes the
+    /// whole thing before sending any of it, so first/last byte land together at the very
+    /// end and a first-to-last-byte span would measure ~0, not generation time — so it
+    /// falls back to total duration instead. Coarser (it folds in network/queueing time
+    /// no streamed figure would), but still a real approximation rather than nothing.
+    /// </summary>
     private static double? TokPerSec(CaptureRecord record, AdapterResult result, long? tokensOut)
     {
         if (result.TokPerSec is double exact)
@@ -166,14 +185,28 @@ public sealed class FormatEnricher
             return exact;
         }
 
-        if (record.Streamed && tokensOut is long tokens && tokens > 0
-            && record.FirstResponseByteMs is double first && record.LastResponseByteMs is double last)
+        if (tokensOut is not long tokens || tokens <= 0)
         {
-            double spanMs = last - first;
-            if (spanMs >= 100)
+            return null;
+        }
+
+        if (record.Streamed)
+        {
+            if (record.FirstResponseByteMs is double first && record.LastResponseByteMs is double last)
             {
-                return tokens / (spanMs / 1000.0);
+                double spanMs = last - first;
+                if (spanMs >= 100)
+                {
+                    return tokens / (spanMs / 1000.0);
+                }
             }
+
+            return null;
+        }
+
+        if (record.DurationMs is double duration && duration >= 100)
+        {
+            return tokens / (duration / 1000.0);
         }
 
         return null;

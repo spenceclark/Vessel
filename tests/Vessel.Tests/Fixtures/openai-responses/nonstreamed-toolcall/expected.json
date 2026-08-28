@@ -1,0 +1,14 @@
+{
+  "format": "openai-responses",
+  "model": "qwen3.5:4b",
+  "tokensIn": 40,
+  "tokensOut": 25,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": "stop",
+  "tokPerSec": 25.0,
+  "warnings": [],
+  "promptText": "user: What's the weather in Boston?",
+  "responseText": "Need to call get_current_weather for Boston.\n[tool_call get_current_weather] {\"location\":\"Boston, MA\"}"
+}

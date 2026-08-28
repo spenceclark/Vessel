@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/api/client'
 import type { BackendConfigDto, VesselConfigDto } from '@/api/types'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 
-const INPUT = 'h-7 rounded-md border border-[var(--border)] bg-transparent px-2 text-xs'
+const SELECT_CLASS = 'h-7 rounded-control border border-border bg-surface-2 px-2 text-sm text-text'
 
 /**
  * D7 — the config editor: backends table (add/remove/default/injectStreamUsage),
@@ -25,7 +26,7 @@ export function ConfigPanel() {
   }, [configQuery.data, draft])
 
   if (!draft) {
-    return <div className="text-sm text-[var(--muted)]">Loading…</div>
+    return <div className="text-sm text-text-muted">Loading…</div>
   }
 
   function updateBackend(name: string, patch: Partial<BackendConfigDto>) {
@@ -111,22 +112,20 @@ export function ConfigPanel() {
   return (
     <div className="flex flex-col gap-4 text-sm">
       {restartRequired.length > 0 && (
-        <div className="rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-xs text-[var(--warning)]">
+        <div className="rounded-control border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-warn)_10%,transparent)] px-3 py-2 text-xs text-warn">
           Saved. {restartRequired.join(', ')} change{restartRequired.length === 1 ? 's' : ''} on next start.
         </div>
       )}
       {error && (
-        <div className="rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-xs text-[var(--danger)]">
+        <div className="rounded-control border border-[color-mix(in_srgb,var(--color-danger)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2 text-xs text-danger">
           {error}
         </div>
       )}
 
       <div>
         <div className="mb-1.5 flex items-center justify-between">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Backends</h3>
-          <Button variant="outline" size="sm" onClick={addBackend}>
-            Add backend
-          </Button>
+          <SectionLabel>Backends</SectionLabel>
+          <Button onClick={addBackend}>Add backend</Button>
         </div>
         <div className="flex flex-col gap-2">
           {Object.entries(draft.backends).map(([name, backend]) => (
@@ -146,7 +145,7 @@ export function ConfigPanel() {
       </div>
 
       <div>
-        <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Retention & capture</h3>
+        <SectionLabel>Retention & capture</SectionLabel>
         <div className="grid grid-cols-2 gap-3">
           <NumberField
             label="Max requests"
@@ -172,18 +171,18 @@ export function ConfigPanel() {
       </div>
 
       <div>
-        <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Listen address</h3>
-        <input
+        <SectionLabel>Listen address</SectionLabel>
+        <Input
           type="text"
           value={draft.listen}
           onChange={(e) => setDraft((d) => (d ? { ...d, listen: e.target.value } : d))}
-          className={`${INPUT} w-48`}
+          className="w-48 font-mono"
         />
-        <p className="mt-1 text-xs text-[var(--muted)]">Changes on next start — not applied live.</p>
+        <p className="mt-1 text-xs text-text-muted">Changes on next start — not applied live.</p>
       </div>
 
       <div>
-        <Button onClick={handleSave} disabled={saving}>
+        <Button variant="primary" onClick={handleSave} disabled={saving}>
           {saving ? 'Saving…' : 'Save'}
         </Button>
       </div>
@@ -214,30 +213,30 @@ function BackendRow({
   useEffect(() => setNameDraft(name), [name])
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--border)] p-2">
-      <input
+    <div className="flex flex-wrap items-center gap-2 rounded-control border border-border p-2">
+      <Input
         type="text"
         value={nameDraft}
         onChange={(e) => setNameDraft(e.target.value)}
         onBlur={() => onRename(nameDraft.trim())}
-        className={`${INPUT} w-28`}
+        className="w-28 font-mono"
         placeholder="name"
       />
-      <input
+      <Input
         type="text"
         value={backend.baseUrl}
         onChange={(e) => onUpdate({ baseUrl: e.target.value })}
-        className={`${INPUT} min-w-[180px] flex-1`}
+        className="min-w-[180px] flex-1 font-mono"
         placeholder="http://localhost:11434"
       />
-      <select value={backend.type} onChange={(e) => onUpdate({ type: e.target.value })} className={INPUT}>
+      <select value={backend.type} onChange={(e) => onUpdate({ type: e.target.value })} className={SELECT_CLASS}>
         {['auto', 'ollama', 'openai', 'anthropic'].map((t) => (
           <option key={t} value={t}>
             {t}
           </option>
         ))}
       </select>
-      <label className="flex items-center gap-1 text-xs text-[var(--muted)]">
+      <label className="flex items-center gap-1 text-xs text-text-muted">
         <input
           type="checkbox"
           checked={backend.injectStreamUsage ?? false}
@@ -245,11 +244,11 @@ function BackendRow({
         />
         injectStreamUsage
       </label>
-      <label className="ml-auto flex items-center gap-1 text-xs text-[var(--muted)]">
+      <label className="ml-auto flex items-center gap-1 text-xs text-text-muted">
         <input type="radio" name="default-backend" checked={isDefault} onChange={onMakeDefault} />
         default
       </label>
-      <Button variant="ghost" size="sm" disabled={!canRemove} onClick={onRemove}>
+      <Button variant="ghost" disabled={!canRemove} onClick={onRemove}>
         Remove
       </Button>
     </div>
@@ -259,13 +258,12 @@ function BackendRow({
 function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-xs text-[var(--muted)]">{label}</span>
-      <input
-        type="number"
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className={INPUT}
-      />
+      <span className="text-xs text-text-muted">{label}</span>
+      <Input type="number" value={value} onChange={(e) => onChange(Number(e.target.value))} className="font-mono" />
     </label>
   )
+}
+
+function SectionLabel({ children }: { children: ReactNode }) {
+  return <h3 className="text-xs font-[550] uppercase tracking-[0.06em] text-text-muted">{children}</h3>
 }

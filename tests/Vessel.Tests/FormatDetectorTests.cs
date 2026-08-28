@@ -11,6 +11,7 @@ public class FormatDetectorTests
     [InlineData("/api/chat", FormatNames.OllamaChat)]
     [InlineData("/api/generate", FormatNames.OllamaGenerate)]
     [InlineData("/v1/chat/completions", FormatNames.OpenAiChat)]
+    [InlineData("/v1/responses", FormatNames.OpenAiResponses)]
     [InlineData("/v1/messages", FormatNames.AnthropicMessages)]
     [InlineData("/b/x/api/chat?foo=bar", FormatNames.OllamaChat)] // query stripped, suffix still matches
     public void PathSuffix_Wins(string path, string expected) =>
@@ -32,6 +33,25 @@ public class FormatDetectorTests
             """{"model":"m","max_tokens":10,"system":"be brief","messages":[{"role":"user","content":"hi"}]}""")!;
         string response = """{"stop_reason":"end_turn","content":[]}""";
         Assert.Equal(FormatNames.AnthropicMessages, FormatDetector.Detect("/gateway/anthropic", request, response, null));
+    }
+
+    [Fact]
+    public void PayloadSniff_OpenAiResponses()
+    {
+        JsonNode request = JsonNode.Parse("""{"model":"m","input":"hi"}""")!;
+        string response = """{"object":"response","status":"completed","output":[]}""";
+        Assert.Equal(FormatNames.OpenAiResponses, FormatDetector.Detect("/proxy/responses-alias", request, response, null));
+    }
+
+    // The Responses API's `input` field can be a bare string — same shape an embeddings
+    // request's `input` takes. Without the response confirming an actual `response` object,
+    // sniffing must not guess; an embeddings response looks nothing like one.
+    [Fact]
+    public void PayloadSniff_BareInputWithoutResponseShape_StaysRaw()
+    {
+        JsonNode request = JsonNode.Parse("""{"model":"m","input":"embed this"}""")!;
+        string response = """{"object":"list","data":[{"embedding":[0.1,0.2]}]}""";
+        Assert.Equal(FormatNames.Raw, FormatDetector.Detect("/proxy/embeddings-alias", request, response, null));
     }
 
     [Fact]
@@ -66,6 +86,17 @@ public class FormatDetectorTests
     {
         JsonNode request = JsonNode.Parse("""{"model":"m","input":"embed this"}""")!;
         Assert.Equal(FormatNames.Raw, FormatDetector.Detect("/api/embeddings", request, null, "ollama"));
+    }
+
+    // Same guard for OpenAI: an embeddings request's `input` field must not be mistaken for
+    // the Responses API's `input` — there is no response-side tiebreak here (error row, no
+    // response body), and the backend-type tiebreak deliberately doesn't key on `hasInput`
+    // for this exact reason.
+    [Fact]
+    public void EmbeddingsOnOpenAiBackend_StaysRaw()
+    {
+        JsonNode request = JsonNode.Parse("""{"model":"m","input":"embed this"}""")!;
+        Assert.Equal(FormatNames.Raw, FormatDetector.Detect("/api/embeddings", request, null, "openai"));
     }
 
     [Fact]

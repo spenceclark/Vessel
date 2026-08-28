@@ -22,13 +22,13 @@ export function MessageView({ view }: { view: RenderedView }) {
       ))}
 
       {view.params.length > 0 && (
-        <details className="rounded-md border border-[var(--border)] p-2 text-xs">
-          <summary className="cursor-pointer select-none font-medium text-[var(--muted)]">Params</summary>
+        <details className="rounded-control border border-border bg-surface-2 p-2 text-xs">
+          <summary className="cursor-pointer select-none font-medium text-text-secondary">Params</summary>
           <div className="mt-2 flex flex-col gap-2">
             {view.params.map((p) => (
               <div key={p.k}>
-                <div className="font-medium">{p.k}</div>
-                <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words text-[var(--muted)]">{p.v}</pre>
+                <div className="font-medium text-text">{p.k}</div>
+                <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words font-mono text-text-muted">{p.v}</pre>
               </div>
             ))}
           </div>
@@ -42,7 +42,7 @@ function MessageCard({ message }: { message: RenderMessage }) {
   return (
     <Card role={message.role}>
       {message.blocks.length === 0 ? (
-        <span className="text-xs text-[var(--muted)]">(empty)</span>
+        <span className="text-xs text-text-muted">(empty)</span>
       ) : (
         <div className="flex flex-col gap-2">
           {message.blocks.map((block, i) => (
@@ -56,8 +56,8 @@ function MessageCard({ message }: { message: RenderMessage }) {
 
 function Card({ role, children }: { role: string; children: ReactNode }) {
   return (
-    <div className="rounded-md border border-[var(--border)] p-2">
-      <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">{role}</div>
+    <div className="rounded-control border border-border p-2.5">
+      <div className="mb-1.5 text-xs font-[550] uppercase tracking-[0.06em] text-text-muted">{role}</div>
       {children}
     </div>
   )
@@ -68,18 +68,18 @@ function Block({ block }: { block: RenderBlock }) {
     case 'markdown':
       return <ClampedMarkdown text={block.text} />
     case 'text':
-      return <pre className="whitespace-pre-wrap break-words text-sm">{block.text}</pre>
+      return <pre className="whitespace-pre-wrap break-words font-mono text-base text-text">{block.text}</pre>
     case 'thinking':
       return (
-        <details className="rounded-md border border-[var(--border)] bg-[var(--card)] p-2 text-xs">
-          <summary className="cursor-pointer select-none text-[var(--muted)]">Thinking</summary>
+        <details className="rounded-control border border-border bg-surface-2 p-2 text-xs">
+          <summary className="cursor-pointer select-none text-text-muted">Thinking</summary>
           <div className="mt-2">
             <ClampedMarkdown text={block.text} />
           </div>
         </details>
       )
     case 'image':
-      return <Badge variant="outline">🖼 {block.label}</Badge>
+      return <Badge variant="neutral">🖼 {block.label}</Badge>
     case 'toolUse':
       return <ToolCallCard kind="use" id={block.id} name={block.name} content={block.argsJson} />
     case 'toolResult':
@@ -94,7 +94,7 @@ function ClampedMarkdown({ text }: { text: string }) {
   const shown = expanded || !isLong ? text : text.slice(0, CLAMP_LENGTH) + '…'
 
   return (
-    <div className="text-sm">
+    <div className="text-base text-text">
       <div className="md">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{shown}</ReactMarkdown>
       </div>
@@ -102,7 +102,7 @@ function ClampedMarkdown({ text }: { text: string }) {
         <button
           type="button"
           onClick={() => setExpanded((e) => !e)}
-          className="mt-1 text-xs text-[var(--accent)] hover:underline"
+          className="mt-1 text-xs text-accent hover:underline"
         >
           {expanded ? 'Show less' : `Show more (${text.length.toLocaleString()} chars)`}
         </button>

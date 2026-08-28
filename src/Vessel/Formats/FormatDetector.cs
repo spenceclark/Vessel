@@ -28,6 +28,11 @@ public static class FormatDetector
             return FormatNames.OpenAiChat;
         }
 
+        if (p.EndsWith("/responses", StringComparison.Ordinal))
+        {
+            return FormatNames.OpenAiResponses;
+        }
+
         if (p.EndsWith("/messages", StringComparison.Ordinal))
         {
             return FormatNames.AnthropicMessages;
@@ -43,6 +48,12 @@ public static class FormatDetector
 
         bool hasMessages = req?["messages"] is JsonArray;
         bool hasPrompt = req?["prompt"] is not null;
+        bool hasInput = req?["input"] is not null;
+
+        if (hasInput && (response?["output"] is JsonArray || JsonUtil.Str(response?["object"]) == "response"))
+        {
+            return FormatNames.OpenAiResponses;
+        }
 
         if (hasMessages)
         {

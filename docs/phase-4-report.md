@@ -88,9 +88,8 @@ unknown-backend 404) and drove the built SPA in a browser:
    → a successful reconnect — immediately followed by fresh `GET /requests` and `GET
    /stats` calls, exactly matching the reconnect-triggered invalidation C2 adds. A
    request sent shortly after the reconnect didn't appear via the ordinary live SSE
-   push in this manual run (it did appear immediately on any fresh/re-triggered query,
-   e.g. toggling session scope) — that ordinary live-splice path is unchanged Phase 3
-   code, not part of this fix, and is worth an independent look if it recurs.
+   push in this manual run — root-caused as a genuine race (not a Phase-3-only concern,
+   see Deviations #6) and fixed in `RequestList.tsx`.
 
 ### Publish smoke (win-x64, self-contained, single file)
 
@@ -136,6 +135,21 @@ change — `Program.cs` is the only production call site and already computed it
    functions (`extract{Format}Request`/`extract{Format}Response`), not one — kept the UI
    change additive (a view-mode toggle layered on top of the untouched raw view) rather
    than restructuring the tabs.
+6. **Live-splice/refetch race in `RequestList.tsx`, found post-verification** — the
+   Manual gate's C2 check surfaced a request that completed shortly after a reconnect not
+   appearing live. Root cause (flagged in review, not something the manual gate's
+   network-log evidence alone would have caught): the `completed` handler splices the new
+   row into the query cache via `setQueryData` regardless of whether a refetch is
+   currently in flight for that same key. If one is — and C2's reconnect invalidation
+   guarantees exactly that — the refetch's snapshot was taken from the DB *before* the
+   writer inserted the row, so when it resolves it overwrites the cache and the spliced
+   row is gone until some later refetch. Not reconnect-specific: any refetch overlapping
+   a completion (a filter clear, a scope toggle) can eat a row the same way. Fixed by
+   checking `queryClient.getQueryState(queryKey)?.fetchStatus === 'fetching'` before
+   splicing; if a fetch is in flight, `invalidateQueries` instead — since `completed` only
+   fires after the writer's insert, any refetch that starts after this point is
+   guaranteed to include the row, and invalidating queues exactly such a refetch behind
+   the in-flight one.
 
 ## Acceptance criteria status
 

@@ -124,6 +124,54 @@ public class EventsTests
         Assert.True(found, "the completed event's row id should be present in a subsequent /requests list");
     }
 
+    // Post-Phase-4 addition (ui-spec.md §9.1, phase-3.md D5): request_ready carries the
+    // real model, off the request path, between started and first_token.
+    [Fact]
+    public async Task Sse_RequestReady_CarriesModel_BetweenStartedAndFirstToken()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        using SseReader sse = await SseReader.OpenAsync(client, $"{vessel.BaseUrl}/vessel/api/events", CT);
+        await Task.Delay(50, CT); // subscription registers a moment after headers flush; safety margin
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
+        Task<List<(string Event, string Data)>> eventsTask = sse.ReadEventsAsync(4, cts.Token);
+
+        // initialDelayMs gives the stub a floor closer to a real backend's TTFT — on a warm
+        // loopback connection it can otherwise answer in well under a millisecond, which
+        // request_ready's background hand-off (channel → dedicated loop → parse → publish)
+        // can lose to by sheer bad luck even though it's already the fast path. Real
+        // traffic never has a sub-millisecond TTFT, so this isn't papering over a real
+        // ordering bug — it's giving the test a realistic race instead of an artificial one.
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{vessel.BaseUrl}/sse?n=3&delayMs=30&initialDelayMs=20&modelcheck")
+        {
+            Content = new StringContent("""{"model":"test-model-xyz"}""", System.Text.Encoding.UTF8, "application/json"),
+        };
+        using HttpResponseMessage resp = await client.SendAsync(request, CT);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        await resp.Content.ReadAsByteArrayAsync(CT);
+
+        List<(string Event, string Data)> events = await eventsTask;
+
+        int startedIndex = events.FindIndex(e => e.Event == "started");
+        int requestReadyIndex = events.FindIndex(e => e.Event == "request_ready");
+        int firstTokenIndex = events.FindIndex(e => e.Event == "first_token");
+        Assert.True(startedIndex >= 0, "expected a started event");
+        Assert.True(requestReadyIndex >= 0, "expected a request_ready event");
+        Assert.True(firstTokenIndex >= 0, "expected a first_token event");
+        Assert.True(startedIndex < requestReadyIndex, "request_ready should arrive after started");
+        Assert.True(requestReadyIndex < firstTokenIndex, "request_ready should arrive before first_token");
+
+        using JsonDocument startedDoc = JsonDocument.Parse(events[startedIndex].Data);
+        long seq = startedDoc.RootElement.GetProperty("seq").GetInt64();
+
+        using JsonDocument readyDoc = JsonDocument.Parse(events[requestReadyIndex].Data);
+        Assert.Equal(seq, readyDoc.RootElement.GetProperty("seq").GetInt64());
+        Assert.Equal("test-model-xyz", readyDoc.RootElement.GetProperty("model").GetString());
+    }
+
     // U6: a subscriber that never reads its stream must never back-pressure the request
     // path or other subscribers (bounded, drop-oldest); disconnecting mid-stream doesn't
     // fault the hub — later requests and the still-open subscriber keep working.

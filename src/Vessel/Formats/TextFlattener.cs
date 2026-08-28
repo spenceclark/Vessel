@@ -75,6 +75,142 @@ public static class TextFlattener
         return NullIfEmpty(sb);
     }
 
+    /// <summary>Flattens a Responses API request: top-level <c>instructions</c> then <c>input</c> (a plain string, or an array of message/tool items).</summary>
+    public static string? ResponsesInput(JsonNode? request)
+    {
+        JsonObject? obj = JsonUtil.Object(request);
+        var sb = new StringBuilder();
+
+        string? instructions = JsonUtil.Str(obj?["instructions"]);
+        if (!string.IsNullOrEmpty(instructions))
+        {
+            AppendLine(sb, "system", instructions);
+        }
+
+        JsonNode? input = obj?["input"];
+        if (JsonUtil.Str(input) is string text)
+        {
+            if (!string.IsNullOrEmpty(text))
+            {
+                AppendLine(sb, "user", text);
+            }
+
+            return NullIfEmpty(sb);
+        }
+
+        foreach (JsonNode? item in JsonUtil.Array(input) ?? [])
+        {
+            AppendResponsesInputItem(sb, item);
+        }
+
+        return NullIfEmpty(sb);
+    }
+
+    private static void AppendResponsesInputItem(StringBuilder sb, JsonNode? item)
+    {
+        JsonObject? obj = JsonUtil.Object(item);
+        if (obj is null)
+        {
+            return;
+        }
+
+        switch (JsonUtil.Str(obj["type"]))
+        {
+            case "function_call":
+            {
+                string args = JsonUtil.Str(obj["arguments"]) ?? Compact(obj["arguments"]);
+                Append(sb, $"[tool_call {JsonUtil.Str(obj["name"])}] {args}".Trim());
+                break;
+            }
+
+            case "function_call_output":
+                Append(sb, $"[tool_result] {JsonUtil.Str(obj["output"]) ?? Compact(obj["output"])}".Trim());
+                break;
+
+            // A plain message item omits `type` on the wire; only these two get echoed.
+            case null:
+            case "message":
+                string role = JsonUtil.Str(obj["role"]) ?? "user";
+                string? text = FlattenResponsesContent(obj["content"]);
+                if (!string.IsNullOrEmpty(text))
+                {
+                    AppendLine(sb, role, text);
+                }
+
+                break;
+
+                // Reasoning replays, computer_call, and other item types contribute nothing.
+        }
+    }
+
+    /// <summary>Responses API content parts: <c>input_text</c>/<c>output_text</c> only; images/files/refusals contribute nothing.</summary>
+    private static string? FlattenResponsesContent(JsonNode? content)
+    {
+        if (JsonUtil.Str(content) is string text)
+        {
+            return text;
+        }
+
+        if (JsonUtil.Array(content) is not JsonArray parts)
+        {
+            return null;
+        }
+
+        var sb = new StringBuilder();
+        foreach (JsonNode? part in parts)
+        {
+            JsonObject? obj = JsonUtil.Object(part);
+            if (JsonUtil.Str(obj?["type"]) is "input_text" or "output_text")
+            {
+                Append(sb, JsonUtil.Str(obj?["text"]));
+            }
+        }
+
+        return sb.Length == 0 ? null : sb.ToString();
+    }
+
+    /// <summary>Flattens a Responses API response's <c>output</c> array: message text, reasoning summaries, tool calls.</summary>
+    public static string? ResponsesOutput(JsonNode? response)
+    {
+        JsonArray? output = JsonUtil.Array(JsonUtil.Object(response)?["output"]);
+        if (output is null)
+        {
+            return null;
+        }
+
+        var sb = new StringBuilder();
+        foreach (JsonNode? item in output)
+        {
+            JsonObject? obj = JsonUtil.Object(item);
+            switch (JsonUtil.Str(obj?["type"]))
+            {
+                case "message":
+                    Append(sb, FlattenResponsesContent(obj?["content"]));
+                    break;
+
+                case "reasoning":
+                    foreach (JsonNode? part in JsonUtil.Array(obj?["summary"]) ?? [])
+                    {
+                        Append(sb, JsonUtil.Str(JsonUtil.Object(part)?["text"]));
+                    }
+
+                    break;
+
+                case "function_call":
+                {
+                    string args = JsonUtil.Str(obj?["arguments"]) ?? Compact(obj?["arguments"]);
+                    Append(sb, $"[tool_call {JsonUtil.Str(obj?["name"])}] {args}".Trim());
+                    break;
+                }
+
+                // web_search_call, file_search_call, image_generation_call, and other tool
+                // items have no user-facing text to flatten.
+            }
+        }
+
+        return NullIfEmpty(sb);
+    }
+
     /// <summary>Flattens an OpenAI <c>chat.completion</c> (wire or synthesized) to assistant text.</summary>
     public static string? OpenAiResponse(JsonNode? completion)
     {

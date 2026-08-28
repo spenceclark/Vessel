@@ -20,6 +20,7 @@ public sealed class ProxyHandler
     private readonly BackendRegistry _registry;
     private readonly CaptureChannel _captureChannel;
     private readonly CaptureEvents _captureEvents;
+    private readonly RequestModelSnifferService _modelSniffer;
     private readonly CurrentSession _currentSession;
     private readonly ConfigStore _configStore;
     private readonly HttpMessageInvoker _invoker;
@@ -27,13 +28,14 @@ public sealed class ProxyHandler
 
     public ProxyHandler(
         IHttpForwarder forwarder, BackendRegistry registry, CaptureChannel captureChannel,
-        CaptureEvents captureEvents, CurrentSession currentSession,
+        CaptureEvents captureEvents, RequestModelSnifferService modelSniffer, CurrentSession currentSession,
         ConfigStore configStore, ILogger<ProxyHandler> logger)
     {
         _forwarder = forwarder;
         _registry = registry;
         _captureChannel = captureChannel;
         _captureEvents = captureEvents;
+        _modelSniffer = modelSniffer;
         _currentSession = currentSession;
         _configStore = configStore;
         _logger = logger;
@@ -66,7 +68,7 @@ public sealed class ProxyHandler
             VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
         };
 
-        var capture = new CaptureContext(maxBodyBytes, _currentSession.Id, _captureEvents);
+        var capture = new CaptureContext(maxBodyBytes, _currentSession.Id, _captureEvents, _modelSniffer);
         context.Items[CaptureContext.ItemsKey] = capture;
 
         // The response tee: bytes written to the client first, then buffered. The feature
@@ -174,6 +176,7 @@ public sealed class ProxyHandler
             // Capture the client's original bytes; forward the modified body.
             capture.RequestBuffer.Append(head);
             capture.MarkRequestForwarded();
+            capture.EmitRequestReadyIfParseable();
             capture.UsageInjected = true;
             context.Request.Body = new MemoryStream(modified, writable: false);
             context.Request.ContentLength = modified.Length;

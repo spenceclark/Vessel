@@ -1,0 +1,24 @@
+{
+  "format": "openai-responses",
+  "model": "gpt-4o-mini",
+  "tokensIn": 9,
+  "tokensOut": 2,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": "stop",
+  "tokPerSec": 4.0,
+  "warnings": [],
+  "promptText": "user: Say hello",
+  "responseText": "Hello!",
+  "responseBody": {
+    "id": "resp_3",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-4o-mini",
+    "output": [
+      {"id": "msg_1", "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Hello!"}]}
+    ],
+    "usage": {"input_tokens": 9, "output_tokens": 2, "total_tokens": 11}
+  }
+}

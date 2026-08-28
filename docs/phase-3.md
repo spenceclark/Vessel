@@ -76,6 +76,12 @@ All read queries are indexed (`id` cursor, `session_id`); no query may scan bodi
   `{ total, failed, avgDurationMs, avgTokPerSec, avgTtftMs, sessionId, sessionStartedAt }`.
   `failed` = `error` set or status ≥ 400. Averages over non-null values only;
   `avgTtftMs` over streamed rows.
+  **Post-Phase-4 addition** (ui-spec.md §9.1 token-totals TODO, implemented): the
+  response gains `tokensIn`, `tokensOut`, `tokensCachedRead`, `tokensCachedWrite`
+  (`SUM`s over the same scope, `COALESCE(...,0)` — null-safe → 0) and
+  `tokensEstimated` (`COALESCE(MAX(tokens_estimated), 0)` — true iff any
+  contributing row has `tokens_estimated = 1` — the totals are then estimates and
+  the UI renders them `~`-prefixed).
 - `GET /sessions` → newest-first list; `POST /sessions` → creates a marker (optional
   `{name}`), returns it. No delete.
 - Errors follow the Phase 0 convention (`X-Vessel-Error` + `{"error":{...}}`).
@@ -114,6 +120,19 @@ so the API can respond with it. No second write connection, no lock dance.
   (duplicates resolved in favor of REST rows).
 - Request-path emit cost is a non-blocking `TryWrite` per subscriber; zero subscribers
   = near-zero cost. `/vessel/*` traffic never emits events (it is never captured).
+- **Post-Phase-4 addition** (ui-spec.md §9.1 in-flight TODO, implemented): the
+  contract gains a fourth event, `request_ready` `{seq, model}` — emitted once the
+  request body has been fully read (a genuine EOF on the request tee, not YARP's
+  zero-length probe reads — see `RequestTeeStream`), with the model parsed from the
+  already-captured request buffer off the request path (`TryWrite` fan-out like the
+  others; skipped when the body has no parseable `model`). The parse itself runs on
+  a dedicated, always-running consumer (`RequestModelSnifferService`, mirroring
+  `CaptureChannel`/`CaptureWriterService`'s shape) rather than a fresh `Task.Run` per
+  request — an integration test caught a real race where a `Task.Run`'s
+  thread-pool-scheduling delay let `request_ready` arrive after `first_token` on a
+  fast (warm loopback) connection; the dedicated consumer removes that variable. It
+  exists so in-flight rows can show the real model within milliseconds of dispatch
+  instead of after completion.
 
 ### D6 — UI structure (one screen, three regions)
 

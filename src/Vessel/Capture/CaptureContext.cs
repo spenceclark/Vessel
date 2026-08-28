@@ -23,12 +23,15 @@ public sealed class CaptureContext
     private readonly DateTime _startedAtUtc = DateTime.UtcNow;
     private readonly long _startTimestamp = Stopwatch.GetTimestamp();
     private readonly CaptureEvents? _events;
+    private readonly RequestModelSnifferService? _modelSniffer;
 
-    public CaptureContext(long maxBodyBytes, long sessionId, CaptureEvents? events = null)
+    public CaptureContext(
+        long maxBodyBytes, long sessionId, CaptureEvents? events = null, RequestModelSnifferService? modelSniffer = null)
     {
         Seq = Interlocked.Increment(ref _seqCounter);
         SessionId = sessionId;
         _events = events;
+        _modelSniffer = modelSniffer;
         RequestBuffer = new CaptureBuffer(maxBodyBytes);
         ResponseBuffer = new CaptureBuffer(maxBodyBytes);
     }
@@ -67,6 +70,25 @@ public sealed class CaptureContext
     public void MarkOverhead() => OverheadMs ??= ElapsedMs;
 
     public void MarkRequestForwarded() => RequestForwardedMs = ElapsedMs;
+
+    private int _requestReadyEmitted;
+
+    /// <summary>
+    /// D5 <c>request_ready</c> — call once the request body is fully read. Guarded so it
+    /// only ever fires once per request (the tee's EOF read and the inject-usage
+    /// fast-path both call this). The actual parse is real JSON work, unlike the other
+    /// marks here, so it's handed to the dedicated <see cref="RequestModelSnifferService"/>
+    /// rather than done inline — never the request path.
+    /// </summary>
+    public void EmitRequestReadyIfParseable()
+    {
+        if (_modelSniffer is null || Interlocked.Exchange(ref _requestReadyEmitted, 1) != 0)
+        {
+            return;
+        }
+
+        _modelSniffer.Enqueue(Seq, RequestBuffer.ToArrayOrNull());
+    }
 
     /// <summary>
     /// Stamps the first-byte mark once. Returns true only on the call that actually set

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/api/client'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 
 const CONFIRM_WORD = 'DELETE'
 
@@ -46,16 +47,16 @@ export function DataPanel() {
 
   return (
     <div className="flex flex-col gap-4 text-sm">
-      <p className="text-[var(--muted)]">
+      <p className="text-text-muted">
         Deleting captured requests is permanent and cannot be undone. This is the only destructive action in Vessel.
       </p>
 
-      {message && <div className="rounded-md border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-xs">{message}</div>}
+      {message && <div className="rounded-control border border-border bg-surface-2 px-3 py-2 text-xs text-text">{message}</div>}
 
-      <div className="flex flex-col gap-2 rounded-md border border-[var(--border)] p-3">
-        <div className="font-medium">Clear all requests</div>
+      <div className="flex flex-col gap-2 rounded-control border border-border p-3">
+        <div className="font-medium text-text">Clear all requests</div>
         {mode !== 'all' ? (
-          <Button variant="destructive" size="sm" className="w-fit" onClick={() => { setMode('all'); setMessage(null) }}>
+          <Button variant="destructive" className="w-fit" onClick={() => { setMode('all'); setMessage(null) }}>
             Clear all…
           </Button>
         ) : (
@@ -71,19 +72,19 @@ export function DataPanel() {
         )}
       </div>
 
-      <div className="flex flex-col gap-2 rounded-md border border-[var(--border)] p-3">
-        <div className="font-medium">Clear before date</div>
+      <div className="flex flex-col gap-2 rounded-control border border-border p-3">
+        <div className="font-medium text-text">Clear before date</div>
         {mode !== 'before' ? (
-          <Button variant="outline" size="sm" className="w-fit" onClick={() => { setMode('before'); setMessage(null) }}>
+          <Button className="w-fit" onClick={() => { setMode('before'); setMessage(null) }}>
             Clear before…
           </Button>
         ) : (
           <>
-            <input
+            <Input
               type="datetime-local"
               value={beforeDate}
               onChange={(e) => setBeforeDate(e.target.value)}
-              className="h-7 w-fit rounded-md border border-[var(--border)] bg-transparent px-2 text-xs"
+              className="w-fit"
             />
             <ConfirmBlock
               label={`Type "${CONFIRM_WORD}" to permanently delete every request before this date.`}
@@ -120,19 +121,19 @@ function ConfirmBlock({
 }) {
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-xs text-[var(--muted)]">{label}</span>
-      <input
+      <span className="text-xs text-text-muted">{label}</span>
+      <Input
         type="text"
         value={confirmText}
         onChange={(e) => onConfirmTextChange(e.target.value)}
         placeholder={CONFIRM_WORD}
-        className="h-7 w-40 rounded-md border border-[var(--border)] bg-transparent px-2 text-xs"
+        className="w-40"
       />
       <div className="flex gap-2">
-        <Button variant="destructive" size="sm" disabled={!canConfirm} onClick={onConfirm}>
+        <Button variant="destructive" disabled={!canConfirm} onClick={onConfirm}>
           {busy ? 'Deleting…' : 'Confirm delete'}
         </Button>
-        <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+        <Button variant="ghost" onClick={onCancel} disabled={busy}>
           Cancel
         </Button>
       </div>

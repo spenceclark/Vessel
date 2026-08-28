@@ -1,16 +1,19 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Search } from 'lucide-react'
 import { api } from '@/api/client'
 import { EMPTY_FILTERS, filtersActive, type RequestFilters, type SessionScope } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { tagChipClass } from '@/lib/tags'
 import { cn } from '@/lib/utils'
 
-const SELECT_CLASS =
-  'h-7 rounded-md border border-[var(--border)] bg-transparent px-1.5 text-xs text-[var(--foreground)]'
+const SELECT_CLASS = 'h-7 rounded-control border border-border bg-surface-2 px-1.5 text-xs text-text'
 
 /**
- * D3 — one row above the history list: debounced free-text search, backend/model/format
+ * D3 — the list panel's own header: debounced free-text search, backend/model/format
  * dropdowns from facets (hidden when a facet has ≤1 value), a tag chip picker, a status
  * toggle, and a warnings-only toggle. Filter state lives in the parent (App) so
  * RequestList's query key can include it.
@@ -53,14 +56,15 @@ export function FilterBar({
   const active = filtersActive(filters)
 
   return (
-    <div className="flex flex-col gap-2 border-b border-[var(--border)] px-3 py-2">
+    <div className="flex flex-col gap-2 border-b border-border px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
-        <input
+        <Input
           type="text"
           value={qInput}
           onChange={(e) => setQInput(e.target.value)}
           placeholder="Search prompts & responses…"
-          className="h-7 min-w-[200px] flex-1 rounded-md border border-[var(--border)] bg-transparent px-2 text-xs placeholder:text-[var(--muted)]"
+          icon={<Search strokeWidth={1.75} />}
+          className="min-w-[200px] flex-1"
         />
 
         {facets && facets.backends.length > 1 && (
@@ -108,35 +112,29 @@ export function FilterBar({
           </select>
         )}
 
-        <div className="flex items-center rounded-md border border-[var(--border)] p-0.5 text-xs">
-          {(['all', 'ok', 'error'] as const).map((s) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => set('status', s)}
-              className={cn(
-                'rounded px-2 py-1 capitalize',
-                filters.status === s ? 'bg-[var(--card)] font-medium' : 'text-[var(--muted)]',
-              )}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
+        <Tabs value={filters.status} onValueChange={(v) => set('status', v as RequestFilters['status'])}>
+          <TabsList>
+            <TabsTrigger value="all">All</TabsTrigger>
+            <TabsTrigger value="ok">Ok</TabsTrigger>
+            <TabsTrigger value="error">Error</TabsTrigger>
+          </TabsList>
+        </Tabs>
 
         <button
           type="button"
           onClick={() => set('warnedOnly', !filters.warnedOnly)}
           className={cn(
-            'h-7 rounded-md border border-[var(--border)] px-2 text-xs',
-            filters.warnedOnly ? 'bg-[var(--warning)]/15 text-[var(--warning)]' : 'text-[var(--muted)]',
+            'h-7 rounded-control border px-2 text-xs transition-colors',
+            filters.warnedOnly
+              ? 'border-transparent bg-[color-mix(in_srgb,var(--color-warn)_14%,transparent)] text-warn'
+              : 'border-border text-text-secondary hover:bg-surface-2',
           )}
         >
           Warnings only
         </button>
 
         {active && (
-          <Button variant="ghost" size="sm" onClick={() => onFiltersChange(EMPTY_FILTERS)}>
+          <Button variant="ghost" onClick={() => onFiltersChange(EMPTY_FILTERS)}>
             Clear filters
           </Button>
         )}
@@ -144,12 +142,23 @@ export function FilterBar({
 
       {facets && facets.tags.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-[var(--muted)]">Tags:</span>
-          {facets.tags.map((t) => (
-            <button key={t} type="button" onClick={() => set('tag', filters.tag === t ? null : t)}>
-              <Badge variant={filters.tag === t ? 'accent' : 'outline'}>{t}</Badge>
-            </button>
-          ))}
+          <span className="text-xs text-text-muted">Tags:</span>
+          {facets.tags.map((t) => {
+            const selected = filters.tag === t
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => set('tag', selected ? null : t)}
+                className={cn(
+                  'rounded-full px-2.5 py-1 text-xs font-medium leading-none transition-opacity',
+                  selected ? 'bg-accent text-accent-fg' : cn(tagChipClass(t), 'hover:opacity-80'),
+                )}
+              >
+                {t}
+              </button>
+            )
+          })}
         </div>
       )}
 
@@ -180,9 +189,9 @@ function ActiveFilterChips({
     <div className="flex flex-wrap items-center gap-1.5">
       {chips.map((chip) => (
         <button key={chip.label} type="button" onClick={() => onFiltersChange(chip.clear)}>
-          <Badge variant="default" className="gap-1">
+          <Badge variant="neutral" className="gap-1">
             {chip.label}
-            <span className="text-[var(--muted)]">×</span>
+            <span className="text-text-muted">×</span>
           </Badge>
         </button>
       ))}

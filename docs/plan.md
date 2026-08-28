@@ -126,6 +126,11 @@ under ten seconds: filter warnings-only, or search a phrase, click, read.
       on Overview and session totals; clearly labeled estimate (§9).
 - [ ] **Context-growth chart**: `tokens_in` over time per session/tag — makes agent
       context bloat visible at a glance.
+- [ ] **Live tail**: stream the in-flight response into the UI as it generates —
+      the in-flight detail's state line (ui-spec §9.1) becomes a live token view.
+      Needs its own design pass: chunk broadcast only while a client has that
+      request open, bounded per-request buffers, drop-never-block — the hot-path
+      rules from §4.1 apply in full.
 - [ ] **Ollama panel**: `ollama ps` proxied view (loaded models, VRAM); server.log viewer
       if reachable (§7, §10).
 

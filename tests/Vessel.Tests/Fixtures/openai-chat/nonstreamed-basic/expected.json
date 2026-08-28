@@ -7,6 +7,7 @@
   "tokensCachedWrite": null,
   "tokensEstimated": false,
   "stopReason": "stop",
+  "tokPerSec": 1.0,
   "warnings": [],
   "promptText": "system: You are terse.\nuser: Say hello",
   "responseText": "Hello"

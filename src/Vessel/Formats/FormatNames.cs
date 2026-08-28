@@ -4,6 +4,7 @@ namespace Vessel.Formats;
 public static class FormatNames
 {
     public const string OpenAiChat = "openai-chat";
+    public const string OpenAiResponses = "openai-responses";
     public const string AnthropicMessages = "anthropic-messages";
     public const string OllamaChat = "ollama-chat";
     public const string OllamaGenerate = "ollama-generate";

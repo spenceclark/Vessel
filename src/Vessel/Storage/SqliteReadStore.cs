@@ -299,7 +299,12 @@ public sealed class SqliteReadStore(string dbPath)
                 SUM(CASE WHEN error IS NOT NULL OR status_code >= 400 THEN 1 ELSE 0 END),
                 AVG(duration_ms),
                 AVG(tok_per_sec),
-                AVG(CASE WHEN streamed = 1 THEN ttft_ms ELSE NULL END)
+                AVG(CASE WHEN streamed = 1 THEN ttft_ms ELSE NULL END),
+                COALESCE(SUM(tokens_in), 0),
+                COALESCE(SUM(tokens_out), 0),
+                COALESCE(SUM(tokens_cached_read), 0),
+                COALESCE(SUM(tokens_cached_write), 0),
+                COALESCE(MAX(tokens_estimated), 0)
             FROM requests {whereClause}
             """;
 
@@ -315,6 +320,11 @@ public sealed class SqliteReadStore(string dbPath)
         double? avgDuration = reader.IsDBNull(2) ? null : reader.GetDouble(2);
         double? avgTokPerSec = reader.IsDBNull(3) ? null : reader.GetDouble(3);
         double? avgTtft = reader.IsDBNull(4) ? null : reader.GetDouble(4);
+        long tokensIn = reader.GetInt64(5);
+        long tokensOut = reader.GetInt64(6);
+        long tokensCachedRead = reader.GetInt64(7);
+        long tokensCachedWrite = reader.GetInt64(8);
+        bool tokensEstimated = reader.GetInt64(9) != 0;
         reader.Close();
 
         string? sessionStartedAt = null;
@@ -326,7 +336,9 @@ public sealed class SqliteReadStore(string dbPath)
             sessionStartedAt = sessionCommand.ExecuteScalar() as string;
         }
 
-        return new StatsResponse(total, failed, avgDuration, avgTokPerSec, avgTtft, sessionId, sessionStartedAt);
+        return new StatsResponse(
+            total, failed, avgDuration, avgTokPerSec, avgTtft, sessionId, sessionStartedAt,
+            tokensIn, tokensOut, tokensCachedRead, tokensCachedWrite, tokensEstimated);
     }
 
     /// <summary>D3 — newest-first.</summary>

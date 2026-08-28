@@ -92,7 +92,13 @@ public sealed record RequestDetail(
         s.Truncated, requestHeaders, responseHeaders, requestBody, responseBody, responseRaw);
 }
 
-/// <summary>D3 — <c>GET /stats</c> response. Session fields are null when scoped to "all".</summary>
+/// <summary>
+/// D3 — <c>GET /stats</c> response. Session fields are null when scoped to "all". The
+/// token totals are <c>SUM</c>s over the same scope (null-safe → 0, never null — an
+/// empty session's total is genuinely zero, not "not measured"); <see cref="TokensEstimated"/>
+/// is true iff any contributing row had estimated counts, so the UI can flag the whole
+/// total as approximate rather than presenting a mixed exact/estimated sum as exact.
+/// </summary>
 public sealed record StatsResponse(
     long Total,
     long Failed,
@@ -100,7 +106,12 @@ public sealed record StatsResponse(
     double? AvgTokPerSec,
     double? AvgTtftMs,
     long? SessionId,
-    string? SessionStartedAt);
+    string? SessionStartedAt,
+    long TokensIn,
+    long TokensOut,
+    long TokensCachedRead,
+    long TokensCachedWrite,
+    bool TokensEstimated);
 
 /// <summary>D3/D4 — a <c>sessions</c> marker row: <c>GET/POST /sessions</c> wire shape.</summary>
 public sealed record SessionInfo(long Id, string StartedAt, string? Name);

@@ -67,7 +67,17 @@ export function extractOllamaResponse(detail: RequestDetail): RenderedView | nul
 
 function requestMessage(m: any): RenderMessage {
   const blocks: RenderBlock[] = []
-  if (typeof m?.content === 'string' && m.content) blocks.push({ kind: 'markdown', text: m.content })
+
+  if (m?.role === 'tool') {
+    blocks.push({
+      kind: 'toolResult',
+      forId: m.tool_call_id,
+      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+    })
+  } else if (typeof m?.content === 'string' && m.content) {
+    blocks.push({ kind: 'markdown', text: m.content })
+  }
+
   appendToolCalls(blocks, m?.tool_calls)
   return { role: m?.role ?? 'user', blocks }
 }

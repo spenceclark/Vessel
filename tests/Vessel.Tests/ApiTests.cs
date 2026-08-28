@@ -154,6 +154,14 @@ public class ApiTests
         Assert.Equal(1, stats.GetProperty("failed").GetInt64());
         Assert.Equal(expectedAvgDuration, stats.GetProperty("avgDurationMs").GetDouble(), precision: 3);
         Assert.Equal(streamedRow.TtftMs!.Value, stats.GetProperty("avgTtftMs").GetDouble(), precision: 3); // the only streamed row
+        // None of these 4 rows (echo/sse/unknown-backend) carry token data — the
+        // null-safe-to-0 default (not absent, not null): a session with zero token
+        // data is a genuine zero, not "not measured" (ui-spec.md §9.1).
+        Assert.Equal(0, stats.GetProperty("tokensIn").GetInt64());
+        Assert.Equal(0, stats.GetProperty("tokensOut").GetInt64());
+        Assert.Equal(0, stats.GetProperty("tokensCachedRead").GetInt64());
+        Assert.Equal(0, stats.GetProperty("tokensCachedWrite").GetInt64());
+        Assert.False(stats.GetProperty("tokensEstimated").GetBoolean());
         long originalSessionId = stats.GetProperty("sessionId").GetInt64();
         Assert.False(string.IsNullOrEmpty(stats.GetProperty("sessionStartedAt").GetString()));
 
@@ -174,6 +182,30 @@ public class ApiTests
 
         JsonElement oldStats = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/stats?session={originalSessionId}", CT);
         Assert.Equal(4, oldStats.GetProperty("total").GetInt64());
+    }
+
+    // Post-Phase-4 addition (ui-spec.md §9.1 token-totals TODO, phase-3.md D3): the
+    // SUMs across multiple real rows. `tokensEstimated`'s per-row correctness (does
+    // estimation actually flag a row) is already covered by FormatEnricherTests; this
+    // proves the aggregation itself — scoping, column wiring — with exact, known
+    // Ollama-reported counts (prompt_eval_count 5, eval_count 3 per call, fixed by the stub).
+    [Fact]
+    public async Task Stats_TokenTotals_SumAcrossRows()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        await client.GetAsync($"{vessel.BaseUrl}/api/chat?marker=one", CT);
+        await client.GetAsync($"{vessel.BaseUrl}/api/chat?marker=two", CT);
+
+        await CaptureDb.WaitUntil(vessel.DbPath, rows => rows.Count, count => count >= 2);
+
+        JsonElement stats = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/stats", CT);
+        Assert.Equal(10, stats.GetProperty("tokensIn").GetInt64());
+        Assert.Equal(6, stats.GetProperty("tokensOut").GetInt64());
+        Assert.Equal(0, stats.GetProperty("tokensCachedRead").GetInt64());
+        Assert.Equal(0, stats.GetProperty("tokensCachedWrite").GetInt64());
+        Assert.False(stats.GetProperty("tokensEstimated").GetBoolean());
     }
 
     // U4: fresh DB auto-creates session 1; POST creates + returns a marker; a row started

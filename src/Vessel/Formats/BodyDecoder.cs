@@ -4,10 +4,13 @@ using ZstdSharp;
 namespace Vessel.Formats;
 
 /// <summary>
-/// D3 — content-encoding handling for parsing only. Bodies are decoded into a scratch
-/// buffer so adapters see JSON text; the stored wire bytes are never touched. Unknown or
-/// undecodable encodings surface as <see cref="DecodeStatus.Failed"/> so the enricher can
-/// fall the row back to <c>raw</c> + <c>parse_error</c>.
+/// D3 — content-encoding handling for both parsing and storage. Adapters always see the
+/// decoded bytes; a non-streamed response also keeps them for <c>response_body</c>
+/// (<see cref="FormatEnricher"/>) — the raw wire bytes stay untouched everywhere else
+/// (the caller's actual response via <c>ResponseTeeStream</c>, and the streamed
+/// <c>response_raw</c> column). Unknown or undecodable encodings surface as
+/// <see cref="DecodeStatus.Failed"/> so the enricher can fall the row back to
+/// <c>raw</c> + <c>parse_error</c> with its original wire bytes intact.
 /// </summary>
 public static class BodyDecoder
 {

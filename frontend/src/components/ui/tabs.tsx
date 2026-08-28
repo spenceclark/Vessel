@@ -26,9 +26,10 @@ export function Tabs({
   )
 }
 
+/** §6 — segmented control: a surface-2 track, no underline tabs anywhere. */
 export function TabsList({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
-    <div className={cn('inline-flex items-center gap-1 border-b border-[var(--border)]', className)} role="tablist">
+    <div className={cn('inline-flex items-center gap-0.5 rounded-control bg-surface-2 p-0.5', className)} role="tablist">
       {children}
     </div>
   )
@@ -38,10 +39,12 @@ export function TabsTrigger({
   value,
   children,
   className,
+  disabled,
 }: {
   value: string
   children: React.ReactNode
   className?: string
+  disabled?: boolean
 }) {
   const ctx = React.useContext(TabsContext)
   if (!ctx) throw new Error('TabsTrigger must be used inside Tabs')
@@ -52,12 +55,13 @@ export function TabsTrigger({
       type="button"
       role="tab"
       aria-selected={active}
+      disabled={disabled}
       onClick={() => ctx.setValue(value)}
       className={cn(
-        'border-b-2 px-3 py-1.5 text-sm font-medium -mb-px transition-colors',
+        'rounded-chip px-3 py-1 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50',
         active
-          ? 'border-[var(--accent)] text-[var(--foreground)]'
-          : 'border-transparent text-[var(--muted)] hover:text-[var(--foreground)]',
+          ? 'border border-border bg-surface text-text'
+          : 'border border-transparent text-text-secondary hover:text-text',
         className,
       )}
     >

@@ -182,10 +182,20 @@ public sealed class StubBackend : IAsyncDisposable
     {
         int n = int.TryParse(context.Request.Query["n"], out int nv) ? nv : 5;
         int delayMs = int.TryParse(context.Request.Query["delayMs"], out int dv) ? dv : 200;
+        // Opt-in only (defaults to 0, i.e. today's instant-first-byte behavior): a delay
+        // before the *first* chunk too, for tests that need a realistic TTFT — a warm
+        // loopback connection can otherwise answer in well under a millisecond, faster
+        // than any real backend, which starves anything racing to beat first_token.
+        int initialDelayMs = int.TryParse(context.Request.Query["initialDelayMs"], out int iv) ? iv : 0;
 
         context.Response.ContentType = contentType;
         try
         {
+            if (initialDelayMs > 0)
+            {
+                await Task.Delay(initialDelayMs, context.RequestAborted);
+            }
+
             for (int i = 0; i < n; i++)
             {
                 await context.Response.WriteAsync(chunk(i), context.RequestAborted);

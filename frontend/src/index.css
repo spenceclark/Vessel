@@ -1,31 +1,85 @@
 @import 'tailwindcss';
 
 /*
- * D6: dark/light via prefers-color-scheme, no toggle this phase. Tailwind v4's `dark:`
- * variant already maps to that media query by default, so plain `dark:` utilities below
- * just work without extra config.
+ * docs/ui-spec.md is the design authority for everything here. Dark is the primary
+ * theme (@theme's defaults); light overrides the same emitted custom-property names
+ * under prefers-color-scheme (no toggle yet — cheap to add later since everything
+ * routes through these tokens). Every color/font/radius/shadow in the spec's §§2-4
+ * lives here, once — components use token utilities (bg-surface, text-muted,
+ * rounded-panel, shadow-panel, …) or var(--color-…), never raw palette utilities or
+ * hex values.
  */
-:root {
-  --background: #ffffff;
-  --foreground: #0f1115;
-  --muted: #6b7280;
-  --border: #e5e7eb;
-  --card: #f9fafb;
-  --accent: #2563eb;
-  --danger: #dc2626;
-  --warning: #d97706;
+@theme {
+  --color-canvas: #0b0d10;
+  --color-surface: #14171c;
+  --color-surface-2: #1b1f26;
+  --color-surface-3: #232936;
+  --color-border: #262c36;
+  --color-border-strong: #39414f;
+  --color-text: #e6eaf0;
+  --color-text-secondary: #a8b1bd;
+  --color-text-muted: #6b7684;
+  --color-accent: #2dd4bf;
+  --color-accent-fg: #0b0d10;
+  --color-ok: #4ade80;
+  --color-danger: #f87171;
+  --color-warn: #fbbf24;
+  --color-info: #7dd3fc;
+
+  --color-tag-blue: #60a5fa;
+  --color-tag-indigo: #818cf8;
+  --color-tag-violet: #a78bfa;
+  --color-tag-pink: #f472b6;
+  --color-tag-fuchsia: #e879f9;
+  --color-tag-steel: #94a3b8;
+
+  --font-ui: InterVariable, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, Consolas, monospace;
+
+  --radius-panel: 12px;
+  --radius-control: 8px;
+  --radius-chip: 6px;
+
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 16px rgb(0 0 0 / 0.15);
+  --shadow-dialog: 0 4px 8px rgb(0 0 0 / 0.35), 0 16px 48px rgb(0 0 0 / 0.3);
+
+  --text-xs: 11px;
+  --text-xs--line-height: 16px;
+  --text-sm: 12.5px;
+  --text-sm--line-height: 18px;
+  --text-base: 14px;
+  --text-base--line-height: 20px;
+  --text-lg: 16px;
+  --text-lg--line-height: 22px;
+  --text-stat: 20px;
+  --text-stat--line-height: 24px;
 }
 
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
   :root {
-    --background: #0f1115;
-    --foreground: #e5e7eb;
-    --muted: #9ca3af;
-    --border: #262a33;
-    --card: #171a21;
-    --accent: #60a5fa;
-    --danger: #f87171;
-    --warning: #fbbf24;
+    --color-canvas: #eef1f4;
+    --color-surface: #ffffff;
+    --color-surface-2: #f5f7f9;
+    --color-surface-3: #e9edf1;
+    --color-border: #dde3e9;
+    --color-border-strong: #c3ccd6;
+    --color-text: #171c23;
+    --color-text-secondary: #4b5563;
+    --color-text-muted: #8b95a1;
+    --color-accent: #0d9488;
+    --color-accent-fg: #ffffff;
+    --color-ok: #16a34a;
+    --color-danger: #dc2626;
+    --color-warn: #b45309;
+    --color-info: #0369a1;
+    --color-tag-blue: #2563eb;
+    --color-tag-indigo: #4f46e5;
+    --color-tag-violet: #7c3aed;
+    --color-tag-pink: #db2777;
+    --color-tag-fuchsia: #a21caf;
+    --color-tag-steel: #475569;
+    --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.15), 0 4px 16px rgb(0 0 0 / 0.075);
+    --shadow-dialog: 0 4px 8px rgb(0 0 0 / 0.18), 0 16px 48px rgb(0 0 0 / 0.15);
   }
 }
 
@@ -37,9 +91,12 @@ body,
 
 body {
   margin: 0;
-  background: var(--background);
-  color: var(--foreground);
-  font: 14px/1.5 system-ui, 'Segoe UI', Roboto, sans-serif;
+  background: var(--color-canvas);
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  font-variant-numeric: normal;
 }
 
 * {
@@ -47,10 +104,74 @@ body {
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
 }
 
-/* D4 — minimal markdown styling for the rendered message view (react-markdown output). */
+/* §7 — focus-visible only, everywhere; never outline:none without this replacement. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* §6 — thin scrollbars; default chrome inside rounded panels reads as unfinished. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--color-border-strong);
+  border-radius: 4px;
+}
+
+/* §7 — the only two keyframe animations in the app. */
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.pulse-dot {
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes dialog-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.dialog-fade {
+  animation: dialog-fade 100ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot {
+    animation: none;
+  }
+
+  .dialog-fade {
+    animation: none;
+  }
+}
+
+/* D4 — markdown styling for the rendered message view (react-markdown output). */
 .md {
   overflow-wrap: break-word;
 }
@@ -78,22 +199,22 @@ body {
 }
 
 .md a {
-  color: var(--accent);
+  color: var(--color-accent);
   text-decoration: underline;
 }
 
 .md code {
-  background: var(--card);
+  background: var(--color-surface-2);
   border-radius: 3px;
   padding: 0.1em 0.35em;
-  font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 0.9em;
 }
 
 .md pre {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
   padding: 0.6em 0.8em;
   overflow-x: auto;
 }
@@ -104,9 +225,9 @@ body {
 }
 
 .md blockquote {
-  border-left: 3px solid var(--border);
+  border-left: 3px solid var(--color-border);
   padding-left: 0.75em;
-  color: var(--muted);
+  color: var(--color-text-muted);
 }
 
 .md table {
@@ -117,7 +238,7 @@ body {
 
 .md th,
 .md td {
-  border: 1px solid var(--border);
+  border: 1px solid var(--color-border);
   padding: 0.3em 0.5em;
   text-align: left;
 }

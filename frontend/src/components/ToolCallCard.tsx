@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { ChevronDown, ChevronRight, Reply, Wrench } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 /**
  * D4 — a tool call (use) or its result, collapsible. `kind="use"` and `kind="result"`
@@ -17,21 +19,30 @@ export function ToolCallCard({
   content: string
 }) {
   const [collapsed, setCollapsed] = useState(false)
+  const Icon = kind === 'use' ? Wrench : Reply
 
   return (
-    <div className="rounded-md border border-[var(--border)] bg-[var(--card)]">
+    <div className="rounded-control border border-border bg-surface-2">
       <button
         type="button"
         onClick={() => setCollapsed((c) => !c)}
         className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs"
       >
-        <span className="font-mono text-[var(--accent)]">{kind === 'use' ? '🔧' : '↩'}</span>
-        <span className="font-medium">{kind === 'use' ? (name ?? 'tool call') : 'tool result'}</span>
-        {id && <span className="truncate text-[var(--muted)]">#{id}</span>}
-        <span className="ml-auto text-[var(--muted)]">{collapsed ? 'expand' : 'collapse'}</span>
+        <Icon className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.75} />
+        <span className="font-medium text-text">{kind === 'use' ? (name ?? 'tool call') : 'tool result'}</span>
+        {id && <span className="truncate font-mono text-text-muted">#{id}</span>}
+        {collapsed ? (
+          <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-text-muted" strokeWidth={1.75} />
+        ) : (
+          <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-text-muted" strokeWidth={1.75} />
+        )}
       </button>
       {!collapsed && (
-        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words border-t border-[var(--border)] px-2 py-1.5 font-mono text-xs">
+        <pre
+          className={cn(
+            'max-h-64 overflow-auto whitespace-pre-wrap break-words border-t border-border px-2 py-1.5 font-mono text-xs text-text',
+          )}
+        >
           {prettyOrRaw(content)}
         </pre>
       )}

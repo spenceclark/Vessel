@@ -5,7 +5,7 @@
 
 Vessel sits between LLM clients (agents, SDK scripts, dev tools) and LLM backends
 (Ollama, LM Studio, OpenAI, Anthropic, anything OpenAI-compatible). It forwards traffic
-as-is — never mutating it beyond stripping its own `X-Vessel-*` control headers — and
+as-is — never mutating it beyond stripping its own `X-Vessel-*` control s — and
 will capture every request/response, including streamed ones, into a local SQLite DB
 with an embedded web UI.
 

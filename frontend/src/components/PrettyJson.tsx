@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { formatBytes } from '@/lib/format'
 
 /**
- * D6 — JSON.parse + JSON.stringify(_, null, 2) in a scrollable <pre>, no syntax
+ * D6/§6 — JSON.parse + JSON.stringify(_, null, 2) in a scrollable code block, no syntax
  * highlighting this phase. Unparseable text renders verbatim; base64 bodies show a size
  * placeholder rather than a wall of base64.
  */
@@ -19,13 +19,13 @@ export function PrettyJson({
   const [copied, setCopied] = useState(false)
 
   if (!body) {
-    return <div className="p-3 text-sm text-[var(--muted)]">{emptyLabel}</div>
+    return <div className="p-3 text-sm text-text-muted">{emptyLabel}</div>
   }
 
   if (body.base64 !== undefined) {
     const bytes = Math.floor((body.base64.length * 3) / 4)
     return (
-      <div className="p-3 text-sm text-[var(--muted)]">
+      <div className="p-3 text-sm text-text-muted">
         Binary data (~{formatBytes(bytes)}) — not valid UTF-8, shown as base64 only.
       </div>
     )
@@ -46,17 +46,17 @@ export function PrettyJson({
   }
 
   return (
-    <div className="flex flex-col">
-      <div className="flex items-center justify-end gap-2 border-b border-[var(--border)] px-2 py-1">
-        <Button variant="ghost" size="sm" onClick={() => setCollapsed((c) => !c)}>
+    <div className="flex flex-col p-3">
+      <div className="flex items-center justify-end gap-2 rounded-t-control border border-b-0 border-border bg-surface-2 px-2 py-1">
+        <Button variant="ghost" onClick={() => setCollapsed((c) => !c)}>
           {collapsed ? 'Expand' : 'Collapse'}
         </Button>
-        <Button variant="ghost" size="sm" onClick={handleCopy}>
+        <Button variant="ghost" onClick={handleCopy}>
           {copied ? 'Copied' : 'Copy'}
         </Button>
       </div>
       {!collapsed && (
-        <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-xs">
+        <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-b-control border border-border bg-surface-2 p-3 font-mono text-sm text-text">
           {pretty}
         </pre>
       )}

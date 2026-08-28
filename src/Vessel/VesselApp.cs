@@ -38,6 +38,7 @@ public static class VesselApp
         builder.Services.AddSingleton<ProxyHandler>();
         builder.Services.AddSingleton<CaptureChannel>();
         builder.Services.AddSingleton<CaptureEvents>();
+        builder.Services.AddSingleton<RequestModelSnifferService>();
         builder.Services.AddSingleton<CurrentSession>();
         builder.Services.AddSingleton(sp => new FormatEnricher(
             sp.GetRequiredService<ConfigStore>(), sp.GetService<ILogger<FormatEnricher>>()));
@@ -47,6 +48,9 @@ public static class VesselApp
         // Registered before Kestrel's own hosted service starts the listener, so the
         // database initializes (fail-fast) before any traffic is accepted.
         builder.Services.AddHostedService<CaptureWriterService>();
+        // Same singleton ProxyHandler enqueues into (registered above) — the factory just
+        // resolves it, so StartAsync/StopAsync run against that exact instance.
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<RequestModelSnifferService>());
 
         var app = builder.Build();
 

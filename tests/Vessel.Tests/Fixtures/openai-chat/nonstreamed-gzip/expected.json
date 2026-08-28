@@ -7,6 +7,7 @@
   "tokensCachedWrite": null,
   "tokensEstimated": false,
   "stopReason": "stop",
+  "tokPerSec": 3.0,
   "warnings": [],
   "promptText": "user: hi",
   "responseText": "Compressed hi"

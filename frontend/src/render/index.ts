@@ -1,6 +1,7 @@
 import type { RequestDetail } from '@/api/types'
 import type { RenderedView } from './types'
 import { extractOpenAiChatRequest, extractOpenAiChatResponse } from './openai'
+import { extractOpenAiResponsesRequest, extractOpenAiResponsesResponse } from './openaiResponses'
 import { extractAnthropicRequest, extractAnthropicResponse } from './anthropic'
 import { extractOllamaRequest, extractOllamaResponse } from './ollama'
 
@@ -11,6 +12,8 @@ export function renderRequest(detail: RequestDetail): RenderedView | null {
   switch (detail.format) {
     case 'openai-chat':
       return extractOpenAiChatRequest(detail)
+    case 'openai-responses':
+      return extractOpenAiResponsesRequest(detail)
     case 'anthropic-messages':
       return extractAnthropicRequest(detail)
     case 'ollama-chat':
@@ -25,6 +28,8 @@ export function renderResponse(detail: RequestDetail): RenderedView | null {
   switch (detail.format) {
     case 'openai-chat':
       return extractOpenAiChatResponse(detail)
+    case 'openai-responses':
+      return extractOpenAiResponsesResponse(detail)
     case 'anthropic-messages':
       return extractAnthropicResponse(detail)
     case 'ollama-chat':

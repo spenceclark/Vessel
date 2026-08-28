@@ -58,6 +58,11 @@ export interface StatsResponse {
   avgTtftMs: number | null
   sessionId: number | null
   sessionStartedAt: string | null
+  tokensIn: number
+  tokensOut: number
+  tokensCachedRead: number
+  tokensCachedWrite: number
+  tokensEstimated: boolean
 }
 
 export interface SessionInfo {
@@ -152,6 +157,11 @@ export interface StartedEvent {
   path: string
   backend: string
   tags: string[]
+}
+
+export interface RequestReadyEvent {
+  seq: number
+  model: string
 }
 
 export interface FirstTokenEvent {

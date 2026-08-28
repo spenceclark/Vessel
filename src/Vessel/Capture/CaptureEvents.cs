@@ -49,6 +49,24 @@ public sealed class CaptureEvents
             new StartedEvent(seq, startedAt, method, path, backend, tags), EventsJsonContext.Default.StartedEvent));
     }
 
+    /// <summary>
+    /// Post-Phase-4 addition (ui-spec.md §9.1, phase-3.md D5) — emitted once the request
+    /// body is fully read and its <c>model</c> field parsed off the request path (a
+    /// background task; see <see cref="CaptureContext.EmitRequestReadyIfParseable"/>).
+    /// Exists so an in-flight row can show the real model within milliseconds of
+    /// dispatch instead of only after completion.
+    /// </summary>
+    public void RequestReady(long seq, string model)
+    {
+        if (_subscribers.IsEmpty)
+        {
+            return;
+        }
+
+        Publish("request_ready", JsonSerializer.Serialize(
+            new RequestReadyEvent(seq, model), EventsJsonContext.Default.RequestReadyEvent));
+    }
+
     /// <summary>Emitted on the first-response-byte mark of streamed responses (request path).</summary>
     public void FirstToken(long seq, double ttftMs)
     {
@@ -107,12 +125,15 @@ public sealed class CaptureSubscription : IDisposable
 
 internal sealed record StartedEvent(long Seq, string StartedAt, string Method, string Path, string Backend, string[] Tags);
 
+internal sealed record RequestReadyEvent(long Seq, string Model);
+
 internal sealed record FirstTokenEvent(long Seq, double TtftMs);
 
 internal sealed record CompletedEvent(long Seq, Summary? Row);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(StartedEvent))]
+[JsonSerializable(typeof(RequestReadyEvent))]
 [JsonSerializable(typeof(FirstTokenEvent))]
 [JsonSerializable(typeof(CompletedEvent))]
 internal sealed partial class EventsJsonContext : JsonSerializerContext;

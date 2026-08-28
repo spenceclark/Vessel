@@ -1,0 +1,9 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_4","object":"response","status":"in_progress","model":"gpt-4o-mini","output":[]}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"Once upon a time"}
+
+event: response.incomplete
+data: {"type":"response.incomplete","response":{"id":"resp_4","object":"response","status":"incomplete","model":"gpt-4o-mini","incomplete_details":{"reason":"max_output_tokens"},"output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"Once upon a time"}]}],"usage":{"input_tokens":10,"output_tokens":16,"total_tokens":26}}}
+
