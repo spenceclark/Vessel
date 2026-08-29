@@ -1,146 +1,41 @@
-# Phase 5b — MCP Server (read-only v1): Implementation Spec
+- **`promptPreview` is an N+1 full-body decode (review finding).** `search_requests`
+  calls `GetMcpPromptText` per returned row — a point query + full decompress/decode
+  of the entire stored body (uncapped) to keep 200 chars, up to 100× per search,
+  violating `SqliteReadStore`'s no-body-scans principle. Fix structurally, not with
+  bounded reads (the flatteners need parsed JSON; capped decodes parse to nothing):
+  **schema v2 migration** adds nullable `prompt_preview` (and `response_preview`)
+  TEXT columns, populated at write time by the enricher from `EnrichedRecord`'s
+  already-computed flattened text (whitespace-collapsed, ~200 chars). Reads become
+  a column select; `GetMcpPromptText`'s per-row decode path is deleted. Pre-migration
+  rows stay NULL → preview omitted (the tool contract already treats it as optional);
+  no backfill — that would be the very scan being eliminated, and retention ages old
+  rows out. Note: first-ever second migration — the `user_version` loop gets its
+  first real exercise; test v1→v2 upgrade on a populated database explicitly.
 
-> Expands Phase 5b of [plan.md](plan.md). Design authority: [architecture.md](architecture.md).
->
-> **Goal:** the user's own AI tools (Claude Code, Cursor, anything speaking MCP)
-> interrogate captured traffic — "why did my planner agent stall this afternoon?"
-> answered by the agent querying Vessel directly. Read-only; the design work is
-> token-budget shaping, not protocol plumbing.
+  **Implemented.** `_migrations` in `SqliteCaptureStore` gained a v2 entry
+  (`ALTER TABLE requests ADD COLUMN prompt_preview/response_preview TEXT`); `InsertBatch`
+  writes both from `EnrichedRecord.PromptText`/`ResponseText` via a new `MakePreview`
+  helper (whitespace-collapsed, first 200 chars, no truncation suffix). `SqliteReadStore`
+  gained an `includePreview` opt-in on `ListRequests` (default `false`, so the REST
+  `/requests` endpoint is byte-for-byte unchanged) that appends `prompt_preview` to the
+  select and populates a new optional `Summary.PromptPreview` (`JsonIgnore` when null).
+  `McpTools.SearchRequests` now passes `includePreview: true` and reads
+  `summary.PromptPreview` directly — `GetMcpPromptText` and the now-dead `Preview`
+  truncation helper were deleted. `GetMcpRequest`'s full flatten-at-read (`get_request`)
+  is untouched.
 
-## 0. Scope
+  Tests added: `StorageTests.Migrations_V1ToV2_PreservesDataAndAddsNullablePreviewColumns`
+  (hand-built v1 schema + rows + FTS, reopened through the current store — asserts
+  `user_version` 2, old row/FTS intact, new columns NULL on the pre-migration row);
+  `StorageTests.InsertBatch_PopulatesPreviewColumns_ForEachFormat` (theory over
+  openai-chat, anthropic-messages, ollama-chat, ollama-generate — real `FormatEnricher`
+  + adapters, asserts the stored preview is the collapsed/capped prompt and response
+  text); `StorageTests.InsertBatch_RawFormat_LeavesPreviewColumnsNull`;
+  `McpTests.M2b_SearchRequests_ReadsPreviewColumn_NeverDecodesBody` (105 rows seeded with
+  a poisoned, non-zstd `request_body`/`response_body` and a real `prompt_preview` column
+  value — a `limit=100` search succeeding and returning the exact stored previews is only
+  possible if the row read never touches the body columns at all, since decompressing the
+  poisoned bytes would throw; also covers a NULL-preview row omitting the field). Also
+  updated `Migrations_FreshDbThenReopen`'s `user_version` expectation from 1 to 2.
 
-**In:** Streamable HTTP MCP endpoint at `/vessel/mcp` on the existing Kestrel host,
-via the official **ModelContextProtocol C# SDK**; four read-only tools
-(`search_requests`, `get_request`, `get_stats`, `list_sessions`); token-budget
-shaping rules; config kill-switch; docs/trust-boundary statements.
-
-**Out (explicitly):** any mutating tool (replay, clear, sessions, config — each would
-need its own approval; agents triggering side effects is a separate decision); stdio
-transport (a bridge only if a real client demands it — none of the primary targets
-do); MCP resources/prompts (tools only in v1); auth (localhost is the boundary,
-same as the UI — see D5).
-
-**No schema migration.**
-
----
-
-## 1. Key implementation decisions
-
-### D1 — Transport and mounting
-
-Streamable HTTP via the official SDK's ASP.NET Core integration, mapped at
-`/vessel/mcp` — inside the reserved `/vessel` namespace, so it is never proxied,
-never captured, and sits behind the D03 control-plane guards (loopback Host
-validation; the mutation-origin rule is moot for read-only tools but the Host guard
-still applies). Server identity: name `vessel`, version from the assembly.
-
-### D2 — The four tools (contract)
-
-All outputs are compact JSON in text content. Every tool description is written for
-LLM consumption: it states what the tool answers, its defaults, and how to get more
-(the description *is* UX here). Timestamps ISO-8601; token counts flagged when
-estimated, mirroring the REST semantics.
-
-- **`search_requests`** `(query?, backend?, model?, tag?, status? (ok|error),
-  format?, sessionId?, warnedOnly?, limit=20 (max 100), before?)` — the same
-  filter/FTS semantics as `GET /requests` (D1 of phase-4), same sanitized-token FTS
-  rules. Returns compact rows: `id, startedAt, method, path, backend, model, tags,
-  statusCode, error, durationMs, ttftMs, tokPerSec, tokensIn, tokensOut, stopReason,
-  warnings`, plus `promptPreview` (first ~200 chars of flattened prompt text), plus
-  `nextBefore` for paging. **No bodies.**
-- **`get_request`** `(id, include = "text" | "raw", maxChars = 4000, offset = 0)` —
-  summary fields plus, for `include:"text"`, the **flattened prompt and response
-  text** windowed by `offset/maxChars`, each with `totalChars` and an explicit
-  `truncated: true` + "call again with offset=N" note *inside the payload* (the
-  model reading it must be told, not left to infer). `include:"raw"` windows the
-  decoded raw bodies under the same budget. Binary content is never inlined —
-  reported as `{ binary: true, bytes: N }`.
-- **`get_stats`** `(sessionId? = "current" | "all" | id)` — the REST stats payload
-  (totals, failures, averages, token totals + estimated flag).
-- **`list_sessions`** `(limit = 20)` — id, startedAt, name, newest first.
-
-### D3 — Token-budget shaping (the actual design)
-
-Defaults are conservative and every truncation is *self-describing*: 20 compact rows
-per search; 4 000 chars per body window; previews ~200 chars; nothing base64. The
-failure mode this prevents is the tool dumping a 200K-token agent context into the
-caller's window on the first call — the agent must always *choose* to page deeper.
-Hard caps: `limit ≤ 100`, `maxChars ≤ 20 000` per call.
-
-**Read-time flattening:** `prompt_text`/`response_text` are not stored columns —
-they live only in the contentless FTS index, which cannot be read back. `get_request`
-therefore re-runs the existing flatteners (`TextFlattener` et al.) over the decoded
-stored bodies at read time, off the writer thread, same code path as enrichment used.
-Cheap at interactive rates; never on the proxy path.
-
-### D4 — Implementation shape
-
-A thin projection over `SqliteReadStore` — the queries all exist; the MCP layer maps
-tool params → existing read methods → compact DTOs. One new read helper for the
-flatten-at-read path. No writer involvement anywhere. STJ source-generated DTOs in
-the established single-context-file pattern. SDK trim-compatibility is checked by
-the publish smoke in this phase, not discovered at Phase 6 (the standing risk rule).
-
-### D5 — Trust boundary and config
-
-Same boundary as the UI: localhost bind + D03 Host guard, no additional auth. That
-is a *statement*, not an accident, and it has a consequence the docs must say
-plainly: **any MCP client you connect can read your captured prompts.** Config:
-
-```jsonc
-"mcp": { "enabled": true }   // default ON; kill-switch honored live (ConfigStore)
-```
-
-Disabled → `/vessel/mcp` returns 404 `not_found` (the D5 marking convention).
-`/vessel/api/status` reports `mcp: { enabled }` so the UI/config panel can show it.
-The Phase 6 README and the bind-address banner both mention MCP exposure when
-binding beyond loopback.
-
-### D6 — Client setup documented, not assumed
-
-The spec's deliverable includes the two-liner users actually need, verified against
-a real client during the manual gate:
-
-```
-claude mcp add --transport http vessel http://127.0.0.1:4550/vessel/mcp
-```
-
----
-
-## 2. New/changed layout
-
-```
-src/Vessel/
-  Mcp/McpEndpoint.cs             # D1 mounting + enabled gate
-  Mcp/McpTools.cs                # D2 four tools
-  Mcp/McpDtos.cs                 # compact shapes + json context
-  Storage/(SqliteReadStore)      # flatten-at-read helper (D3)
-  Config/(VesselConfig)          # mcp.enabled
-tests/Vessel.Tests/McpTests.cs   # in-proc SDK client against the real host
-```
-
-## 3. Automated tests
-
-| # | Assertion |
-|---|---|
-| M1 | In-proc MCP client lists exactly the four tools; descriptions non-empty; schemas validate |
-| M2 | `search_requests` parity: each filter + FTS query returns the same ids as the REST list for a seeded mix; hostile FTS input never errors; `limit` capped at 100; paging via `before` has no gap/overlap |
-| M3 | `get_request` windows: `totalChars` correct; `truncated` note present exactly when windowed; `offset` paging reassembles the full text; binary body → `{binary, bytes}`, never inlined; unknown id → tool error, not protocol fault |
-| M4 | `get_stats`/`list_sessions` parity with REST; estimated-token flag surfaces |
-| M5 | `mcp.enabled: false` → 404 with `X-Vessel-Error`; live config PUT toggles it without restart; proxied paths unaffected throughout |
-| M6 | D03 Host guard applies to `/vessel/mcp` (hostile Host rejected) |
-| M7 | Publish smoke: SDK is single-file/trim clean; endpoint serves from the published exe |
-
-## 4. Manual gate
-
-1. `claude mcp add` against a running Vessel; from Claude Code, ask a real question
-   ("find my truncated requests from today and tell me why they truncated") and
-   watch it chain `search_requests` → `get_request` usefully.
-2. Confirm a large captured context (100K+ chars) never arrives in one tool result.
-3. Toggle `mcp.enabled` in the config panel; confirm live.
-4. plan.md Phase 5b ticked; README/status items recorded for Phase 6 pickup.
-
-## 5. Acceptance
-
-Suites green; publish smoke incl. MCP; manual gate item 1 demonstrated end-to-end
-with a real MCP client on real captured traffic.
+  Full suite green ×2 (318 tests, 0 failures).

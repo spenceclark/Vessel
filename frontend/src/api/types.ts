@@ -100,6 +100,7 @@ export interface StatusPayload {
   defaultBackend: string
   backends: StatusBackend[]
   capture: CaptureHealth
+  mcp: { enabled: boolean }
   /** H0b — this Vessel process's run id (a restart changes it). */
   serverRunId: string
 }
@@ -202,6 +203,7 @@ export interface VesselConfigDto {
   retention: { maxRequests: number; maxDbSizeMb: number }
   capture: { maxBodyMb: number }
   warnings: { slowTtftMs: number }
+  mcp: { enabled: boolean }
 }
 
 export interface ConfigApplyResult {

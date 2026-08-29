@@ -14,6 +14,7 @@ namespace Vessel.Api;
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true)]
 [JsonSerializable(typeof(ErrorPayload))]
 [JsonSerializable(typeof(StatusPayload))]
+[JsonSerializable(typeof(McpStatus))]
 [JsonSerializable(typeof(BackendHealth))]
 [JsonSerializable(typeof(ActiveRequestsPayload))]
 [JsonSerializable(typeof(RequestListResponse))]

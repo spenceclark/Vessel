@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using ModelContextProtocol.Protocol;
+using Vessel.Mcp;
 using Vessel.Api;
 using Vessel.Capture;
 using Vessel.Config;
@@ -33,6 +35,13 @@ public static class VesselApp
         });
 
         builder.Services.AddHttpForwarder();
+        builder.Services.AddMcpServer(options => options.ServerInfo = new Implementation
+        {
+            Name = "vessel",
+            Version = StatusEndpoint.Version,
+        })
+        .WithHttpTransport(options => options.Stateless = true)
+        .WithTools<McpTools>();
         builder.Services.AddSingleton(sp => new ConfigStore(config, configPath));
         builder.Services.AddSingleton<BackendRegistry>();
         builder.Services.AddSingleton<ProxyHandler>();
@@ -102,11 +111,19 @@ public static class VesselApp
                 return;
             }
 
+            if (context.Request.Path.StartsWithSegments("/vessel/mcp")
+                && !McpEndpoint.IsEnabled(configStore))
+            {
+                await McpEndpoint.WriteDisabled(context);
+                return;
+            }
+
             await next(context);
         });
 
         // Everything Vessel-owned lives under /vessel/ — mapped before the catch-all,
         // never proxied (D7).
+        McpEndpoint.Map(app);
         app.MapGet("/vessel/api/status", (RequestDelegate)StatusEndpoint.Handle);
         app.MapGet("/vessel/api/active", (RequestDelegate)ActiveRequestsEndpoint.Handle);
         app.MapGet("/vessel/api/requests", (RequestDelegate)RequestsEndpoints.List);
@@ -127,6 +144,28 @@ public static class VesselApp
                 $"no such Vessel API endpoint: {context.Request.Path}")));
         app.Map("/vessel", (RequestDelegate)StaticUi.Handle);
         app.Map("/vessel/{**rest}", (RequestDelegate)StaticUi.Handle);
+
+        // D5 — OAuth discovery well-known paths, reserved as control plane.
+        // Never proxied, never captured. Mapped before the proxy catch-all.
+        app.Use(async (context, next) =>
+        {
+            var path = context.Request.Path.Value ?? "";
+            if (path.StartsWith("/.well-known/oauth-authorization-server", StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith("/.well-known/oauth-protected-resource", StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith("/.well-known/openid-configuration", StringComparison.OrdinalIgnoreCase))
+            {
+                await WellKnownEndpoints.HandleWellKnown(context);
+                return;
+            }
+
+            if (path == "/favicon.ico")
+            {
+                await WellKnownEndpoints.HandleFavicon(context);
+                return;
+            }
+
+            await next(context);
+        });
 
         app.Map("/{**catchall}", (RequestDelegate)(context =>
             context.RequestServices.GetRequiredService<ProxyHandler>().Handle(context)));

@@ -19,6 +19,9 @@ public sealed class VesselConfig
 
     public WarningsConfig Warnings { get; set; } = new();
 
+    /// <summary>Whether the read-only MCP endpoint is available on this running host.</summary>
+    public McpConfig Mcp { get; set; } = new();
+
     // Properties this binary doesn't know about (from a newer Vessel version) must
     // survive a load/save round trip.
     [JsonExtensionData]
@@ -94,6 +97,16 @@ public sealed class WarningsConfig
     /// warning, unless a cold model load already explains it. <c>0</c> disables the check.
     /// </summary>
     public int SlowTtftMs { get; set; } = 5000;
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+}
+
+/// <summary>Read-only Model Context Protocol endpoint settings.</summary>
+public sealed class McpConfig
+{
+    /// <summary>Default-on kill switch, applied live by <see cref="ConfigStore"/>.</summary>
+    public bool Enabled { get; set; } = true;
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }

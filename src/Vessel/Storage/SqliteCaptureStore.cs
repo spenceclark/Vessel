@@ -83,6 +83,13 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
             prompt_text, response_text, content='', contentless_delete=1
         );
         """,
+        // v2 — phase-5-mcp.md §7: nullable preview columns populated at write time from
+        // the enricher's already-flattened text, so search_requests can select instead of
+        // decoding each row's full body. No backfill; pre-migration rows stay NULL.
+        """
+        ALTER TABLE requests ADD COLUMN prompt_preview TEXT;
+        ALTER TABLE requests ADD COLUMN response_preview TEXT;
+        """,
     ];
 
     private SqliteConnection? _connection;
@@ -151,13 +158,15 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
                 streamed, replay_of, duration_ms, ttft_ms, vessel_overhead_ms, tok_per_sec,
                 tokens_in, tokens_out, tokens_cached_read, tokens_cached_write, tokens_estimated,
                 stop_reason, warnings,
-                request_headers, response_headers, request_body, response_body, response_raw, truncated)
+                request_headers, response_headers, request_body, response_body, response_raw, truncated,
+                prompt_preview, response_preview)
             VALUES (
                 $started_at, $session_id, $backend, $tags, $method, $path, $format, $model, $status_code, $error,
                 $streamed, $replay_of, $duration_ms, $ttft_ms, $vessel_overhead_ms, $tok_per_sec,
                 $tokens_in, $tokens_out, $tokens_cached_read, $tokens_cached_write, $tokens_estimated,
                 $stop_reason, $warnings,
-                $request_headers, $response_headers, $request_body, $response_body, $response_raw, $truncated)
+                $request_headers, $response_headers, $request_body, $response_body, $response_raw, $truncated,
+                $prompt_preview, $response_preview)
             RETURNING id
             """;
 
@@ -198,6 +207,8 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
         SqliteParameter responseBody = Add("$response_body");
         SqliteParameter responseRaw = Add("$response_raw");
         SqliteParameter truncated = Add("$truncated");
+        SqliteParameter promptPreview = Add("$prompt_preview");
+        SqliteParameter responsePreview = Add("$response_preview");
 
         using SqliteCommand ftsCommand = connection.CreateCommand();
         ftsCommand.Transaction = transaction;
@@ -240,6 +251,8 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
             responseBody.Value = CompressOrNull(enriched.ReassembledResponse ?? record.ResponseBody);
             responseRaw.Value = CompressOrNull(record.ResponseRaw);
             truncated.Value = record.Truncated ? 1 : 0;
+            promptPreview.Value = (object?)MakePreview(enriched.PromptText) ?? DBNull.Value;
+            responsePreview.Value = (object?)MakePreview(enriched.ResponseText) ?? DBNull.Value;
 
             long id = Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
             ids.Add(id);
@@ -415,6 +428,24 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
 
     private static object CompressOrNull(byte[]? body) =>
         body is null ? DBNull.Value : BodyCompression.Compress(body);
+
+    private const int PreviewChars = 200;
+
+    /// <summary>
+    /// Whitespace-collapsed prefix of the enricher's already-flattened text, capped at
+    /// <see cref="PreviewChars"/>. Computed once at write time so <c>search_requests</c>
+    /// never has to decode a stored body to render its preview.
+    /// </summary>
+    private static string? MakePreview(string? text)
+    {
+        if (text is null)
+        {
+            return null;
+        }
+
+        string collapsed = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return collapsed.Length <= PreviewChars ? collapsed : collapsed[..PreviewChars];
+    }
 
     private void Execute(string sql)
     {

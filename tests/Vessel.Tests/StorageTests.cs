@@ -65,12 +65,137 @@ public class StorageTests
             using var connection = new SqliteConnection($"Data Source={Path.Combine(dir, "vessel.db")};Pooling=False");
             connection.Open();
 
-            Assert.Equal(1L, Scalar(connection, "PRAGMA user_version"));
+            Assert.Equal(2L, Scalar(connection, "PRAGMA user_version"));
             Assert.Equal("wal", (string)Scalar(connection, "PRAGMA journal_mode"));
             Assert.Equal(2L, Scalar(connection, "PRAGMA auto_vacuum")); // 2 = INCREMENTAL
             Assert.Equal(2L, Scalar(connection, "SELECT COUNT(*) FROM requests"));
             Assert.Equal(1L, Scalar(connection, "SELECT COUNT(*) FROM sessions")); // EnsureInitialSession creates "session 1" once
             Assert.Equal(0L, Scalar(connection, "SELECT COUNT(*) FROM requests_fts"));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // phase-5-mcp.md §7: first-ever second migration. Build a v1 database (the original
+    // schema, no preview columns) with real rows, then reopen through the current store
+    // and confirm the v1→v2 upgrade runs, existing rows/FTS survive untouched, and the
+    // new columns come back NULL on pre-migration rows.
+    [Fact]
+    public void Migrations_V1ToV2_PreservesDataAndAddsNullablePreviewColumns()
+    {
+        string dir = Directory.CreateTempSubdirectory("vessel-store-").FullName;
+        string dbPath = Path.Combine(dir, "vessel.db");
+        try
+        {
+            using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+            {
+                connection.Open();
+                using (SqliteCommand command = connection.CreateCommand())
+                {
+                    command.CommandText =
+                        """
+                        CREATE TABLE requests (
+                            id                  INTEGER PRIMARY KEY,
+                            started_at          TEXT NOT NULL,
+                            session_id          INTEGER REFERENCES sessions(id),
+                            backend             TEXT NOT NULL,
+                            tags                TEXT,
+                            method              TEXT NOT NULL,
+                            path                TEXT NOT NULL,
+                            format              TEXT NOT NULL,
+                            model               TEXT,
+                            status_code         INTEGER,
+                            error               TEXT,
+                            streamed            INTEGER NOT NULL DEFAULT 0,
+                            replay_of           INTEGER REFERENCES requests(id),
+                            duration_ms         REAL,
+                            ttft_ms             REAL,
+                            vessel_overhead_ms  REAL,
+                            tok_per_sec         REAL,
+                            tokens_in           INTEGER,
+                            tokens_out          INTEGER,
+                            tokens_cached_read  INTEGER,
+                            tokens_cached_write INTEGER,
+                            tokens_estimated    INTEGER NOT NULL DEFAULT 0,
+                            stop_reason         TEXT,
+                            warnings            TEXT,
+                            cost_estimate       REAL,
+                            request_headers     TEXT NOT NULL,
+                            response_headers    TEXT,
+                            request_body        BLOB,
+                            response_body       BLOB,
+                            response_raw        BLOB,
+                            truncated           INTEGER NOT NULL DEFAULT 0
+                        );
+                        CREATE INDEX ix_requests_started ON requests(started_at);
+                        CREATE INDEX ix_requests_session ON requests(session_id);
+
+                        CREATE TABLE sessions (
+                            id          INTEGER PRIMARY KEY,
+                            started_at  TEXT NOT NULL,
+                            name        TEXT
+                        );
+
+                        CREATE VIRTUAL TABLE requests_fts USING fts5(
+                            prompt_text, response_text, content='', contentless_delete=1
+                        );
+                        """;
+                    command.ExecuteNonQuery();
+                }
+
+                using (SqliteCommand command = connection.CreateCommand())
+                {
+                    command.CommandText = "INSERT INTO sessions (id, started_at, name) VALUES (1, '2020-01-01T00:00:00Z', 'session 1')";
+                    command.ExecuteNonQuery();
+                }
+
+                using (SqliteCommand command = connection.CreateCommand())
+                {
+                    command.CommandText =
+                        """
+                        INSERT INTO requests (id, started_at, session_id, backend, method, path, format, streamed, request_headers)
+                        VALUES (1, '2020-01-01T00:00:01Z', 1, 'test', 'GET', '/old', 'raw', 0, '{}')
+                        """;
+                    command.ExecuteNonQuery();
+                }
+
+                using (SqliteCommand command = connection.CreateCommand())
+                {
+                    command.CommandText = "INSERT INTO requests_fts (rowid, prompt_text, response_text) VALUES (1, 'old prompt', 'old response')";
+                    command.ExecuteNonQuery();
+                }
+
+                using (SqliteCommand command = connection.CreateCommand())
+                {
+                    command.CommandText = "PRAGMA user_version = 1";
+                    command.ExecuteNonQuery();
+                }
+            }
+
+            using (SqliteCaptureStore store = NewStore(dir))
+            {
+                store.Initialize();
+                store.InsertBatch([MinimalRecord("/new")]);
+            }
+
+            using var check = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+            check.Open();
+
+            Assert.Equal(2L, Scalar(check, "PRAGMA user_version"));
+            Assert.Equal(2L, Scalar(check, "SELECT COUNT(*) FROM requests"));
+            Assert.Equal("/old", (string)Scalar(check, "SELECT path FROM requests WHERE id = 1"));
+            Assert.Equal(1L, Scalar(check, "SELECT COUNT(*) FROM requests_fts WHERE rowid = 1"));
+
+            using (SqliteCommand command = check.CreateCommand())
+            {
+                command.CommandText = "SELECT prompt_preview, response_preview FROM requests WHERE id = 1";
+                using SqliteDataReader reader = command.ExecuteReader();
+                Assert.True(reader.Read());
+                Assert.True(reader.IsDBNull(0));
+                Assert.True(reader.IsDBNull(1));
+            }
         }
         finally
         {
@@ -116,6 +241,94 @@ public class StorageTests
         buffer.Append([1, 2, 3, 4]);
         Assert.False(buffer.Truncated);
         Assert.Equal([1, 2, 3, 4], buffer.ToArrayOrNull());
+    }
+
+    // phase-5-mcp.md §7: previews are populated at write time from the enricher's already-
+    // flattened text for every supported format, so search_requests never has to decode a
+    // body again to render one.
+    [Theory]
+    [InlineData(
+        "/v1/chat/completions",
+        """{"model":"m","messages":[{"role":"user","content":"hello world"}]}""",
+        """{"id":"x","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hi there"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}}""")]
+    [InlineData(
+        "/v1/messages",
+        """{"model":"m","max_tokens":10,"system":"be nice","messages":[{"role":"user","content":"hello world"}]}""",
+        """{"id":"x","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"hi there"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":2}}""")]
+    [InlineData(
+        "/api/chat",
+        """{"model":"m","messages":[{"role":"user","content":"hello world"}]}""",
+        """{"model":"m","message":{"role":"assistant","content":"hi there"},"done":true,"done_reason":"stop","eval_count":2,"eval_duration":1000000}""")]
+    [InlineData(
+        "/api/generate",
+        """{"model":"m","prompt":"hello world"}""",
+        """{"model":"m","response":"hi there","done":true,"done_reason":"stop","eval_count":2,"eval_duration":1000000}""")]
+    public void InsertBatch_PopulatesPreviewColumns_ForEachFormat(string path, string requestBody, string responseBody)
+    {
+        string dir = Directory.CreateTempSubdirectory("vessel-store-").FullName;
+        try
+        {
+            var enricher = new FormatEnricher(new VesselConfig(), FormatEnricher.DefaultAdapters());
+            EnrichedRecord enriched = enricher.Enrich(TestCapture.Record(path, requestBody, responseBody));
+            Assert.NotNull(enriched.PromptText);
+            Assert.NotNull(enriched.ResponseText);
+
+            using SqliteCaptureStore store = NewStore(dir);
+            store.Initialize();
+            store.EnsureInitialSession();
+            IReadOnlyList<long> ids = store.InsertBatch([enriched]);
+
+            using var connection = new SqliteConnection($"Data Source={Path.Combine(dir, "vessel.db")};Pooling=False");
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "SELECT prompt_preview, response_preview FROM requests WHERE id = $id";
+            command.Parameters.AddWithValue("$id", ids[0]);
+            using SqliteDataReader reader = command.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.False(reader.IsDBNull(0));
+            Assert.False(reader.IsDBNull(1));
+            Assert.Equal(CollapsedPrefix(enriched.PromptText!), reader.GetString(0));
+            Assert.Equal(CollapsedPrefix(enriched.ResponseText!), reader.GetString(1));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // A row with no flattenable text (raw format) omits both preview columns, matching the
+    // pre-migration NULL case search_requests already treats as optional.
+    [Fact]
+    public void InsertBatch_RawFormat_LeavesPreviewColumnsNull()
+    {
+        string dir = Directory.CreateTempSubdirectory("vessel-store-").FullName;
+        try
+        {
+            using SqliteCaptureStore store = NewStore(dir);
+            store.Initialize();
+            store.EnsureInitialSession();
+            IReadOnlyList<long> ids = store.InsertBatch([MinimalRecord("/raw")]);
+
+            using var connection = new SqliteConnection($"Data Source={Path.Combine(dir, "vessel.db")};Pooling=False");
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "SELECT prompt_preview, response_preview FROM requests WHERE id = $id";
+            command.Parameters.AddWithValue("$id", ids[0]);
+            using SqliteDataReader reader = command.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.True(reader.IsDBNull(0));
+            Assert.True(reader.IsDBNull(1));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    private static string CollapsedPrefix(string text)
+    {
+        string collapsed = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return collapsed.Length <= 200 ? collapsed : collapsed[..200];
     }
 
     private static object Scalar(SqliteConnection connection, string sql)

@@ -62,6 +62,7 @@ public sealed record StatusPayload(
     string DefaultBackend,
     StatusBackend[] Backends,
     CaptureHealth Capture,
+    McpStatus Mcp,
     // H0b(1) — this process's run id, so a client can distinguish a restart from a reconnect.
     string ServerRunId);
 
@@ -81,3 +82,6 @@ public sealed record StatusBackend(
 public sealed record CaptureHealth(
     bool Recording,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? StoppedReason);
+
+/// <summary>The live state of Vessel's read-only MCP endpoint.</summary>
+public sealed record McpStatus(bool Enabled);

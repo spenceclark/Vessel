@@ -159,16 +159,16 @@ ahead of launch because it is one small session on the existing read store and
 "works with Claude Code out of the box" is a launch-day differentiator. Everything
 mutating (replay/clear via MCP) stays a separate future decision.*
 
-- [ ] Streamable HTTP endpoint `/vessel/mcp` (official ModelContextProtocol C# SDK,
+- [x] Streamable HTTP endpoint `/vessel/mcp` (official ModelContextProtocol C# SDK,
       same host, D03 guards; `mcp.enabled` kill-switch, live-applied).
-- [ ] Four read-only tools: `search_requests` (FTS + filters, compact rows, no
+- [x] Four read-only tools: `search_requests` (FTS + filters, compact rows, no
       bodies), `get_request` (windowed flattened text, self-describing truncation),
       `get_stats`, `list_sessions`.
-- [ ] Token-budget shaping: conservative defaults, hard caps, binary never inlined —
+- [x] Token-budget shaping: conservative defaults, hard caps, binary never inlined —
       a 200K-token context must never arrive in one tool result.
-- [ ] Verified against a real MCP client (Claude Code) on real traffic.
+- [ ] Verified against a real MCP client (Claude Code) on real traffic — manual gate item 1 remains for the user.
 
-Spec: [phase-5-mcp.md](phase-5-mcp.md).
+Spec: [phase-5b.md](phase-5b.md).
 
 **Done when:** "find my truncated requests from today and tell me why" works from
 Claude Code against a running Vessel.
@@ -191,6 +191,8 @@ observe-and-compare, and everything in Phases 7–8 gets better with real users'
 - [ ] MIT license, CI (backend tests already run on `ubuntu-latest` + `windows-latest`
       per Phase 5 PD4; add build + publish artifacts per RID), versioned releases.
 - [ ] Pre-release pass: bind-address banner (§8), error messages, empty states.
+
+Spec: [phase-6.md](phase-6.md).
 
 **Done when:** a stranger with Ollama installed goes from download to seeing their first
 captured request in under two minutes, without reading more than the quickstart.
@@ -255,6 +257,11 @@ deliberately, with the hot-path rules from §4.1 applying in full.*
 - [ ] **Ollama panel**: `ollama ps` proxied view (loaded models, VRAM); server.log
       viewer if reachable (§7, §10) — a host-management surface, distinct from
       traffic observation.
+- [ ] **Tray app**: the polished always-on form of "sits in front of Ollama all
+      day" — system-tray icon (open UI / quit), no console window, per-OS tray
+      APIs and a window-less launch mode. A real product surface; post-launch
+      feedback decides whether it's wanted before it's built. Until then v0.1's
+      answer stands: foreground process, OS schedulers for always-on (phase-6 D5).
 
 ---
 

@@ -207,9 +207,32 @@ try {
         Write-Host "PASS: /vessel/api/status responds and lists backends, on an ephemeral port" -ForegroundColor Green
     }
 
+    $client = New-Object System.Net.Http.HttpClient
+
+    # Phase 5b M7: the official MCP SDK must survive single-file publish and the mapped
+    # Streamable HTTP endpoint must answer an initialize request from the shipped exe.
+    # This is intentionally a protocol-level smoke rather than a restatement of status:
+    # a missing/trimmed SDK handler would still leave every ordinary Vessel endpoint up.
+    $mcpInit = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Post, "$baseUrl/vessel/mcp")
+    $mcpInit.Headers.Accept.ParseAdd("application/json")
+    $mcpInit.Headers.Accept.ParseAdd("text/event-stream")
+    $mcpInit.Content = New-Object System.Net.Http.StringContent(@'
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"publish-smoke","version":"1"}}}
+'@, [Text.Encoding]::UTF8, "application/json")
+    $mcpResp = $client.SendAsync($mcpInit).GetAwaiter().GetResult()
+    $mcpBody = $mcpResp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+    if ([int]$mcpResp.StatusCode -ne 200 -or $mcpBody -notmatch '"name"\s*:\s*"vessel"') {
+        Write-Host "FAIL: published MCP endpoint initialize - status=$([int]$mcpResp.StatusCode) body=$mcpBody" -ForegroundColor Red
+        $failures++
+    }
+    else {
+        Write-Host "PASS: published MCP Streamable HTTP endpoint initializes" -ForegroundColor Green
+    }
+    $mcpInit.Dispose()
+    $mcpResp.Dispose()
+
     # Proxying: request via Vessel must reach the stub and the stub's response must
     # come back intact.
-    $client = New-Object System.Net.Http.HttpClient
     $pending = $client.GetAsync("$baseUrl/smoke/echo?x=1")
     $ctx = $stubListener.GetContext()
     $receivedPath = $ctx.Request.Url.PathAndQuery

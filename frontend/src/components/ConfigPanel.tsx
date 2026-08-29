@@ -214,6 +214,19 @@ export function ConfigPanel() {
       </div>
 
       <div>
+        <SectionLabel>MCP access</SectionLabel>
+        <label className="flex items-center gap-2 text-sm text-text">
+          <input
+            type="checkbox"
+            checked={draft.mcp.enabled}
+            onChange={(e) => setDraft((d) => (d ? { ...d, mcp: { enabled: e.target.checked } } : d))}
+          />
+          Enable MCP server
+        </label>
+        <p className="mt-1 text-xs text-text-muted">An MCP client you connect can read captured prompts.</p>
+      </div>
+
+      <div>
         <Button variant="primary" onClick={handleSave} disabled={saving}>
           {saving ? 'Saving…' : 'Save'}
         </Button>
