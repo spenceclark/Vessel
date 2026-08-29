@@ -185,17 +185,21 @@ so the API can respond with it. No second write connection, no lock dance.
   - `started` carries `sessionId` (D05), so the UI scopes in-flight rows to the viewed
     session accurately instead of guessing.
 - **Re-review addition** (Batch F, R11/F2; extended by Batches H and I, **replaced in
-  Batch J**, **enriched in Batch K**) — `GET /vessel/api/active` →
+  Batch J**, **enriched in Batch K**, **extended in Batch L (R27)**) — `GET /vessel/api/active` →
   `{ active: ActiveDescriptor[], logPosition: number, serverRunId: string }`, where
-  `ActiveDescriptor` is `{ seq, startedAt, sessionId, method, path, backend, tags, model }` —
-  the `started` frame's own payload, plus `model` once `request_ready` has parsed one (null
-  until then). The server-authoritative in-flight set, sourced from the live `CaptureEvents`
-  hub: an entry is added on `started` and removed on `completed`, independent of any SSE
-  subscriber. **K0b:** it carries descriptors rather than bare seqs because a recovering client
-  has to *render* what it is told is running, and the frame that would have supplied the method,
-  path, start time, session and tags is exactly the frame a bounded drop-oldest queue may have
-  dropped. The registry already receives every field at registration; the terminal invariant
-  (H0b(3)) already guarantees each entry is removed. Deliberately separate from `/status` (which is polled and cached) —
+  `ActiveDescriptor` is `{ seq, startedAt, sessionId, method, path, backend, tags, model, ttftMs }`
+  — the `started` frame's own payload, plus `model` once `request_ready` has parsed one and
+  `ttftMs` once `first_token` has fired (both null until then). The server-authoritative
+  in-flight set, sourced from the live `CaptureEvents` hub: an entry is added on `started` and
+  removed on `completed`, independent of any SSE subscriber. **K0b:** it carries descriptors
+  rather than bare seqs because a recovering client has to *render* what it is told is running,
+  and the frame that would have supplied the method, path, start time, session and tags is
+  exactly the frame a bounded drop-oldest queue may have dropped. **R27:** the same is true of
+  the live TTFT a `first_token` frame carries — `FirstToken` now updates the locked descriptor
+  the same way `RequestReady` does, under the same publish lock, so a dropped `first_token`
+  frame no longer loses that metric on recovery. The registry already receives every field at
+  registration; the terminal invariant (H0b(3)) already guarantees each entry is removed.
+  Deliberately separate from `/status` (which is polled and cached) —
   this changes on every request and is fetched on demand during recovery. `logPosition`
   (J0) is the newest SSE publish id allocated when the snapshot was taken, so the response is
   *lifecycle truth as of one stream position*. `serverRunId` (Batch H) identifies the process
@@ -287,9 +291,12 @@ so the API can respond with it. No second write connection, no lock dance.
   - ~~**Display limit, recorded:** in-flight rows are rendered only for seqs the client has
     `started` details for.~~ **Fixed in Batch K (K0b)**, not a caveat: the snapshot describes
     each active request, so a request whose `started` frame the feed dropped is displayed after
-    recovery rather than staying invisible until it completes. The one field the descriptor does
-    not carry is TTFT (a `first_token` datum, not registration metadata); a row that already
-    knew its TTFT keeps it across recovery.
+    recovery rather than staying invisible until it completes.
+  - ~~**Omission, recorded:** the descriptor does not carry TTFT (a `first_token` datum, not
+    registration metadata); a dropped `first_token` frame left a recovered row without its
+    live TTFT.~~ **Fixed in Batch L (R27):** `FirstToken` now updates the same locked
+    descriptor `RequestReady` does, so `/active` returns the live TTFT once measured and
+    recovery rebuilds it even when the `first_token` frame itself was dropped.
 - **Fourth-round re-review (Batch I, I0b(2)) — `hello` is the only restart signal.** A
   `/active` response whose `serverRunId` differs from the connection's is a *stale
   response*, not evidence that the run we are connected to restarted: it is discarded

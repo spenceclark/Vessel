@@ -114,13 +114,19 @@ function startedEvent(seq: number, row: Summary) {
 }
 
 /**
- * K0b — the same request as the recovery snapshot describes it. The server builds this from
- * what it received at registration, so it carries exactly what the `started` frame carried
- * (plus the model, once parsed) — which is what lets recovery render a request whose frame the
- * client never saw.
+ * K0b/R27 — the same request as the recovery snapshot describes it. The server builds this
+ * from what it received at registration, so it carries exactly what the `started` frame
+ * carried (plus the model, once parsed, and the live TTFT, once measured) — which is what lets
+ * recovery render a request whose frame the client never saw, or restore a live metric whose
+ * frame was dropped.
  */
-function activeDescriptor(seq: number, row: Summary, model: string | null = null): ActiveDescriptor {
-  return { ...startedEvent(seq, row), sessionId: row.sessionId ?? SESSION, model }
+function activeDescriptor(
+  seq: number,
+  row: Summary,
+  model: string | null = null,
+  ttftMs: number | null = null,
+): ActiveDescriptor {
+  return { ...startedEvent(seq, row), sessionId: row.sessionId ?? SESSION, model, ttftMs }
 }
 
 /** A list query mirroring RequestList's, so the hook operates on a real cache entry. */
@@ -1017,15 +1023,15 @@ describe('useLiveHistory', () => {
     rendered.unmount()
   })
 
-  // K0b — the descriptor is authoritative for the fields it carries, but it deliberately does
-  // not carry TTFT (a `first_token` datum, not registration metadata). A row that already knew
-  // its TTFT from a frame applied below the snapshot position must keep it across recovery,
-  // since that frame is not replayed.
+  // K0b/R27 — the descriptor is authoritative for TTFT, the same way it already was for model:
+  // the server records it in the same locked descriptor it publishes `first_token` from, so a
+  // row rebuilt from the recovery snapshot carries the live TTFT the server already measured,
+  // physically consistent with the frame this client received before the reconnect.
   it('keeps a known TTFT on a row rebuilt from the recovery snapshot', async () => {
     const { rendered } = setup({ listFetch: async () => listPage([]) })
     await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
 
-    serverActive({ active: [activeDescriptor(1, summary(1))], logPosition: 9 })
+    serverActive({ active: [activeDescriptor(1, summary(1), null, 42)], logPosition: 9 })
 
     act(() => {
       FakeEventSource.latest().open()
@@ -1041,6 +1047,39 @@ describe('useLiveHistory', () => {
 
     expect(inFlightSeqs(rendered)).toEqual([1])
     expect(rendered.result.current.live.inFlight[0].ttftMs).toBe(42)
+
+    rendered.unmount()
+  })
+
+  // R27 — the review's dropped-`first_token` sequence: the frame carrying the live TTFT never
+  // reaches this client at all (dropped by the bounded queue), so before this fix nothing in
+  // the client's own state could ever restore it. The descriptor is now the *only* source, and
+  // it must still show the already-measured 42 ms.
+  it('recovers a TTFT whose first_token frame was dropped entirely', async () => {
+    const { rendered } = setup({ listFetch: async () => listPage([]) })
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+
+    // Frame 1 (started, seq 2) reaches the client and sets the watermark; frame 2
+    // (first_token, seq 2, ttftMs=42) is dropped by the bounded queue; frame 3 (an unrelated
+    // started, seq 3) exposes the gap while request 2 is still running. The server measured
+    // and kept the TTFT in seq 2's locked descriptor regardless of the drop.
+    serverActive({
+      active: [activeDescriptor(2, summary(2), null, 42), activeDescriptor(3, summary(3))],
+      logPosition: 3,
+    })
+
+    act(() => {
+      FakeEventSource.latest().open()
+      FakeEventSource.latest().emit('hello', { serverRunId: 'run-1' })
+      FakeEventSource.latest().emit('started', startedEvent(2, summary(2)), 1)
+      FakeEventSource.latest().emit('started', startedEvent(3, summary(3)), 3)
+    })
+
+    await settle()
+
+    const row = rendered.result.current.live.inFlight.find((r) => r.seq === 2)
+    expect(row).toBeDefined()
+    expect(row?.ttftMs).toBe(42)
 
     rendered.unmount()
   })

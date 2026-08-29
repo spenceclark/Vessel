@@ -1,5 +1,4 @@
 using System.Net;
-using Microsoft.Data.Sqlite;
 using Xunit;
 
 namespace Vessel.Tests;
@@ -57,29 +56,20 @@ public class RetentionTests
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
 
-        List<CapturedRow> rows = await CaptureDb.WaitUntil(
+        // R28 — rows and file size must come from one stable database state. Reading them
+        // via two separately-opened connections let a delete-and-vacuum land between the two
+        // reads: the row list still showed all 10 pre-retention rows while the size read,
+        // taken a moment later, already reflected the post-retention file, so the predicate
+        // was satisfied by a stale row list. `QueryWithSize` reads both inside one WAL read
+        // transaction, so they always describe the same moment.
+        (List<CapturedRow> rows, long _) = await CaptureDb.WaitUntilWithSize(
             vessel.DbPath,
-            rows => rows,
-            rows => rows.Any(r => r.Path.Contains($"i={total}"))
-                && DatabaseSizeBytes(vessel.DbPath) <= 1024 * 1024);
+            snapshot => snapshot.Rows.Any(r => r.Path.Contains($"i={total}"))
+                && snapshot.SizeBytes <= 1024 * 1024);
 
         // Oldest rows were sacrificed, newest survived.
         Assert.True(rows.Count < total, $"expected deletions, all {total} rows still present");
         Assert.Contains(rows, r => r.Path.Contains($"i={total}"));
         Assert.DoesNotContain(rows, r => r.Path.Contains("i=01"));
-    }
-
-    private static long DatabaseSizeBytes(string dbPath)
-    {
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = dbPath,
-            Mode = SqliteOpenMode.ReadOnly,
-            Pooling = false,
-        }.ToString());
-        connection.Open();
-        using SqliteCommand command = connection.CreateCommand();
-        command.CommandText = "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()";
-        return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 }

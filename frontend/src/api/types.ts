@@ -157,13 +157,15 @@ export interface ActiveRequestsResponse {
 }
 
 /**
- * K0b/R11 — one in-flight request as the recovery snapshot describes it: its `seq` plus the
- * payload of its `started` frame, and `model` once `request_ready` has parsed one (null until
- * then, and for bodies with no parseable model).
+ * K0b/R11/R27 — one in-flight request as the recovery snapshot describes it: its `seq` plus
+ * the payload of its `started` frame, `model` once `request_ready` has parsed one (null until
+ * then, and for bodies with no parseable model), and `ttftMs` once `first_token` has fired
+ * (null until then, and for a request still waiting on its first byte).
  *
  * The snapshot carries these because a bare seq cannot be displayed, and the frame that would
- * have supplied the rest is exactly the one a lossy subscriber queue may have dropped — a
- * monitor that knows a request is running but cannot show it is not monitoring it.
+ * have supplied the rest — including the live TTFT a `first_token` frame measured — is exactly
+ * the one a lossy subscriber queue may have dropped: a monitor that knows a request is running
+ * but cannot show its measured progress is not monitoring it.
  */
 export interface ActiveDescriptor {
   seq: number
@@ -174,6 +176,7 @@ export interface ActiveDescriptor {
   backend: string
   tags: string[]
   model: string | null
+  ttftMs: number | null
 }
 
 export interface BackendConfigDto {

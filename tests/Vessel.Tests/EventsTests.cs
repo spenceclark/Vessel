@@ -421,13 +421,15 @@ public class EventsTests
             "the snapshot's position must cover the clear a client may have missed");
     }
 
-    // R11/K0b — the recovery snapshot describes each in-flight request, it does not merely
+    // R11/K0b/R27 — the recovery snapshot describes each in-flight request, it does not merely
     // count it. A bare seq cannot be rendered: the method, path, backend, tags, session and
     // start time all arrive on the `started` frame, which is exactly the frame a subscriber's
-    // bounded drop-oldest queue may have dropped. Deliberately exercised with **no subscriber
-    // attached**, since that is the same client the frame never reached.
+    // bounded drop-oldest queue may have dropped — and the same is true of the model
+    // (`request_ready`) and the live TTFT (`first_token`) learned afterward. Deliberately
+    // exercised with **no subscriber attached**, since that is the same client the frame never
+    // reached.
     [Fact]
-    public void Active_DescribesEachInFlightRequest_AndLearnsItsModelFromRequestReady()
+    public void Active_DescribesEachInFlightRequest_AndLearnsItsModelAndTtftAfterRegistration()
     {
         var hub = new CaptureEvents();
 
@@ -443,18 +445,24 @@ public class EventsTests
         Assert.Equal("stub", descriptor.Backend);
         Assert.Equal(["alpha", "beta"], descriptor.Tags);
         Assert.Null(descriptor.Model); // not known until the request body has been parsed
+        Assert.Null(descriptor.TtftMs); // not known until the first response byte
 
-        // The one field learned after registration. Recorded whether or not anyone is
+        // Two fields learned after registration, both recorded whether or not anyone is
         // subscribed, for the same reason the registration is.
         hub.RequestReady(seq, "qwen2.5:1.5b");
         Assert.Equal("qwen2.5:1.5b", Assert.Single(hub.GetActiveRequests().Active).Model);
+
+        // R27 — FirstToken mirrors RequestReady: the locked descriptor is updated so a
+        // first_token frame a bounded subscriber queue drops is still recoverable from here.
+        hub.FirstToken(seq, 42);
+        Assert.Equal(42, Assert.Single(hub.GetActiveRequests().Active).TtftMs);
 
         // And the terminal transition still empties the registry, so descriptors cannot leak.
         hub.Completed(seq, null);
         Assert.Empty(hub.GetActiveRequests().Active);
     }
 
-    // R11/K0b — the same contract on the wire, in seq order, with the camelCase field names
+    // R11/K0b/R27 — the same contract on the wire, in seq order, with the camelCase field names
     // `types.ts` mirrors. Registered directly on the running app's hub so the requests stay
     // in flight deterministically, rather than racing a real proxied request's completion.
     [Fact]
@@ -467,6 +475,7 @@ public class EventsTests
         long first = hub.Register("2026-08-29T00:00:01.0000000Z", 1, "POST", "/api/chat?one", "stub", ["t1"]);
         long second = hub.Register("2026-08-29T00:00:02.0000000Z", 1, "GET", "/api/tags", "stub", []);
         hub.RequestReady(first, "m-1");
+        hub.FirstToken(first, 42);
 
         using JsonDocument doc = JsonDocument.Parse(
             await (await client.GetAsync($"{vessel.BaseUrl}/vessel/api/active", CT)).Content.ReadAsStringAsync(CT));
@@ -483,11 +492,13 @@ public class EventsTests
         Assert.Equal("stub", one.GetProperty("backend").GetString());
         Assert.Equal(["t1"], one.GetProperty("tags").EnumerateArray().Select(t => t.GetString()));
         Assert.Equal("m-1", one.GetProperty("model").GetString());
+        Assert.Equal(42, one.GetProperty("ttftMs").GetDouble());
 
         // Seq order, which is registration order — so a client rebuilding its in-flight rows
         // from this shows them in the order the live feed would have.
         Assert.Equal(second, active[1].GetProperty("seq").GetInt64());
         Assert.Equal(JsonValueKind.Null, active[1].GetProperty("model").ValueKind);
+        Assert.Equal(JsonValueKind.Null, active[1].GetProperty("ttftMs").ValueKind);
 
         hub.Completed(first, null);
         hub.Completed(second, null);

@@ -1168,6 +1168,99 @@ burst gate passes; docs describe J0 and nothing older.
 **Exit:** both review sequences and the two-sided property test green; no remaining
 open findings in the review report.
 
+---
+
+# Seventh-round remediation (Batch L) — P3 closers
+
+> Source: round-seven review. **All P1/P2 findings R01–R26 resolved.** Two P3s remain;
+> the review's required corrections are complete designs — no decisions to approve.
+> Sonnet-suitable; one small session.
+
+- [x] **L1 · R27 — TTFT survives frame loss.** `FirstToken` updates the locked active
+  descriptor (mirroring `RequestReady`'s existing pattern) with optional `ttftMs`;
+  `/active` returns it; recovery rebuilds it. Test: the review's dropped-`first_token`
+  sequence (started delivered → first_token dropped → gap → recovery shows 42 ms)
+  alongside the existing known-TTFT regression. phase-3.md's documented omission
+  removed once fixed.
+- [x] **L2 · R28 — Retention test reads one stable state.** The readiness predicate
+  observes rows and file size from a single database state (or re-queries rows after
+  the size condition holds, before asserting). All retention assertions kept in
+  full — fix the observation, never the assertion (house rule, and the review's own
+  requirement). Confirm with repeated full-suite runs.
+
+**Exit:** clean re-review — zero open findings — closes the Phase 4 review cycle.
+
+**Batch L landed 2026-08-29 — 273/273 backend green ×4 consecutive runs, 80/80 frontend
+green ×3 consecutive runs, `tsc -b` + `vite build` clean, lint unchanged at 6 warnings
+(baseline).** Notes and deviations:
+
+- **L1.** `CaptureEvents.FirstToken` no longer returns early with no subscribers: it now
+  takes the publish lock unconditionally (mirroring `RequestReady` exactly) and, when the
+  seq is still in the active registry, replaces the locked descriptor with `TtftMs` set —
+  in the same critical section as the frame's own id, so the descriptor stays coherent
+  with the position the way `Model` already did. `ActiveDescriptor` gained a ninth
+  positional field, `double? TtftMs`, defaulted to `null` at `Register`.
+  - **The client-side fallback this was covering is now dead code, not just redundant —
+    removed rather than left in place.** `toInFlight`'s old `known?.ttftMs` fallback
+    existed specifically because the descriptor didn't carry TTFT; now that
+    `FirstToken` and its publish share one critical section the same way `Register`
+    and `started` do, any frame the client has already received must, by the same
+    causality argument K0b already relies on for `model`, be reflected in every
+    snapshot taken afterward — so a descriptor can never lack a TTFT the client
+    independently knows. `toInFlight` now reads `descriptor.ttftMs` exactly the way it
+    reads `descriptor.model`, and the function's now-unused `known` parameter was
+    dropped (the caller still uses `known` separately, for the row-identity-reuse
+    check).
+  - Backend: `Active_DescribesEachInFlightRequest_AndLearnsItsModelFromRequestReady`
+    (renamed `...AndLearnsItsModelAndTtftAfterRegistration`) extended to call
+    `hub.FirstToken` and assert the descriptor's `TtftMs`, still with no subscriber
+    attached — the same client the frame never reached. `Active_WireShape_
+    CarriesOrderedDescriptors` extended to assert the real HTTP JSON response carries
+    `ttftMs` (populated and `null`) alongside `model`.
+  - Frontend: the existing `keeps a known TTFT on a row rebuilt from the recovery
+    snapshot` regression now mocks a physically-consistent snapshot (the descriptor
+    itself carries `ttftMs: 42`, since by the time of the reconnect the server's
+    `FirstToken` call that produced the frame this client already received had
+    already updated it) — its assertions are unchanged, only the fixture and its
+    rationale comment. New `recovers a TTFT whose first_token frame was dropped
+    entirely` reproduces the review's exact controlled sequence: `started` for seq 2
+    reaches the client (id 1), its `first_token` (id 2, ttftMs 42) is never emitted at
+    all (the drop), an unrelated `started` for seq 3 (id 3) exposes the gap, and the
+    recovered row shows `ttftMs: 42` from the descriptor alone — nothing in the
+    client's own state ever knew that number. `phase-3.md` D5's struck-through
+    omission note is corrected in place (§ wire-shape bullet updated to list `ttftMs`
+    in `ActiveDescriptor`); the K2 landed note's now-stale "two client details" bullet
+    (which described the fallback this batch removed) is corrected in place too,
+    per house style, rather than left standing next to the code that superseded it.
+- **L2.** The race was exactly as diagnosed: `RetentionTests.MaxDbSize_FileShrinksUnderCap`
+  combined a row list from one `SqliteConnection` with a file-size read from a second,
+  separately-opened connection a moment later — a window the writer's delete-and-vacuum
+  could land inside, so the readiness predicate could accept a post-retention size
+  alongside a stale pre-retention row list. Fixed by observation, not assertion, per the
+  house rule: `CaptureDb.QueryWithSize` reads the row list and `page_count * page_size`
+  from **one** WAL read transaction on **one** connection, so both values describe the
+  same database state — SQLite's WAL snapshot semantics guarantee the transaction's later
+  reads cannot see a state newer than its first read, regardless of what the writer does
+  concurrently. A new `WaitUntilWithSize` polls that combined snapshot the same way
+  `WaitUntil<T>` polls `Query` alone; `WaitUntil<T>` itself is untouched; every other
+  caller (11 call sites across 6 files) is unaffected. `MaxDbSize_FileShrinksUnderCap`'s
+  own assertions (`rows.Count < total`, the newest row present, the oldest absent) are
+  byte-for-byte unchanged — only how the snapshot was obtained changed. No reproduction
+  of the original race under load was attempted (it needed the review's own heavier
+  concurrent session to manifest even once); confirmed instead by code inspection of the
+  fix's snapshot-isolation argument plus 4 consecutive full-suite runs (this batch's L1
+  changes and the L2 fix together) with zero failures, matching the review's own note
+  that the race is narrow enough that isolated/light-load runs routinely pass anyway.
+- **Not done here:** no live-browser gate. Both findings are exercised end-to-end by
+  automated tests that reproduce their exact repro steps — the backend wire-shape test
+  drives a real HTTP round trip against a running `TestVessel`, and the frontend hook
+  test reproduces the review's controlled SSE sequence against the same fake-EventSource
+  harness this project already uses for reconciliation logic (see that file's own
+  docstring: targeted hook tests, not manual browser probing, are this codebase's
+  intended tool for this class of bug). Batch L's own framing ("Sonnet-suitable; one
+  small session") does not call for repeating the Opus batches' burst/gate-level manual
+  verification for two independent P3s.
+
 **Batch K landed 2026-08-29 — 273/273 backend green ×3, 79/79 frontend green ×3, `tsc -b` +
 `vite build` clean, lint unchanged at 6 warnings (baseline).** K0a and K0b were implemented as
 approved. Notes:
@@ -1201,21 +1294,20 @@ approved. Notes:
   own id, so the descriptor stays coherent with the position the way every other field does.
   The client rebuilds in-flight rows from the descriptors; the `activeSeqs ∩ known-starts`
   intersection is gone, so a lost `started` frame no longer hides a running request.
-  - **Two client details worth recording.** A rebuilt row keeps a TTFT the client already knew:
-    the descriptor deliberately carries registration metadata and the model, not `first_token`
-    data, and a `first_token` frame below the snapshot position is not replayed. And a row whose
-    fields are unchanged keeps its object identity across recovery, so an unremarkable recovery
-    does not rerender every live row.
+  - **One client detail worth recording** (a second no longer applies — see Batch L/R27
+    below, which closed the gap this originally described). A row whose fields are unchanged
+    keeps its object identity across recovery, so an unremarkable recovery does not rerender
+    every live row.
   - **Property test now two-sided.** It asserted only that every row shown is server-active. It
     now also asserts that every server-active request is shown, and each scenario is
     constructed so that one still-running request always has its `started` frame dropped —
     otherwise the new half was only exercised on lucky seeds (it passed all six against the old
     intersection until the loss was made deterministic; afterwards all six fail against it).
-  - Backend: `Active_DescribesEachInFlightRequest_AndLearnsItsModelFromRequestReady` pins the
-    descriptor's fields, the model update and removal at the terminal transition, deliberately
-    with **no subscriber attached** — that is the client the frame never reached.
-    `Active_WireShape_CarriesOrderedDescriptors` pins the camelCase wire shape and seq ordering
-    against the running app.
+  - Backend: `Active_DescribesEachInFlightRequest_AndLearnsItsModelAndTtftAfterRegistration`
+    (extended and renamed in Batch L) pins the descriptor's fields, the model/TTFT updates and
+    removal at the terminal transition, deliberately with **no subscriber attached** — that is
+    the client the frame never reached. `Active_WireShape_CarriesOrderedDescriptors` pins the
+    camelCase wire shape and seq ordering against the running app.
 - **K3 (gate + truth pass).** Burst gate re-run on the rewritten snapshot contract, isolated
   instance as before (Release build, port 4560, temp config + DB in the session scratchpad,
   local Node streaming stub; the user's own instance and `vessel.db` untouched). **10,000

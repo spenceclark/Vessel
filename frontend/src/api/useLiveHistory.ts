@@ -438,7 +438,7 @@ export function useLiveHistory({
         const base = new Map<number, InFlightRequest>()
         for (const descriptor of active.active) {
           const known = prev.get(descriptor.seq)
-          const row = toInFlight(descriptor, known)
+          const row = toInFlight(descriptor)
           // Reuse the existing object when nothing about the row changed, so an unremarkable
           // recovery does not rerender every live row.
           base.set(descriptor.seq, known && sameInFlight(known, row) ? known : row)
@@ -539,12 +539,13 @@ export function useLiveHistory({
 }
 
 /**
- * K0b — one recovery descriptor as an in-flight row. `ttftMs` is carried over from what this
- * client already knew: the descriptor deliberately holds only the started metadata plus the
- * parsed model, so a `first_token` frame applied before the snapshot position (and therefore
- * not replayed) would otherwise be forgotten by the row it belongs to.
+ * K0b/R27 — one recovery descriptor as an in-flight row. `ttftMs`, like `model`, now comes
+ * straight from the descriptor: the server records it in the same locked descriptor under the
+ * same lock it publishes `first_token` from (mirroring how `model` is recorded from
+ * `request_ready`), so a `first_token` frame a bounded subscriber queue dropped is still
+ * recoverable from the snapshot rather than permanently lost to that client.
  */
-function toInFlight(descriptor: ActiveDescriptor, known: InFlightRequest | undefined): InFlightRequest {
+function toInFlight(descriptor: ActiveDescriptor): InFlightRequest {
   return {
     seq: descriptor.seq,
     startedAt: descriptor.startedAt,
@@ -554,7 +555,7 @@ function toInFlight(descriptor: ActiveDescriptor, known: InFlightRequest | undef
     backend: descriptor.backend,
     tags: descriptor.tags,
     ...(descriptor.model !== null ? { model: descriptor.model } : {}),
-    ...(known?.ttftMs !== undefined ? { ttftMs: known.ttftMs } : {}),
+    ...(descriptor.ttftMs !== null ? { ttftMs: descriptor.ttftMs } : {}),
   }
 }
 

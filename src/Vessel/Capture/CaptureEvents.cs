@@ -158,7 +158,8 @@ public sealed class CaptureEvents
             seq = ++_seqCounter;
             // K0b — registered *with* its display metadata, so the recovery snapshot can
             // describe this request even to a client that never received its `started` frame.
-            _active.Add(seq, new ActiveDescriptor(seq, startedAt, sessionId, method, path, backend, tags, null));
+            // Model and TtftMs are both learned later (RequestReady, FirstToken respectively).
+            _active.Add(seq, new ActiveDescriptor(seq, startedAt, sessionId, method, path, backend, tags, null, null));
         }
 
         // Serialized and published outside the allocation section (JSON touches no shared
@@ -215,16 +216,33 @@ public sealed class CaptureEvents
         }
     }
 
-    /// <summary>Emitted on the first-response-byte mark of streamed responses (request path).</summary>
+    /// <summary>
+    /// Emitted on the first-response-byte mark of streamed responses (request path).
+    /// R27 — mirrors <see cref="RequestReady"/>: the locked active descriptor is updated
+    /// regardless of subscribers, so a `first_token` frame a bounded subscriber queue drops
+    /// is still recoverable from a later <see cref="GetActiveRequests"/> snapshot instead of
+    /// being permanently lost to that client.
+    /// </summary>
     public void FirstToken(long seq, double ttftMs)
     {
-        if (_subscribers.IsEmpty)
-        {
-            return;
-        }
+        // Serialize outside the lock (see Register for the rationale); the registry update
+        // itself happens under it, in the same critical section as the frame's own id.
+        string? json = _subscribers.IsEmpty
+            ? null
+            : JsonSerializer.Serialize(new FirstTokenEvent(seq, ttftMs), EventsJsonContext.Default.FirstTokenEvent);
 
-        Publish("first_token", JsonSerializer.Serialize(
-            new FirstTokenEvent(seq, ttftMs), EventsJsonContext.Default.FirstTokenEvent));
+        lock (_publishLock)
+        {
+            if (_active.TryGetValue(seq, out ActiveDescriptor? descriptor))
+            {
+                _active[seq] = descriptor with { TtftMs = ttftMs };
+            }
+
+            if (json is not null)
+            {
+                PublishLocked("first_token", json);
+            }
+        }
     }
 
     /// <summary>
@@ -320,14 +338,16 @@ public sealed record ActiveRequests(ActiveDescriptor[] Active, long LogPosition,
 
 /// <summary>
 /// K0b/R11 — one in-flight request as the recovery snapshot describes it: its <c>seq</c> plus
-/// the immutable payload of its <c>started</c> frame, and <paramref name="Model"/> once
+/// the immutable payload of its <c>started</c> frame, <paramref name="Model"/> once
 /// <c>request_ready</c> has parsed one (null until then, and for requests whose body carries
-/// no parseable model).
+/// no parseable model), and <paramref name="TtftMs"/> once <c>first_token</c> has fired (null
+/// until then, and for a request still waiting on its first byte).
 /// <para>
 /// The snapshot carries these because a bare seq is not enough to *show* the request. The SSE
 /// feed is deliberately lossy, so the frame that would have supplied the method, path, start
-/// time, session and tags is exactly the frame a recovering client may have missed — and a
-/// monitor that knows a request is running but cannot display it is not monitoring it.
+/// time, session, tags, model or live TTFT is exactly the frame a recovering client may have
+/// missed — and a monitor that knows a request is running but cannot display its measured
+/// progress is not monitoring it (R27).
 /// </para>
 /// </summary>
 public sealed record ActiveDescriptor(
@@ -338,7 +358,8 @@ public sealed record ActiveDescriptor(
     string Path,
     string Backend,
     string[] Tags,
-    string? Model);
+    string? Model,
+    double? TtftMs);
 
 /// <summary>One SSE connection's subscription; disposing unregisters it from the hub.</summary>
 public sealed class CaptureSubscription : IDisposable

@@ -51,15 +51,42 @@ public static class CaptureDb
 
     public static List<CapturedRow> Query(string dbPath)
     {
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        using SqliteConnection connection = OpenReadOnly(dbPath);
+        return QueryRows(connection, transaction: null);
+    }
+
+    /// <summary>
+    /// R28 — the row list and the file size, read from one stable database state (a single
+    /// WAL read transaction), so a caller combining both into one readiness predicate can
+    /// never observe a pre-retention row list alongside a post-retention size (or vice
+    /// versa): the writer's delete-and-vacuum either lands entirely before this snapshot or
+    /// entirely after it, never straddling the two reads.
+    /// </summary>
+    public static (List<CapturedRow> Rows, long SizeBytes) QueryWithSize(string dbPath)
+    {
+        using SqliteConnection connection = OpenReadOnly(dbPath);
+        using SqliteTransaction transaction = connection.BeginTransaction();
+        List<CapturedRow> rows = QueryRows(connection, transaction);
+        long size = QuerySizeBytes(connection, transaction);
+        return (rows, size);
+    }
+
+    private static SqliteConnection OpenReadOnly(string dbPath)
+    {
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = dbPath,
             Mode = SqliteOpenMode.ReadOnly,
             Pooling = false,
         }.ToString());
         connection.Open();
+        return connection;
+    }
 
+    private static List<CapturedRow> QueryRows(SqliteConnection connection, SqliteTransaction? transaction)
+    {
         using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText =
             """
             SELECT id, started_at, session_id, backend, tags, method, path, format, model, status_code,
@@ -108,6 +135,14 @@ public static class CaptureDb
         }
 
         return rows;
+    }
+
+    private static long QuerySizeBytes(SqliteConnection connection, SqliteTransaction? transaction)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()";
+        return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>Ids of rows matching an FTS query — direct <c>requests_fts MATCH</c>, no UI in the way (F8).</summary>
@@ -174,6 +209,32 @@ public static class CaptureDb
 
             await Task.Delay(50, TestContext.Current.CancellationToken);
             result = project(Query(dbPath));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// R28 — the size-aware counterpart to <see cref="WaitUntil{T}"/>: each poll reads rows
+    /// and file size together via <see cref="QueryWithSize"/>, so a predicate combining both
+    /// (e.g. "the newest row has landed and the file has shrunk under its cap") is evaluated
+    /// against one consistent snapshot rather than two separately-timed reads that a
+    /// concurrent delete-and-vacuum could straddle.
+    /// </summary>
+    public static async Task<(List<CapturedRow> Rows, long SizeBytes)> WaitUntilWithSize(
+        string dbPath, Func<(List<CapturedRow> Rows, long SizeBytes), bool> ready)
+    {
+        var deadline = DateTime.UtcNow + _timeout;
+        (List<CapturedRow> Rows, long SizeBytes) result = QueryWithSize(dbPath);
+        while (!ready(result))
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                Assert.Fail($"vessel.db did not reach the expected state within {_timeout.TotalSeconds:0}s");
+            }
+
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+            result = QueryWithSize(dbPath);
         }
 
         return result;
