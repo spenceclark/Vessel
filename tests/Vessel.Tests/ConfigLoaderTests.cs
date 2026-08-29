@@ -209,19 +209,29 @@ public class ConfigLoaderTests : IDisposable
         Assert.Contains(expectedInMessage, ex.Message);
     }
 
-    // R21: a save that fails partway must never destroy the last valid config file — the
-    // temp-file-then-replace approach means a readonly destination fails the *replace*
-    // step, after the temp file already holds the new content, so the original is
-    // untouched and only the (cleaned-up) temp file is affected.
+    // R21: a permission-denied save must never destroy the last valid config file. Windows
+    // rejects replacing a readonly destination; POSIX allows that rename when the directory
+    // is writable, so its equivalent denial is a non-writable containing directory.
     [Fact]
-    public void Save_DestinationReadOnly_ThrowsAndLeavesOriginalFileIntact()
+    public void Save_PermissionDenied_ThrowsAndLeavesOriginalFileIntact()
     {
         string path = PathFor("vessel.json");
         VesselConfig original = CreateDefault();
         ConfigLoader.Save(path, original);
         string originalContent = File.ReadAllText(path);
 
-        File.SetAttributes(path, FileAttributes.ReadOnly);
+        UnixFileMode? originalDirectoryMode = null;
+        if (OperatingSystem.IsWindows())
+        {
+            File.SetAttributes(path, FileAttributes.ReadOnly);
+        }
+        else
+        {
+            originalDirectoryMode = File.GetUnixFileMode(_dir);
+            File.SetUnixFileMode(_dir, originalDirectoryMode.Value &
+                ~(UnixFileMode.UserWrite | UnixFileMode.GroupWrite | UnixFileMode.OtherWrite));
+        }
+
         try
         {
             VesselConfig changed = CreateDefault();
@@ -238,7 +248,14 @@ public class ConfigLoaderTests : IDisposable
         }
         finally
         {
-            File.SetAttributes(path, FileAttributes.Normal);
+            if (OperatingSystem.IsWindows())
+            {
+                File.SetAttributes(path, FileAttributes.Normal);
+            }
+            else if (originalDirectoryMode is not null)
+            {
+                File.SetUnixFileMode(_dir, originalDirectoryMode.Value);
+            }
         }
     }
 

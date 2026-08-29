@@ -436,8 +436,8 @@ editable in the UI:
 }
 ```
 
-New configs include every backend above and retain Ollama as the default. `type: openai`
-means OpenAI-compatible wire format, not OpenAI-hosted. Unsloth Desktop requires an API
+The block above lists every backend Vessel recognises; a newly created config contains only the Ollama backend, which stays the default (Phase 5 PD1).
+`type: openai` means OpenAI-compatible wire format, not OpenAI-hosted. Unsloth Desktop requires an API
 key created in its UI, but does not define an environment-variable name for it; configure
 `authEnv` yourself if Vessel should re-attach that key for replay. LM Studio, llama.cpp,
 vLLM, and Lemonade are unauthenticated by default; each can be configured to require a key
