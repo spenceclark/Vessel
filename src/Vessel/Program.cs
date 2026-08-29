@@ -63,7 +63,7 @@ for (int i = 0; i < args.Length; i++)
     }
     else
     {
-        Console.Error.WriteLine($"vessel: unknown argument '{args[i]}' (usage: vessel [--config <path>] [--no-open] [--version])");
+        Console.Error.WriteLine($"vessel: unknown argument '{args[i]}' (usage: vessel [--config <path>] [--no-open] [--help] [--version])");
         return 1;
     }
 }

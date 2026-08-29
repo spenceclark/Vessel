@@ -13,7 +13,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /
 WORKDIR /source
 COPY . ./
 COPY --from=frontend /source/frontend/dist ./frontend/dist
-RUN dotnet publish src/Vessel/Vessel.csproj -c Release -r linux-${TARGETARCH} --self-contained \
+RUN case "$TARGETARCH" in \
+      amd64) dotnet_arch=x64 ;; \
+      arm64) dotnet_arch=arm64 ;; \
+      *) echo "Unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac && \
+    dotnet publish src/Vessel/Vessel.csproj -c Release -r linux-${dotnet_arch} --self-contained \
     -p:PublishSingleFile=true -p:PublishTrimmed=true -p:SkipFrontendBuild=true -o /out
 
 FROM mcr.microsoft.com/dotnet/runtime-deps:10.0

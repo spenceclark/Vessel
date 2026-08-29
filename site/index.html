@@ -46,7 +46,7 @@
       const os = navigator.userAgent.includes('Windows') ? 'win-x64' : navigator.userAgent.includes('Mac') ? 'osx-arm64' : 'linux-x64'; // Mac UAs report Intel even on Apple Silicon; default arm64, note offers x64
       fetch(`https://api.github.com/repos/${repository}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
         .then(response => response.ok ? response.json() : Promise.reject(response.status))
-        .then(release => { const asset = release.assets.find(item => item.name.includes(`-${os}.`)); if (!asset) throw new Error('asset missing'); button.href = asset.browser_download_url; button.textContent = `Download for ${os}`; note.textContent = os === 'osx-arm64' ? `Latest ${release.tag_name} — Intel Mac? Get osx-x64 from the release page.` : `Latest ${release.tag_name}`; })
+        .then(release => { const asset = release.assets.find(item => item.name.includes(`-${os}.`) && !item.name.endsWith('.sha256')); if (!asset) throw new Error('asset missing'); button.href = asset.browser_download_url; button.textContent = `Download for ${os}`; note.textContent = os === 'osx-arm64' ? `Latest ${release.tag_name} — Intel Mac? Get osx-x64 from the release page.` : `Latest ${release.tag_name}`; })
         .catch(() => { note.textContent = 'Choose your platform from the latest GitHub release.'; });
       document.getElementById('compare').addEventListener('load', event => event.currentTarget.style.display = 'block');
     </script>

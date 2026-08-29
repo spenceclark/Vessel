@@ -76,6 +76,7 @@ jobs:
       - shell: bash
         run: |
           archive="$(find download -type f \( -name '*.zip' -o -name '*.tar.gz' \) | head -1)"
+          mkdir -p unpacked
           if [[ "$archive" == *.zip ]]; then unzip -q "$archive" -d unpacked; else tar -xzf "$archive" -C unpacked; fi
           chmod +x unpacked/*/vessel 2>/dev/null || true
           bash verify/publish-smoke.sh --artifact-dir unpacked/*
@@ -100,7 +101,7 @@ jobs:
           test -f container-state/vessel.db
           test "$(curl --fail --silent http://127.0.0.1:4550/container-smoke)" = container-smoke
           docker restart vessel-test
-          curl --fail --silent http://127.0.0.1:4550/vessel/api/status
+          for i in {1..60}; do curl --fail --silent http://127.0.0.1:4550/vessel/api/status && break; sleep .25; done
           docker rm -f vessel-test vessel-stub
           VESSEL_IMAGE=vessel:test docker compose up -d
           docker compose ps vessel
