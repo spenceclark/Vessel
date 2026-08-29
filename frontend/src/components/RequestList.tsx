@@ -54,8 +54,10 @@ export function RequestList({
 
   const query = useInfiniteQuery({
     queryKey,
-    queryFn: ({ pageParam }) =>
-      api.listRequests({ limit: PAGE_LIMIT, before: pageParam, session: scope ?? undefined, filters }),
+    // K0a — `signal` is TanStack's per-fetch abort signal; passing it on is what makes
+    // `cancelQueries` (recovery / clear) actually abandon an outstanding list read.
+    queryFn: ({ pageParam, signal }) =>
+      api.listRequests({ limit: PAGE_LIMIT, before: pageParam, session: scope ?? undefined, filters, signal }),
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (lastPage) => lastPage.nextBefore ?? undefined,
     enabled: scope !== null,

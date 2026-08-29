@@ -4,6 +4,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   EMPTY_FILTERS,
+  type ActiveDescriptor,
   type ActiveRequestsResponse,
   type RequestListResponse,
   type Summary,
@@ -112,6 +113,16 @@ function startedEvent(seq: number, row: Summary) {
   }
 }
 
+/**
+ * K0b — the same request as the recovery snapshot describes it. The server builds this from
+ * what it received at registration, so it carries exactly what the `started` frame carried
+ * (plus the model, once parsed) — which is what lets recovery render a request whose frame the
+ * client never saw.
+ */
+function activeDescriptor(seq: number, row: Summary, model: string | null = null): ActiveDescriptor {
+  return { ...startedEvent(seq, row), sessionId: row.sessionId ?? SESSION, model }
+}
+
 /** A list query mirroring RequestList's, so the hook operates on a real cache entry. */
 function listPage(rows: Summary[]): RequestListResponse {
   return { rows, nextBefore: null }
@@ -127,7 +138,7 @@ function listPage(rows: Summary[]): RequestListResponse {
  * `logPosition` with frames the client already saw describes a server that cannot exist, and
  * would be testing the client against physics rather than against the contract.
  */
-function serverActive(active: { activeSeqs: number[]; logPosition: number; serverRunId?: string }) {
+function serverActive(active: { active: ActiveDescriptor[]; logPosition: number; serverRunId?: string }) {
   vi.spyOn(api, 'getActiveRequests').mockResolvedValue({ serverRunId: 'run-1', ...active })
 }
 
@@ -305,7 +316,10 @@ describe('useLiveHistory', () => {
     // jumps the publish id. Seq 3's `started` was published (id 9) before the client asked for
     // this snapshot, so the snapshot necessarily covers it and lists it as active — the
     // fixture says so because the server could not answer any other way.
-    serverActive({ activeSeqs: [2, 3], logPosition: 9 })
+    serverActive({
+      active: [activeDescriptor(2, summary(8)), activeDescriptor(3, summary(9))],
+      logPosition: 9,
+    })
     act(() => {
       FakeEventSource.latest().emit('started', startedEvent(3, summary(9)), 9)
     })
@@ -329,7 +343,7 @@ describe('useLiveHistory', () => {
     })
     await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(1))
 
-    serverActive({ activeSeqs: [], logPosition: 100 })
+    serverActive({ active: [], logPosition: 100 })
     act(() => {
       FakeEventSource.latest().open() // reconnect forces recovery
     })
@@ -352,7 +366,10 @@ describe('useLiveHistory', () => {
 
     // Hundreds of frames later, seq 1 is genuinely still running — so it is in the snapshot,
     // and wholesale replacement keeps it.
-    serverActive({ activeSeqs: [1, 2], logPosition: 500 })
+    serverActive({
+      active: [activeDescriptor(1, summary(1)), activeDescriptor(2, summary(9))],
+      logPosition: 500,
+    })
     act(() => {
       FakeEventSource.latest().emit('started', startedEvent(2, summary(9)), 500)
     })
@@ -389,7 +406,7 @@ describe('useLiveHistory', () => {
     })
 
     await act(async () => {
-      resolvers[0]({ activeSeqs: [], logPosition: 5, serverRunId: 'run-1' })
+      resolvers[0]({ active: [], logPosition: 5, serverRunId: 'run-1' })
       await new Promise((r) => setTimeout(r, 250))
     })
 
@@ -409,7 +426,7 @@ describe('useLiveHistory', () => {
     })
     await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(1))
 
-    serverActive({ activeSeqs: [], logPosition: 2 })
+    serverActive({ active: [], logPosition: 2 })
     act(() => {
       FakeEventSource.latest().open() // reconnect
     })
@@ -424,7 +441,11 @@ describe('useLiveHistory', () => {
   it('coalesces a burst of gaps into one reconciliation', async () => {
     const active = vi
       .spyOn(api, 'getActiveRequests')
-      .mockResolvedValue({ activeSeqs: [1, 2, 3, 4], logPosition: 60, serverRunId: 'run-1' })
+      .mockResolvedValue({
+        active: [1, 2, 3, 4].map((seq) => activeDescriptor(seq, summary(seq))),
+        logPosition: 60,
+        serverRunId: 'run-1',
+      })
     const { rendered } = setup({ listFetch: async () => listPage([]) })
     await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
 
@@ -583,7 +604,7 @@ describe('useLiveHistory', () => {
     await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(1))
 
     // Reconnect lands on a restarted process: fresh run id, empty active set, position 0.
-    serverActive({ activeSeqs: [], logPosition: 0, serverRunId: 'run-B' })
+    serverActive({ active: [], logPosition: 0, serverRunId: 'run-B' })
     act(() => {
       FakeEventSource.latest().open() // reconnect
       FakeEventSource.latest().emit('hello', { serverRunId: 'run-B' })
@@ -675,7 +696,7 @@ describe('useLiveHistory', () => {
 
     // Run A's snapshot finally resolves: empty, at a far-ahead position in *A's* log.
     await act(async () => {
-      resolvers[0]({ activeSeqs: [], logPosition: 500, serverRunId: 'run-A' })
+      resolvers[0]({ active: [], logPosition: 500, serverRunId: 'run-A' })
       await new Promise((r) => setTimeout(r, 250))
     })
 
@@ -715,7 +736,7 @@ describe('useLiveHistory', () => {
 
     // The server finished seq 1 (its `completed`, id 4, was lost) before taking this snapshot.
     await act(async () => {
-      resolvers[0]({ activeSeqs: [], logPosition: 5, serverRunId: 'run-1' })
+      resolvers[0]({ active: [], logPosition: 5, serverRunId: 'run-1' })
       await new Promise((r) => setTimeout(r, 250))
     })
 
@@ -760,7 +781,11 @@ describe('useLiveHistory', () => {
     })
 
     await act(async () => {
-      resolvers[0]({ activeSeqs: [3], logPosition: 6, serverRunId: 'run-1' })
+      resolvers[0]({
+        active: [activeDescriptor(3, summary(3))],
+        logPosition: 6,
+        serverRunId: 'run-1',
+      })
       await new Promise((r) => setTimeout(r, 250))
     })
 
@@ -843,7 +868,7 @@ describe('useLiveHistory', () => {
     })
 
     // Clear-all v1 (id 2) deletes it, and that frame is lost. Clear-before v2 (id 3) arrives.
-    serverActive({ activeSeqs: [], logPosition: 3 })
+    serverActive({ active: [], logPosition: 3 })
     act(() => {
       FakeEventSource.latest().emit('cleared', {}, 3)
     })
@@ -860,11 +885,17 @@ describe('useLiveHistory', () => {
 
   // ---- earlier controlled-delivery cases, re-expressed against J0 ------------------------
 
-  // R23 (I0a's review order A, retained) — a pre-clear database snapshot is held in an
-  // unsettled *initial* list fetch, so there is nothing in the cache for the `cleared` frame
-  // to purge, and TanStack reuses an in-flight initial request rather than replacing it. J0
-  // resolves it by ordering rather than by re-application: the clear starts a fetch after
-  // itself, and the last-started fetch is the one that wins.
+  // R23/K0a — the review's §2.1 sequence 1, with the timing that actually exposes the bug.
+  // A pre-clear database snapshot is held in an unsettled *initial* list fetch, so there is
+  // nothing in the cache for the `cleared` frame to purge, and TanStack reuses an in-flight
+  // initial request rather than starting a second one.
+  //
+  // **The timing is the test.** The previous version released the held response immediately
+  // after emitting the frame — before the 100 ms clear batch ran — so the stale response had
+  // already settled by the time the clear handler fired, and the refetch that followed made it
+  // pass for the wrong reason. Releasing it only *after* the batch (and after asserting the
+  // second fetch has started) is what reproduces round six's failure: without cancellation the
+  // trigger waits on the very request it is meant to supersede, and row 1 comes back.
   it('converges on the post-clear list when a pre-clear snapshot settles after the clear', async () => {
     let resolveFetch: ((value: RequestListResponse) => void) | undefined
     let fetches = 0
@@ -880,6 +911,7 @@ describe('useLiveHistory', () => {
     const { queryClient, rendered } = setup({ listFetch })
     await waitFor(() => expect(resolveFetch).toBeDefined())
     await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+    expect(fetches).toBe(1)
 
     act(() => {
       FakeEventSource.latest().emit('cleared', {}, 1)
@@ -888,13 +920,127 @@ describe('useLiveHistory', () => {
     // DataPanel's ack path also invalidates the list while the initial request is pending.
     void queryClient.invalidateQueries({ queryKey: ['requests'] })
 
-    // The held response resolves with the row the clear deleted.
+    // Past the clear's coalescing window: its refetch must have *started* a second request,
+    // rather than adopting the pending one, while the first is still unresolved.
+    await settle()
+    expect(fetches).toBeGreaterThanOrEqual(2)
+
+    // Only now does the pre-clear snapshot come back, carrying the row the clear deleted. It
+    // was cancelled, so it can no longer become the authoritative answer.
     await act(async () => {
       resolveFetch!(listPage([summary(1)]))
       await new Promise((r) => setTimeout(r, 300))
     })
 
-    await waitFor(() => expect(cachedRowIds(queryClient)).toEqual([]))
+    expect(cachedRowIds(queryClient)).toEqual([])
+
+    rendered.unmount()
+  })
+
+  // R23/K0a — the review's §2.1 sequence 2: the same pending initial fetch, but the clear is
+  // learned through *recovery* rather than from a frame. The completion and the `cleared` frame
+  // are both lost; a later frame exposes the id gap; `/active` answers with a post-clear
+  // snapshot. Recovery's authoritative read has the same obligation as the clear's, and the
+  // same TanStack behaviour defeated it: the refetch adopted the pending pre-clear request,
+  // whose response then restored the deleted row.
+  it('supersedes a pending pre-clear fetch when the clear is learned through recovery', async () => {
+    let resolveFetch: ((value: RequestListResponse) => void) | undefined
+    let fetches = 0
+    const listFetch = () => {
+      fetches++
+      return fetches === 1
+        ? new Promise<RequestListResponse>((resolve) => {
+            resolveFetch = resolve
+          })
+        : Promise.resolve(listPage([]))
+    }
+
+    const { queryClient, rendered } = setup({ listFetch })
+    await waitFor(() => expect(resolveFetch).toBeDefined())
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+    expect(fetches).toBe(1)
+
+    // Frame 1 sets the watermark; the completion (2) and the clear (3) are dropped; frame 4
+    // exposes the gap and triggers recovery against a post-clear database.
+    serverActive({ active: [], logPosition: 4 })
+    act(() => {
+      FakeEventSource.latest().emit('started', startedEvent(9, summary(9)), 1)
+      FakeEventSource.latest().emit('first_token', { seq: 9, ttftMs: 12 }, 4)
+    })
+
+    await settle()
+    expect(fetches).toBeGreaterThanOrEqual(2)
+
+    await act(async () => {
+      resolveFetch!(listPage([summary(1)]))
+      await new Promise((r) => setTimeout(r, 300))
+    })
+
+    expect(cachedRowIds(queryClient)).toEqual([])
+
+    rendered.unmount()
+  })
+
+  // R11/K0b — the review's §2.2 sequence. A `started` frame is dropped by the bounded queue,
+  // so the client has no record of the request at all; the gap is exposed by a later frame for
+  // that same request while it is still running. Recovery must *show* it, not merely know it:
+  // the snapshot describes each active request, so the row is rebuilt from the server's own
+  // registration data. Before K0b the client intersected the active set with its known starts
+  // and rendered nothing — a long-running request could stay invisible for its whole duration.
+  it('displays an active request whose started frame was lost, from the recovery snapshot', async () => {
+    const { rendered } = setup({ listFetch: async () => listPage([]) })
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+
+    const lost = summary(2, { path: '/api/chat?lost-start', tags: ['t-lost'] })
+    serverActive({ active: [activeDescriptor(2, lost, 'qwen2.5:1.5b')], logPosition: 3 })
+
+    act(() => {
+      FakeEventSource.latest().open()
+      FakeEventSource.latest().emit('hello', { serverRunId: 'run-1' })
+      // Frame 1 establishes the watermark; frame 2 (started, seq 2) is dropped; frame 3 is
+      // `request_ready` for that same still-running request, which exposes the gap.
+      FakeEventSource.latest().emit('started', startedEvent(1, summary(1)), 1)
+      FakeEventSource.latest().emit('request_ready', { seq: 2, model: 'qwen2.5:1.5b' }, 3)
+    })
+
+    await settle()
+
+    const row = rendered.result.current.live.inFlight.find((r) => r.seq === 2)
+    expect(row).toBeDefined()
+    expect(row?.path).toBe('/api/chat?lost-start')
+    expect(row?.method).toBe('POST')
+    expect(row?.backend).toBe('stub')
+    expect(row?.tags).toEqual(['t-lost'])
+    expect(row?.startedAt).toBe(lost.startedAt)
+    expect(row?.model).toBe('qwen2.5:1.5b')
+
+    rendered.unmount()
+  })
+
+  // K0b — the descriptor is authoritative for the fields it carries, but it deliberately does
+  // not carry TTFT (a `first_token` datum, not registration metadata). A row that already knew
+  // its TTFT from a frame applied below the snapshot position must keep it across recovery,
+  // since that frame is not replayed.
+  it('keeps a known TTFT on a row rebuilt from the recovery snapshot', async () => {
+    const { rendered } = setup({ listFetch: async () => listPage([]) })
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+
+    serverActive({ active: [activeDescriptor(1, summary(1))], logPosition: 9 })
+
+    act(() => {
+      FakeEventSource.latest().open()
+      FakeEventSource.latest().emit('started', startedEvent(1, summary(1)), 1)
+      FakeEventSource.latest().emit('first_token', { seq: 1, ttftMs: 42 }, 2)
+    })
+    await waitFor(() => expect(rendered.result.current.live.inFlight[0]?.ttftMs).toBe(42))
+
+    act(() => {
+      FakeEventSource.latest().open() // reconnect → recovery rebuilds the row
+    })
+    await settle()
+
+    expect(inFlightSeqs(rendered)).toEqual([1])
+    expect(rendered.result.current.live.inFlight[0].ttftMs).toBe(42)
 
     rendered.unmount()
   })
@@ -925,7 +1071,7 @@ describe('useLiveHistory', () => {
       FakeEventSource.latest().emit('completed', { seq: 1, row: summary(1) }, 1)
     })
 
-    serverActive({ activeSeqs: [], logPosition: 4 })
+    serverActive({ active: [], logPosition: 4 })
 
     // A later frame reveals the gap and triggers recovery.
     act(() => {
@@ -983,7 +1129,10 @@ describe('useLiveHistory', () => {
 
     for (let i = 0; i < requests; i++) {
       seq++
-      const runs = rand() < 0.25
+      // The last request always runs on, and its `started` frame is always lost below — so
+      // every scenario, not just the lucky seeds, exercises the half of convergence round six
+      // found missing: a request the server reports active that this client never saw start.
+      const runs = rand() < 0.25 || i === requests - 1
       const row = summary(Math.min(9, ++rowId), { path: `/api/chat?seq=${seq}` })
       frames.push({ id: ++id, kind: 'started', seq, row })
       if (runs) {
@@ -998,16 +1147,20 @@ describe('useLiveHistory', () => {
       }
     }
 
-    /** The server's in-flight set as of `position` — started, not yet completed. */
+    /**
+     * The server's in-flight set as of `position`, as descriptors (K0b) — started, not yet
+     * completed. The registry is filled at registration, so the server can describe a request
+     * whether or not its `started` frame ever reached this client.
+     */
     const activeAt = (position: number) => {
-      const active = new Set<number>()
+      const active = new Map<number, ActiveDescriptor>()
       for (const f of frames) {
         if (f.id > position) break
-        if (f.kind === 'started') active.add(f.seq)
+        if (f.kind === 'started') active.set(f.seq, activeDescriptor(f.seq, f.row))
         if (f.kind === 'completed') active.delete(f.seq)
       }
 
-      return [...active]
+      return [...active.values()]
     }
 
     /** The rows a list read would return at `position`: inserted since the last clear. */
@@ -1023,7 +1176,7 @@ describe('useLiveHistory', () => {
       return rows
     }
 
-    return { frames, stillRunning, lastId: id, activeAt, rowsAt }
+    return { frames, stillRunning, lostStartSeq: seq, lastId: id, activeAt, rowsAt }
   }
 
   for (const seed of [1, 7, 13, 21, 42, 99]) {
@@ -1037,7 +1190,7 @@ describe('useLiveHistory', () => {
       // Snapshots are taken at the tightest position the server could honestly report: at
       // least everything the client has already been sent.
       vi.spyOn(api, 'getActiveRequests').mockImplementation(async () => ({
-        activeSeqs: world.activeAt(position),
+        active: world.activeAt(position),
         logPosition: position,
         serverRunId: 'run-1',
       }))
@@ -1060,7 +1213,8 @@ describe('useLiveHistory', () => {
       const half = Math.ceil(delivery.length / 2)
       for (let i = 0; i < delivery.length; i++) {
         const frame = delivery[i]
-        if (rand() < 0.25) {
+        const lostStart = frame.kind === 'started' && frame.seq === world.lostStartSeq
+        if (lostStart || rand() < 0.25) {
           // Dropped by the subscriber's bounded queue; the server still published it.
           position = Math.max(position, frame.id)
           continue
@@ -1088,10 +1242,11 @@ describe('useLiveHistory', () => {
       await settle(500)
 
       expect(cachedRowIds(queryClient)).toEqual(world.rowsAt(world.lastId).map((r) => r.id))
-      // Nothing is shown as running that the server does not report as running.
-      for (const seq of inFlightSeqs(rendered)) {
-        expect(world.stillRunning.has(seq)).toBe(true)
-      }
+      // K2 — convergence is two-sided, and the second half is the one round six found missing:
+      // not just "nothing is shown that isn't running" (no false positives), but "everything
+      // running is shown" (no false negatives), including requests whose `started` frame this
+      // delivery order dropped entirely.
+      expect(inFlightSeqs(rendered)).toEqual([...world.stillRunning].sort((a, b) => a - b))
 
       rendered.unmount()
     })

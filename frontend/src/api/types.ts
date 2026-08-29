@@ -140,18 +140,40 @@ export interface ClearResponse {
 }
 
 /**
- * R11/F2/J0 — the recovery snapshot: lifecycle truth as of one position in the event log.
- * `activeSeqs` is the server's in-flight set, and `logPosition` is the SSE publish id it is
- * true as of, both read in one critical section. The client adopts the set wholesale and
- * discards every event it is holding at or below `logPosition` — those are already reflected
- * here, and in the database the refetch that follows reads — replaying only what came after.
- * `serverRunId` (H0b) identifies the process lifetime: seqs *and* positions reset with the
- * process, so a snapshot from another run is discarded outright rather than compared against.
+ * R11/F2/J0/K0b — the recovery snapshot: lifecycle truth as of one position in the event log.
+ * `active` is the server's in-flight set — each entry carrying the metadata its `started` frame
+ * carried, so the client can *render* it — and `logPosition` is the SSE publish id that set is
+ * true as of, both read in one critical section. The client rebuilds its in-flight rows from
+ * `active` wholesale and discards every event it is holding at or below `logPosition` — those
+ * are already reflected here, and in the database the refetch that follows reads — replaying
+ * only what came after. `serverRunId` (H0b) identifies the process lifetime: seqs *and*
+ * positions reset with the process, so a snapshot from another run is discarded outright
+ * rather than compared against.
  */
 export interface ActiveRequestsResponse {
-  activeSeqs: number[]
+  active: ActiveDescriptor[]
   logPosition: number
   serverRunId: string
+}
+
+/**
+ * K0b/R11 — one in-flight request as the recovery snapshot describes it: its `seq` plus the
+ * payload of its `started` frame, and `model` once `request_ready` has parsed one (null until
+ * then, and for bodies with no parseable model).
+ *
+ * The snapshot carries these because a bare seq cannot be displayed, and the frame that would
+ * have supplied the rest is exactly the one a lossy subscriber queue may have dropped — a
+ * monitor that knows a request is running but cannot show it is not monitoring it.
+ */
+export interface ActiveDescriptor {
+  seq: number
+  startedAt: string
+  sessionId: number
+  method: string
+  path: string
+  backend: string
+  tags: string[]
+  model: string | null
 }
 
 export interface BackendConfigDto {

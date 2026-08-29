@@ -1129,6 +1129,126 @@ history because the refetch reads a database that already reflects every clear.
 **Exit:** all reviewer cases green under the new model; the property test holds;
 burst gate passes; docs describe J0 and nothing older.
 
+---
+
+# Sixth-round remediation (Batch K) — closing residuals
+
+> Source: round-six review. All four J-round interleavings closed; J0's model held.
+> Two residuals remain, neither an ordering-model hole: a TanStack v5 behavior gap
+> under J0 rule 4 (R23) and an open product/API decision (R11).
+
+## K0 — Decisions
+
+> **Status: BOTH APPROVED, 2026-08-29.** K0a/K0b are authoritative for implementing
+> agents; K3's truth pass records the descriptor contract into phase-3.md D3/D5 and
+> removes the now-fixed display-limit caveat.
+
+| # | Decision | Design |
+|---|---|---|
+| K0a | **R23: post-clear/recovery fetches are made genuinely new via cancel-then-refetch.** | TanStack v5's `refetchQueries` reuses a pending *initial* fetch's promise, so J0's "last-started fetch wins" degraded to "first fetch wins" in that state. `refetchAuthoritative` becomes `cancelQueries(...)` **then** refetch — cancellation settles the stale query as discarded (its response can never become authoritative) and the refetch is genuinely distinct. `client.ts` passes TanStack's `signal` through to `fetch` so cancellation reaches the network. J0 rule 4's no-client-filtering stance is unchanged. |
+| K0b | **R11: the recovery snapshot returns full active descriptors, not bare seqs.** | The registry stores the immutable started metadata it already receives at registration (`startedAt, method, path, backend, tags, sessionId` + `model` once `request_ready` fires); the recovery endpoint returns `active: Descriptor[]` in the same locked snapshot. The client reconstructs in-flight rows wholesale — a lost `started` frame no longer hides a running request. No placeholder UX, no narrowing of the brief's live-monitor guarantee. Memory: one small struct per active request, cleanup already guaranteed by the terminal invariant. |
+
+## Batch K — Opus (one session; likely the closing round)
+
+- [x] **K1 · R23 — K0a verbatim.** Tests: both review sequences with the corrected
+  timing (held response released only *after* the clear-batch flush / recovery
+  refetch), each asserting the second fetch **started before** the held response is
+  released; the existing repo regression's timing fixed to match the failing
+  sequence per the review's note.
+- [x] **K2 · R11 — K0b verbatim.** SSE/API contract change recorded in phase-3.md
+  D3/D5 (descriptor shape). Client: recovery adopts descriptors wholesale (drop the
+  `activeSeqs ∩ known-starts` intersection). The randomized property test extended
+  to **two-sided convergence**: every shown row is server-active AND every
+  server-active request is shown, under randomized frame loss including lost
+  `started` frames.
+- [x] **K3 — Gate + truth pass.** Suites ×3 green; burst gate re-run; phase-3.md's
+  documented display limit removed (it's fixed, not a caveat); plan checkboxes and
+  architecture wording corrected to demonstrated behavior only.
+
+**Exit:** both review sequences and the two-sided property test green; no remaining
+open findings in the review report.
+
+**Batch K landed 2026-08-29 — 273/273 backend green ×3, 79/79 frontend green ×3, `tsc -b` +
+`vite build` clean, lint unchanged at 6 warnings (baseline).** K0a and K0b were implemented as
+approved. Notes:
+
+- **K1 (R23 / K0a).** `refetchAuthoritative` is now `cancelQueries` **then** refetch.
+  `refetchQueries` alone never started a second request while the list query's *initial* fetch
+  was pending with no data — TanStack v5 hands back that retryer's promise — so J0 rule 4's
+  "the last-started fetch wins" was, in exactly that state, "the first fetch wins", and a
+  pre-clear snapshot became the authoritative answer. Cancelling settles the stale request as
+  discarded, and `client.ts`/`RequestList.tsx` now thread TanStack's per-fetch `signal` into
+  `fetch`, so the cancellation reaches the network rather than stopping at the query layer. No
+  row is inspected or filtered — J0 rule 4's stance is what makes cancellation the right lever.
+  - **One consequence, found by an existing test rather than reasoned about.** Because the
+    trigger now awaits cancellation, its refetch starts a microtask *later* than the flush's
+    `isFetching` check, so rows completing in the same window as a `cleared` were merged into a
+    cache that the clear's own read was about to replace. The flush therefore treats "a clear
+    happened in this window" as equivalent to "a fetch is in flight" and buffers them; they
+    merge when that read settles. Caught by `keeps a post-clear completion, even one reusing a
+    cleared id`, which failed on the first run of the cancel change.
+  - **Test timing corrected, per the review's note.** The existing regression released the held
+    response *before* the 100 ms clear batch, so the stale response had already settled when the
+    clear handler ran and the test passed for the wrong reason. It now asserts a second fetch has
+    started while the first is still unresolved, and only then releases it. Its sibling covers
+    the same shape with the clear learned through recovery. Both fail (`[1]`, expected `[]`)
+    with the cancel removed — the review's §2.1 sequences 1 and 2 exactly.
+- **K2 (R11 / K0b).** The hub's registry stores an `ActiveDescriptor` per in-flight request —
+  the `started` payload it already receives at registration, plus `model` once `request_ready`
+  fires — and `/active` returns `{active: ActiveDescriptor[], logPosition, serverRunId}` from
+  the same locked snapshot. `RequestReady` now takes the publish lock to record the model (it
+  previously returned early with no subscribers), in the same critical section as the frame's
+  own id, so the descriptor stays coherent with the position the way every other field does.
+  The client rebuilds in-flight rows from the descriptors; the `activeSeqs ∩ known-starts`
+  intersection is gone, so a lost `started` frame no longer hides a running request.
+  - **Two client details worth recording.** A rebuilt row keeps a TTFT the client already knew:
+    the descriptor deliberately carries registration metadata and the model, not `first_token`
+    data, and a `first_token` frame below the snapshot position is not replayed. And a row whose
+    fields are unchanged keeps its object identity across recovery, so an unremarkable recovery
+    does not rerender every live row.
+  - **Property test now two-sided.** It asserted only that every row shown is server-active. It
+    now also asserts that every server-active request is shown, and each scenario is
+    constructed so that one still-running request always has its `started` frame dropped —
+    otherwise the new half was only exercised on lucky seeds (it passed all six against the old
+    intersection until the loss was made deterministic; afterwards all six fail against it).
+  - Backend: `Active_DescribesEachInFlightRequest_AndLearnsItsModelFromRequestReady` pins the
+    descriptor's fields, the model update and removal at the terminal transition, deliberately
+    with **no subscriber attached** — that is the client the frame never reached.
+    `Active_WireShape_CarriesOrderedDescriptors` pins the camelCase wire shape and seq ordering
+    against the running app.
+- **K3 (gate + truth pass).** Burst gate re-run on the rewritten snapshot contract, isolated
+  instance as before (Release build, port 4560, temp config + DB in the session scratchpad,
+  local Node streaming stub; the user's own instance and `vessel.db` untouched). **10,000
+  requests, 24 concurrent, 100 tags: 10,000 OK / 0 failed in 77.67 s**, server settled at 10,000
+  rows / 0 failed / empty active set / `logPosition` 40,000. Mid-burst `/active` returned live
+  descriptors with every field populated, including the model parsed by `request_ready`. The
+  same tab then converged through clear-all to zero and displayed the **100 post-clear requests
+  whose SQLite ids were reused** (100 requests / 0 failed, ids 1–100, twelve tag chips). One
+  document throughout: no reload, no replacement, no page errors; heap peaked at 24 MB, worst
+  long task 85 ms.
+  - **Same environment caveat as Batch J, unchanged:** the Browser pane could not be *displayed*
+    in this session, so the tab ran hidden and throttled (probe sampling ~0.7 Hz against a 4 Hz
+    interval). Those heap and long-task figures come from a throttled renderer and are not
+    comparable with Batch I's visible-tab profile.
+  - **What the gate does not show:** it does not drop a `started` frame or hold an initial list
+    fetch across a clear — the two conditions K0a and K0b are actually about. Those are covered
+    by the hook tests, each confirmed to fail against the pre-K behaviour. The gate's role here
+    is that the enriched snapshot and the cancel-then-refetch survive real burst traffic.
+  - Truth pass: `phase-3.md` D5 carries the descriptor shape, the cancel-then-refetch correction
+    under the REST-authority rule, and the display limit struck through as **fixed** rather than
+    recorded; `architecture.md`'s lifecycle paragraph, its clear sentence and the endpoint table
+    match; the Batch J notes' display-limit bullet and the fifth-round closing entries 1 and 2
+    are corrected in place rather than rewritten.
+
+### Sixth-round closing conditions (§2 of code-review-phase-4.md)
+
+| # | Condition | Status | Where |
+| --- | --- | --- | --- |
+| 1 | §2.1 — make the post-clear/post-recovery list read genuinely distinct from an older unsettled request, and stop the old result becoming authoritative; add both sequences, asserting the second fetch started before the held response is released; keep REST rows unfiltered | Met | K1 — cancel-then-refetch with the signal threaded to `fetch`; both sequences added with the corrected timing and a fetch-count assertion; both fail without the cancel. No row is inspected, filtered or deleted client-side |
+| 2 | §2.2 — either enrich the recovery snapshot enough to reconstruct active rows, or approve a placeholder and narrow the guarantee | Met | K2 — K0b chose enrichment: `/active` returns descriptors, the client rebuilds rows from them, and the lost-`started` sequence now renders the request with its real method, path, tags, start time and model |
+| 3 | Property test to two-sided convergence under randomized loss including lost `started` frames | Met | K2 — every shown row is server-active **and** every server-active request is shown; each scenario deterministically drops one still-running request's `started` frame |
+| 4 | D04 — correct the documentation claims the two findings contradicted | Met | K3 — the "always starts a new fetch" rule now states how it is enforced; the display limit is struck through as fixed; the Batch J closing entries 1 and 2 and the architecture wording are corrected to demonstrated behaviour |
+
 **Batch J landed 2026-08-29 — 271/271 backend green ×3, 76/76 frontend green ×3, `tsc -b` +
 `vite build` clean, lint unchanged at 6 warnings (baseline).** J0 was implemented as approved,
 as a replacement rather than an extension: the diff deletes more reconciliation logic than it
@@ -1182,11 +1302,13 @@ adds. Notes and deviations:
     arriving in the same window as a clear was buffered and then stranded — caught by `keeps a
     post-clear completion, even one reusing a cleared id`. The drain now subscribes to the
     query cache, which notifies on every state change regardless of batching.
-  - **Display limit, recorded rather than fixed.** In-flight rows can only be rendered for seqs
-    the client holds `started` details for, so recovery adopts `activeSeqs ∩ known`. A request
-    whose `started` frame this client never received stays invisible until it completes — it
-    was never displayable, and nothing is shown as running that is not. Rendering it would need
-    the snapshot to carry per-seq metadata, which J0 does not ask for.
+  - ~~**Display limit, recorded rather than fixed.** In-flight rows can only be rendered for
+    seqs the client holds `started` details for, so recovery adopts `activeSeqs ∩ known`.~~
+    **Fixed in Batch K (K0b).** Recording it was the right call at the time — J0 did not ask for
+    per-seq metadata in the snapshot — but round six was right that it left R11 short of the
+    brief's live-monitor guarantee rather than merely trading UX: a request the server reports
+    running could stay invisible for its whole duration. The snapshot now carries descriptors,
+    and the intersection is gone.
 - **J3 (tests).** All four round-five cases are expressed against the new model, alongside
   every prior R11/R23 controlled-delivery case, the long-running survivor, the clear-before
   survivor and post-clear ID reuse (twice: with and without a completion frame). The
@@ -1240,8 +1362,8 @@ adds. Notes and deviations:
 
 | # | Condition | Status | Where |
 | --- | --- | --- | --- |
-| 1 | Reconcile pending lifecycle frames with accepted recovery evidence; retain the R11 restart, stale-response, allocation and long-running controls | Met | J2 — recovery discards held frames at or below `logPosition` and replays only what came after, so a queued start cannot undo it (`does not let a queued start undo a recovery that already accounts for it`). All four retained controls still green |
-| 2 | Resolve all three remaining R23 cases; preserve timestamp survivors and post-clear ID reuse | Met | J0/J2 — clears carry no predicate: queued pre-clear completions fall to the position filter, REST rows are never client-filtered, and multiple missed clears need no history because the refetch reads a database that reflects them all. Survivors come back from that refetch; ID reuse is covered with and without a completion frame |
+| 1 | Reconcile pending lifecycle frames with accepted recovery evidence; retain the R11 restart, stale-response, allocation and long-running controls | Met for the ordering half; **the display half closed in Batch K** — the queued-start race was fixed here, but round six found that a *lost* start left an active request unrenderable, which K0b fixes | J2 — recovery discards held frames at or below `logPosition` and replays only what came after, so a queued start cannot undo it (`does not let a queued start undo a recovery that already accounts for it`). All four retained controls still green |
+| 2 | Resolve all three remaining R23 cases; preserve timestamp survivors and post-clear ID reuse | Met for those three; **a fourth path closed in Batch K** — rule 4's "always a new fetch" was not true while an initial fetch was pending, so a pre-clear response could still win (K0a) | J0/J2 — clears carry no predicate: queued pre-clear completions fall to the position filter, REST rows are never client-filtered, and multiple missed clears need no history because the refetch reads a database that reflects them all. Survivors come back from that refetch; ID reuse is covered with and without a completion frame |
 | 3 | Add those interleavings to the existing suite and retain all current passing tests | Met | J3 — 76/76 frontend ×3 (was 67), 271/271 backend ×3; four review cases plus a six-seed randomised property test; no existing assertion weakened, and the two backend tests whose feature J0 deletes were ported to the position rather than dropped |
 | 4 | Update the design/closure claims in their owning documents; protocol amendments approved first | Met | J4 — J0 was approved before implementation and is recorded in `phase-3.md` D3/D5; the overstated fourth-round entries are corrected in place and the superseded F/H/I entries annotated |
 

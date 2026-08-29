@@ -22,7 +22,7 @@ public static class ActiveRequestsEndpoint
         context.Response.ContentType = "application/json; charset=utf-8";
         return JsonSerializer.SerializeAsync(
             context.Response.Body,
-            new ActiveRequestsPayload(active.ActiveSeqs, active.LogPosition, active.ServerRunId),
+            new ActiveRequestsPayload(active.Active, active.LogPosition, active.ServerRunId),
             ApiJsonContext.Default.ActiveRequestsPayload,
             context.RequestAborted);
     }
@@ -30,11 +30,15 @@ public static class ActiveRequestsEndpoint
 
 /// <summary>
 /// Wire shape for <see cref="ActiveRequestsEndpoint"/> (mirrored in <c>types.ts</c>).
-/// <paramref name="LogPosition"/> (J0) is the SSE publish id this active set is true as of:
-/// the client discards every event it is holding at or below it — those are already reflected
-/// in <paramref name="ActiveSeqs"/> and in the database the refetch reads — and replays only
-/// what came after. <paramref name="ServerRunId"/> (H0b(1)) lets reconciliation reject a
-/// snapshot from a different Vessel run rather than mis-comparing this process's seqs and
-/// positions against another's.
+/// <paramref name="Active"/> (K0b) is the in-flight requests in seq order, each carrying the
+/// metadata its <c>started</c> frame carried, so the client can *render* what it is told is
+/// running even when that frame was the one its bounded queue dropped.
+/// <paramref name="LogPosition"/> (J0) is the SSE publish id this set is true as of: the client
+/// discards every event it is holding at or below it — those are already reflected in
+/// <paramref name="Active"/> and in the database the refetch reads — and replays only what came
+/// after. <paramref name="ServerRunId"/> (H0b(1)) lets recovery reject a snapshot from a
+/// different Vessel run rather than mis-comparing this process's seqs and positions against
+/// another's.
 /// </summary>
-public sealed record ActiveRequestsPayload(long[] ActiveSeqs, long LogPosition, string ServerRunId);
+public sealed record ActiveRequestsPayload(
+    ActiveDescriptor[] Active, long LogPosition, string ServerRunId);

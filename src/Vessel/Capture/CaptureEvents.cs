@@ -47,8 +47,8 @@ public sealed class CaptureEvents
     // R11/H0b(2)/J0 (coherence): the in-flight set and the publish id are read *and* mutated
     // under this same lock, so `GetActiveRequests` returns one coherent snapshot — an active
     // set together with the log position it is true as of. That pairing is the whole recovery
-    // contract (J0): every frame with `id <= LogPosition` is already reflected in
-    // `ActiveSeqs`, so a client can discard those and replay only what came after. Read
+    // contract (J0): every frame with `id <= LogPosition` is already reflected in the
+    // returned descriptors, so a client can discard those and replay only what came after. Read
     // separately, a snapshot could pair a position with an active set from a different moment
     // — the review's 187/571 torn-snapshot probe — and reconciliation would then wrongly
     // expire a legitimate request. The lock is held for microseconds and never waits on a
@@ -67,15 +67,22 @@ public sealed class CaptureEvents
     // honest: an unregistered seq cannot exist to be missing from one.
     private long _seqCounter;
 
-    // R11/F2 — the server-authoritative in-flight set. A seq is added when its request starts
-    // and removed when it completes (or is dropped), independent of whether anyone is
+    // R11/F2 — the server-authoritative in-flight set. An entry is added when its request
+    // starts and removed when it completes (or is dropped), independent of whether anyone is
     // subscribed to the SSE feed. Reconciliation reads this to decide, authoritatively, which
     // client-side in-flight rows are genuinely still running versus finished-or-lost — the
     // client cannot infer that from paginated history alone (a completion off the loaded
     // pages, filtered out, or for a since-cleared row is simply invisible there). Guarded by
     // _publishLock (H0b(2)), never a concurrent collection, so it stays coherent with the
     // publish id read in the same critical section.
-    private readonly HashSet<long> _active = [];
+    //
+    // K0b — the value is the request's own `started` payload, not a bare marker. The hub
+    // already receives every field at registration, and a recovering client needs them to
+    // *render* the request it is being told is running: knowing seq 2 is active is useless if
+    // the `started` frame carrying its method, path and start time was the frame the bounded
+    // queue dropped. Storing them costs one small immutable record per in-flight request, and
+    // the terminal invariant (H0b(3)) already guarantees every entry is removed.
+    private readonly Dictionary<long, ActiveDescriptor> _active = [];
 
     /// <summary>
     /// H0b(1) — an id unique to this server process (a fresh GUID per <see cref="CaptureEvents"/>
@@ -104,13 +111,14 @@ public sealed class CaptureEvents
     internal void Unsubscribe(long id) => _subscribers.TryRemove(id, out _);
 
     /// <summary>
-    /// R11/F2/J0 — lifecycle truth as of one stream position: the requests the server
-    /// currently considers in-flight, together with the publish id that active set is true as
-    /// of. Recovery is wholesale replacement on the client: it takes <c>ActiveSeqs</c> as its
-    /// in-flight set and discards every event it holds with <c>id &lt;= LogPosition</c>,
-    /// because those are already reflected here; only later events replay on top. That
-    /// replaces the retired boundary comparison (a completed-seq watermark), which could not
-    /// order a client's *pending* work against the snapshot at all.
+    /// R11/F2/J0/K0b — lifecycle truth as of one stream position: the requests the server
+    /// currently considers in-flight, each with the display metadata its <c>started</c> frame
+    /// carried, together with the publish id that set is true as of. Recovery is wholesale
+    /// replacement on the client: it rebuilds its in-flight rows from <c>Active</c> and
+    /// discards every event it holds with <c>id &lt;= LogPosition</c>, because those are
+    /// already reflected here; only later events replay on top. That replaces the retired
+    /// boundary comparison (a completed-seq watermark), which could not order a client's
+    /// *pending* work against the snapshot at all.
     /// </summary>
     public ActiveRequests GetActiveRequests()
     {
@@ -120,8 +128,9 @@ public sealed class CaptureEvents
             // and what makes the position meaningful: nothing can be published between reading
             // the active set and reading the position it belongs to. RunId is immutable, but
             // travels with the snapshot so the client can reject one from a different process
-            // lifetime.
-            return new ActiveRequests([.. _active], _publishId, RunId);
+            // lifetime. Ordered by seq, which is registration order, so a client rebuilding
+            // its rows from this shows them in the same order the live feed would have.
+            return new ActiveRequests([.. _active.Values.OrderBy(d => d.Seq)], _publishId, RunId);
         }
     }
 
@@ -147,7 +156,9 @@ public sealed class CaptureEvents
         lock (_publishLock)
         {
             seq = ++_seqCounter;
-            _active.Add(seq);
+            // K0b — registered *with* its display metadata, so the recovery snapshot can
+            // describe this request even to a client that never received its `started` frame.
+            _active.Add(seq, new ActiveDescriptor(seq, startedAt, sessionId, method, path, backend, tags, null));
         }
 
         // Serialized and published outside the allocation section (JSON touches no shared
@@ -180,13 +191,28 @@ public sealed class CaptureEvents
     /// </summary>
     public void RequestReady(long seq, string model)
     {
-        if (_subscribers.IsEmpty)
-        {
-            return;
-        }
+        // Serialize outside the lock (see Register for the rationale); the registry update
+        // itself happens under it, in the same critical section as the frame's own id.
+        string? json = _subscribers.IsEmpty
+            ? null
+            : JsonSerializer.Serialize(new RequestReadyEvent(seq, model), EventsJsonContext.Default.RequestReadyEvent);
 
-        Publish("request_ready", JsonSerializer.Serialize(
-            new RequestReadyEvent(seq, model), EventsJsonContext.Default.RequestReadyEvent));
+        lock (_publishLock)
+        {
+            // K0b — the one field of the descriptor that is learned after registration. It is
+            // recorded regardless of subscribers, for the same reason the registration is: a
+            // client recovering after this position must see the model the frame carried, and
+            // that frame may be exactly the one its bounded queue dropped.
+            if (_active.TryGetValue(seq, out ActiveDescriptor? descriptor))
+            {
+                _active[seq] = descriptor with { Model = model };
+            }
+
+            if (json is not null)
+            {
+                PublishLocked("request_ready", json);
+            }
+        }
     }
 
     /// <summary>Emitted on the first-response-byte mark of streamed responses (request path).</summary>
@@ -215,7 +241,7 @@ public sealed class CaptureEvents
 
         lock (_publishLock)
         {
-            // Leave the active set unconditionally (a drop still calls this with row == null),
+            // Leave the active registry unconditionally (a drop still calls this with row == null),
             // so reconciliation sees the request as finished even for a client that was never
             // subscribed when it ran (R11/F2). The removal and the fan-out are in the one
             // critical section GetActiveRequests reads under, so a snapshot never pairs a
@@ -281,15 +307,38 @@ public sealed class CaptureEvents
 }
 
 /// <summary>
-/// R11/F2/J0 — lifecycle truth as of one position in the event log.
-/// <paramref name="ActiveSeqs"/> is the set of request seqs running at that position;
+/// R11/F2/J0/K0b — lifecycle truth as of one position in the event log.
+/// <paramref name="Active"/> is the requests running at that position, in seq order, each
+/// carrying the metadata its <c>started</c> frame carried;
 /// <paramref name="LogPosition"/> is the newest SSE publish id allocated when the snapshot was
-/// taken, so every frame at or below it is already reflected in <paramref name="ActiveSeqs"/>
+/// taken, so every frame at or below it is already reflected in <paramref name="Active"/>
 /// and a recovering client replays only what came after it;
 /// <paramref name="ServerRunId"/> (H0b(1)) identifies the process lifetime the seqs and
 /// positions belong to, so a client can discard a snapshot from a different Vessel run outright.
 /// </summary>
-public sealed record ActiveRequests(long[] ActiveSeqs, long LogPosition, string ServerRunId);
+public sealed record ActiveRequests(ActiveDescriptor[] Active, long LogPosition, string ServerRunId);
+
+/// <summary>
+/// K0b/R11 — one in-flight request as the recovery snapshot describes it: its <c>seq</c> plus
+/// the immutable payload of its <c>started</c> frame, and <paramref name="Model"/> once
+/// <c>request_ready</c> has parsed one (null until then, and for requests whose body carries
+/// no parseable model).
+/// <para>
+/// The snapshot carries these because a bare seq is not enough to *show* the request. The SSE
+/// feed is deliberately lossy, so the frame that would have supplied the method, path, start
+/// time, session and tags is exactly the frame a recovering client may have missed — and a
+/// monitor that knows a request is running but cannot display it is not monitoring it.
+/// </para>
+/// </summary>
+public sealed record ActiveDescriptor(
+    long Seq,
+    string StartedAt,
+    long SessionId,
+    string Method,
+    string Path,
+    string Backend,
+    string[] Tags,
+    string? Model);
 
 /// <summary>One SSE connection's subscription; disposing unregisters it from the hub.</summary>
 public sealed class CaptureSubscription : IDisposable

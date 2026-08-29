@@ -163,16 +163,19 @@ in-flight requests live with a running timer, plus a lightweight client-side det
 (method/path/backend/model/tags/elapsed — no REST fetch, since a request that hasn't
 completed has no response to show yet).
 
-**Lifecycle authority (code-review Batches H, I and J, R11/R23/R25/R26).** Recovery is a
+**Lifecycle authority (code-review Batches H, I, J and K, R11/R23/R25/R26).** Recovery is a
 snapshot plus an ordered log, not a set of merge rules. The SSE event id — allocated under the
 hub's publish lock — is the single position for every lifecycle change, and
-`GET /vessel/api/active` returns `{ activeSeqs, logPosition, serverRunId }` read in that same
-critical section: lifecycle truth *as of one stream position*. A request's `seq` is allocated
-inside the lock as it is registered, so a seq can never exist unregistered and a snapshot can
-never omit one silently. On reconnect, gap or run change the client adopts `activeSeqs`
-wholesale and discards everything it is holding at or below `logPosition` — queued frames, the
-completion buffer, the lot — because a frame it received before issuing the request was
-published before the snapshot was taken; frames above the position replay in order on top.
+`GET /vessel/api/active` returns `{ active, logPosition, serverRunId }` read in that same
+critical section: lifecycle truth *as of one stream position*. Each entry in `active` is a
+descriptor — the `started` frame's own payload plus the parsed model — not a bare seq, so a
+recovering client can *render* every request it is told is running, including one whose
+`started` frame the lossy feed dropped. A request's `seq` is allocated inside the lock as it is
+registered, so a seq can never exist unregistered and a snapshot can never omit one silently.
+On reconnect, gap or run change the client rebuilds its in-flight rows from those descriptors
+and discards everything it is holding at or below `logPosition` — queued frames, the completion
+buffer, the lot — because a frame it received before issuing the request was published before
+the snapshot was taken; frames above the position replay in order on top.
 Between recoveries frames apply strictly in id order. `serverRunId` (a per-process GUID, also
 on `hello` and `/status`) lets the client distinguish a restart from a reconnect and discard a
 dead process's seqs and positions wholesale; only `hello` signals that change, since a
@@ -183,7 +186,9 @@ guarded span covers request preparation too — so a `seq` can never leak in the
 forwarding stays independent of capture health. Clearing is the in-band `cleared` event,
 published under the same lock as `completed` so it orders correctly against them, and it
 carries **no payload**: the client drops the rows and buffered completions it holds at that
-position and refetches, and REST reads are authoritative and never client-filtered. Earlier
+position and refetches, and REST reads are authoritative and never client-filtered. That
+refetch cancels any outstanding list read first, because a pending initial fetch would
+otherwise be reused rather than superseded, and its pre-clear snapshot would win. Earlier
 rounds tried to ship the deletion *predicate* to the client (an id boundary, then a versioned
 `{scope, beforeTs, boundaryId}`); both failed, because a client cannot re-derive which rows a
 past deletion removed once ids are reused or a clear is missed. The UI applies the feed on a
@@ -355,7 +360,7 @@ Everything Vessel-owned lives under `/vessel/` (impossible to collide with `/v1/
 | `GET /vessel/api/sessions` · `POST /vessel/api/sessions` | list / reset (create marker) |
 | `GET /vessel/api/stats?session=` | totals, failures, avg latency / tok/s / ttft, token totals in/out/cached (accepted scope, post-Phase-4 addition — phase-3.md D3) |
 | `GET /vessel/api/events` | SSE lifecycle feed: `hello`, `started`, `request_ready`, `first_token`, `completed`, `cleared` (§4.4) |
-| `GET /vessel/api/active` | recovery snapshot `{ activeSeqs, logPosition, serverRunId }` — the in-flight set and the log position it is true as of (§4.4, Batch F/H/I/J) |
+| `GET /vessel/api/active` | recovery snapshot `{ active, logPosition, serverRunId }` — the in-flight requests as displayable descriptors, and the log position that set is true as of (§4.4, Batch F/H/I/J/K) |
 | `GET/PUT /vessel/api/config` | backends, retention, ports, redaction — persisted to `vessel.json` |
 | `GET /vessel/api/ollama/ps` | (Ollama backends) proxied `ollama ps` — loaded models, memory |
 

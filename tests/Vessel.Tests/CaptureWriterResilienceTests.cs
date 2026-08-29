@@ -286,9 +286,9 @@ public class CaptureWriterResilienceTests
         }
 
         await WaitFor(() => channel.IsStopped);
-        await WaitFor(() => hub.GetActiveRequests().ActiveSeqs.Length == 0);
+        await WaitFor(() => hub.GetActiveRequests().Active.Length == 0);
 
-        Assert.Empty(hub.GetActiveRequests().ActiveSeqs);
+        Assert.Empty(hub.GetActiveRequests().Active);
 
         await writer.StopAsync(TestContext.Current.CancellationToken);
     }

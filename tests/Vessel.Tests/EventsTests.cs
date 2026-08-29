@@ -304,7 +304,7 @@ public class EventsTests
             using HttpResponseMessage active = await client.GetAsync($"{vessel.BaseUrl}/vessel/api/active", cts.Token);
             using JsonDocument doc = JsonDocument.Parse(await active.Content.ReadAsStringAsync(cts.Token));
             logPosition = doc.RootElement.GetProperty("logPosition").GetInt64();
-            activeCount = doc.RootElement.GetProperty("activeSeqs").GetArrayLength();
+            activeCount = doc.RootElement.GetProperty("active").GetArrayLength();
             if (logPosition >= completed.Id)
             {
                 break;
@@ -421,12 +421,84 @@ public class EventsTests
             "the snapshot's position must cover the clear a client may have missed");
     }
 
+    // R11/K0b — the recovery snapshot describes each in-flight request, it does not merely
+    // count it. A bare seq cannot be rendered: the method, path, backend, tags, session and
+    // start time all arrive on the `started` frame, which is exactly the frame a subscriber's
+    // bounded drop-oldest queue may have dropped. Deliberately exercised with **no subscriber
+    // attached**, since that is the same client the frame never reached.
+    [Fact]
+    public void Active_DescribesEachInFlightRequest_AndLearnsItsModelFromRequestReady()
+    {
+        var hub = new CaptureEvents();
+
+        long seq = hub.Register(
+            "2026-08-29T00:00:01.0000000Z", 7, "POST", "/api/chat?probe", "stub", ["alpha", "beta"]);
+
+        ActiveDescriptor descriptor = Assert.Single(hub.GetActiveRequests().Active);
+        Assert.Equal(seq, descriptor.Seq);
+        Assert.Equal("2026-08-29T00:00:01.0000000Z", descriptor.StartedAt);
+        Assert.Equal(7, descriptor.SessionId);
+        Assert.Equal("POST", descriptor.Method);
+        Assert.Equal("/api/chat?probe", descriptor.Path);
+        Assert.Equal("stub", descriptor.Backend);
+        Assert.Equal(["alpha", "beta"], descriptor.Tags);
+        Assert.Null(descriptor.Model); // not known until the request body has been parsed
+
+        // The one field learned after registration. Recorded whether or not anyone is
+        // subscribed, for the same reason the registration is.
+        hub.RequestReady(seq, "qwen2.5:1.5b");
+        Assert.Equal("qwen2.5:1.5b", Assert.Single(hub.GetActiveRequests().Active).Model);
+
+        // And the terminal transition still empties the registry, so descriptors cannot leak.
+        hub.Completed(seq, null);
+        Assert.Empty(hub.GetActiveRequests().Active);
+    }
+
+    // R11/K0b — the same contract on the wire, in seq order, with the camelCase field names
+    // `types.ts` mirrors. Registered directly on the running app's hub so the requests stay
+    // in flight deterministically, rather than racing a real proxied request's completion.
+    [Fact]
+    public async Task Active_WireShape_CarriesOrderedDescriptors()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        var hub = (CaptureEvents)vessel.Services.GetService(typeof(CaptureEvents))!;
+        long first = hub.Register("2026-08-29T00:00:01.0000000Z", 1, "POST", "/api/chat?one", "stub", ["t1"]);
+        long second = hub.Register("2026-08-29T00:00:02.0000000Z", 1, "GET", "/api/tags", "stub", []);
+        hub.RequestReady(first, "m-1");
+
+        using JsonDocument doc = JsonDocument.Parse(
+            await (await client.GetAsync($"{vessel.BaseUrl}/vessel/api/active", CT)).Content.ReadAsStringAsync(CT));
+
+        JsonElement active = doc.RootElement.GetProperty("active");
+        Assert.Equal(2, active.GetArrayLength());
+
+        JsonElement one = active[0];
+        Assert.Equal(first, one.GetProperty("seq").GetInt64());
+        Assert.Equal("2026-08-29T00:00:01.0000000Z", one.GetProperty("startedAt").GetString());
+        Assert.Equal(1, one.GetProperty("sessionId").GetInt64());
+        Assert.Equal("POST", one.GetProperty("method").GetString());
+        Assert.Equal("/api/chat?one", one.GetProperty("path").GetString());
+        Assert.Equal("stub", one.GetProperty("backend").GetString());
+        Assert.Equal(["t1"], one.GetProperty("tags").EnumerateArray().Select(t => t.GetString()));
+        Assert.Equal("m-1", one.GetProperty("model").GetString());
+
+        // Seq order, which is registration order — so a client rebuilding its in-flight rows
+        // from this shows them in the order the live feed would have.
+        Assert.Equal(second, active[1].GetProperty("seq").GetInt64());
+        Assert.Equal(JsonValueKind.Null, active[1].GetProperty("model").ValueKind);
+
+        hub.Completed(first, null);
+        hub.Completed(second, null);
+    }
+
     // R11/H0b(2)/J0 — the concurrent-snapshot invariant probe, ported to the log position.
     // GetActiveRequests must return one coherent snapshot: an active set together with the
     // position it is true as of. J0's client rule is "everything at or below LogPosition is
-    // already reflected in ActiveSeqs", so the invariant to hold under concurrency is: if a
-    // seq's `started` frame has been published at or below the snapshot's position, and that
-    // seq never completes, it must be in the snapshot's active set.
+    // already reflected in the snapshot's descriptors", so the invariant to hold under
+    // concurrency is: if a seq's `started` frame has been published at or below the snapshot's
+    // position, and that seq never completes, it must be in the snapshot's active set.
     //
     // The probe makes that checkable arithmetically. Each iteration publishes exactly three
     // frames — started(odd), started(even), completed(even) — so iteration k's odd seq 2k-1
@@ -453,7 +525,7 @@ public class EventsTests
                 while (!stop.IsCancellationRequested)
                 {
                     ActiveRequests snap = hub.GetActiveRequests();
-                    var active = new HashSet<long>(snap.ActiveSeqs);
+                    var active = new HashSet<long>(snap.Active.Select(d => d.Seq));
                     // Every iteration whose odd `started` frame is at or below this position.
                     for (long k = 1; (3 * k) - 2 <= snap.LogPosition; k++)
                     {
@@ -519,12 +591,12 @@ public class EventsTests
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
         cts.CancelAfter(TimeSpan.FromSeconds(10));
-        while (events.GetActiveRequests().ActiveSeqs.Length > 0 && !cts.IsCancellationRequested)
+        while (events.GetActiveRequests().Active.Length > 0 && !cts.IsCancellationRequested)
         {
             await Task.Delay(25, cts.Token);
         }
 
-        Assert.Empty(events.GetActiveRequests().ActiveSeqs);
+        Assert.Empty(events.GetActiveRequests().Active);
 
         subscriber?.Dispose();
     }
@@ -565,12 +637,12 @@ public class EventsTests
             await stream.FlushAsync(CT);
 
             DateTime registeredBy = DateTime.UtcNow.AddSeconds(10);
-            while (events.GetActiveRequests().ActiveSeqs.Length == 0 && DateTime.UtcNow < registeredBy)
+            while (events.GetActiveRequests().Active.Length == 0 && DateTime.UtcNow < registeredBy)
             {
                 await Task.Delay(20, CT);
             }
 
-            Assert.NotEmpty(events.GetActiveRequests().ActiveSeqs); // the upload is registered and mid-body
+            Assert.NotEmpty(events.GetActiveRequests().Active); // the upload is registered and mid-body
 
             tcp.LingerState = new LingerOption(true, 0); // RST, not a graceful close
         }
@@ -582,12 +654,12 @@ public class EventsTests
 
         // The aborted request reached a terminal transition — nothing left registered.
         DateTime terminalBy = DateTime.UtcNow.AddSeconds(10);
-        while (events.GetActiveRequests().ActiveSeqs.Length > 0 && DateTime.UtcNow < terminalBy)
+        while (events.GetActiveRequests().Active.Length > 0 && DateTime.UtcNow < terminalBy)
         {
             await Task.Delay(25, CT);
         }
 
-        Assert.Empty(events.GetActiveRequests().ActiveSeqs);
+        Assert.Empty(events.GetActiveRequests().Active);
 
         // ...and it was captured, with the interrupted-request error policy intact.
         CapturedRow row = await CaptureDb.WaitForRow(vessel.DbPath, r => r.Path.Contains(marker) && r.Method == "POST");

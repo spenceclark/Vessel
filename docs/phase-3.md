@@ -185,10 +185,17 @@ so the API can respond with it. No second write connection, no lock dance.
   - `started` carries `sessionId` (D05), so the UI scopes in-flight rows to the viewed
     session accurately instead of guessing.
 - **Re-review addition** (Batch F, R11/F2; extended by Batches H and I, **replaced in
-  Batch J**) — `GET /vessel/api/active` → `{ activeSeqs: number[], logPosition: number,
-  serverRunId: string }`. The server-authoritative in-flight set, sourced from the live
-  `CaptureEvents` hub: a `seq` is added on `started` and removed on `completed`, independent
-  of any SSE subscriber. Deliberately separate from `/status` (which is polled and cached) —
+  Batch J**, **enriched in Batch K**) — `GET /vessel/api/active` →
+  `{ active: ActiveDescriptor[], logPosition: number, serverRunId: string }`, where
+  `ActiveDescriptor` is `{ seq, startedAt, sessionId, method, path, backend, tags, model }` —
+  the `started` frame's own payload, plus `model` once `request_ready` has parsed one (null
+  until then). The server-authoritative in-flight set, sourced from the live `CaptureEvents`
+  hub: an entry is added on `started` and removed on `completed`, independent of any SSE
+  subscriber. **K0b:** it carries descriptors rather than bare seqs because a recovering client
+  has to *render* what it is told is running, and the frame that would have supplied the method,
+  path, start time, session and tags is exactly the frame a bounded drop-oldest queue may have
+  dropped. The registry already receives every field at registration; the terminal invariant
+  (H0b(3)) already guarantees each entry is removed. Deliberately separate from `/status` (which is polled and cached) —
   this changes on every request and is fetched on demand during recovery. `logPosition`
   (J0) is the newest SSE publish id allocated when the snapshot was taken, so the response is
   *lifecycle truth as of one stream position*. `serverRunId` (Batch H) identifies the process
@@ -218,7 +225,8 @@ so the API can respond with it. No second write connection, no lock dance.
     snapshot could pair a position with an active set from a different moment — the review's
     187/571 torn-snapshot probe — and recovery would then wrongly expire a legitimate request.
     Under J0 this coherence is the contract itself: "every frame at or below `logPosition` is
-    already reflected in `activeSeqs`" is only true if the two are read together.
+    already reflected in the snapshot's descriptors" is only true if the two are read together
+    — which now includes the model `request_ready` records (K0b).
   - **Terminal invariant (H0b(3), R25).** "Registered → terminal" is owned at the
     registration site. `started` registers the `seq`; the writer normally removes it via
     `completed`. When capture admission is closed (the writer gave up), `ProxyHandler`'s
@@ -255,7 +263,8 @@ so the API can respond with it. No second write connection, no lock dance.
     other, and `GET /active` reports the position its active set is true as of.
   - **Recovery is wholesale replacement.** On reconnect, gap or run change the client fetches
     the snapshot, then discards its in-flight map, its **entire** completion buffer and every
-    frame it holds at or below `logPosition`; takes `activeSeqs` as its in-flight set; and
+    frame it holds at or below `logPosition`; rebuilds its in-flight rows from the snapshot's
+    descriptors (K0b — no intersection with what it happens to have seen); and
     refetches list/stats/facets. Discarding is sound by construction: a frame the client
     received before it issued the request was published before the server took the snapshot,
     so its id is at or below that position — the snapshot, and the database the refetch reads,
@@ -265,13 +274,22 @@ so the API can respond with it. No second write connection, no lock dance.
     to recovery — never to ad-hoc reasoning about what was missed.
   - **REST reads are authoritative and never client-filtered.** Nothing the client holds
     deletes a row a fetch returned. A clear or recovery always starts a *new* fetch after
-    itself, and the last-started fetch wins. **Accepted trade, part of the contract:** a stale
-    pre-clear fetch may display briefly until its superseding refetch settles. Settled state
-    always converges, which is what every review case asserts.
-  - **Display limit, recorded:** in-flight rows are rendered only for seqs the client has
-    `started` details for, so a recovery that adopts a seq whose `started` frame the client
-    never received leaves that request invisible until it completes. It was never displayable;
-    no such row is ever shown as running when it is not.
+    itself, and the last-started fetch wins. **Sixth-round correction (K0a):** "new" is
+    enforced by cancelling the outstanding list read first, then refetching. `refetchQueries`
+    alone does not start a second request while a query's *initial* fetch is pending with no
+    data — TanStack v5 returns that pending promise — so the rule silently degraded to "first
+    fetch wins" and a pre-clear snapshot could land as the authoritative answer, whether the
+    clear arrived in-band or was learned through recovery. Cancellation settles that request as
+    discarded and reaches the network, because the list query passes TanStack's `signal` to
+    `fetch`. No row is inspected or filtered: that stance is unchanged. **Accepted trade, part
+    of the contract:** a stale pre-clear fetch may display briefly until its superseding refetch
+    settles. Settled state always converges, which is what every review case asserts.
+  - ~~**Display limit, recorded:** in-flight rows are rendered only for seqs the client has
+    `started` details for.~~ **Fixed in Batch K (K0b)**, not a caveat: the snapshot describes
+    each active request, so a request whose `started` frame the feed dropped is displayed after
+    recovery rather than staying invisible until it completes. The one field the descriptor does
+    not carry is TTFT (a `first_token` datum, not registration metadata); a row that already
+    knew its TTFT keeps it across recovery.
 - **Fourth-round re-review (Batch I, I0b(2)) — `hello` is the only restart signal.** A
   `/active` response whose `serverRunId` differs from the connection's is a *stale
   response*, not evidence that the run we are connected to restarted: it is discarded

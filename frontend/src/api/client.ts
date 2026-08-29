@@ -55,6 +55,14 @@ export interface ListRequestsParams {
   before?: number
   session?: SessionScope
   filters?: RequestFilters
+  /**
+   * K0a — TanStack's per-fetch `AbortSignal`, threaded through to `fetch`. Recovery and a
+   * clear cancel the outstanding list query before starting their own read (see
+   * `useLiveHistory`), and cancellation only actually releases the connection — and only
+   * reliably prevents the stale response from being processed at all — if the signal reaches
+   * the network call rather than stopping at the query layer.
+   */
+  signal?: AbortSignal
 }
 
 /** `/stats` additionally accepts "current" (its server-side default) — /requests never does. */
@@ -77,7 +85,7 @@ export const api = {
   /** R11/F2 — the server's live in-flight set, fetched on demand during reconciliation. */
   getActiveRequests: () => request<ActiveRequestsResponse>('/active'),
 
-  listRequests: ({ limit, before, session, filters }: ListRequestsParams = {}) => {
+  listRequests: ({ limit, before, session, filters, signal }: ListRequestsParams = {}) => {
     const params = new URLSearchParams()
     if (limit !== undefined) params.set('limit', String(limit))
     if (before !== undefined) params.set('before', String(before))
@@ -86,7 +94,7 @@ export const api = {
     if (session !== undefined && session !== 'all') params.set('session', String(session))
     applyFilterParams(params, filters)
     const qs = params.toString()
-    return request<RequestListResponse>(`/requests${qs ? `?${qs}` : ''}`)
+    return request<RequestListResponse>(`/requests${qs ? `?${qs}` : ''}`, { signal })
   },
 
   getRequest: (id: number) => request<RequestDetail>(`/requests/${id}`),

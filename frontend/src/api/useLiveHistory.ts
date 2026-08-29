@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQueryClient, type InfiniteData } from '@tanstack/react-query'
 import {
   filtersActive,
+  type ActiveDescriptor,
   type CompletedEvent,
   type FirstTokenEvent,
   type RequestFilters,
@@ -26,18 +27,25 @@ import { useEvents, type InFlightRequest } from './useEvents'
  *    is true as of. The client never invents an ordering of its own.
  * 2. **Recovery is wholesale replacement** (rule 2). On reconnect, gap, or run change: fetch
  *    the snapshot, then discard the applied map, the *entire* completion buffer, and every
- *    held event at or below `logPosition`; take `activeSeqs` as the in-flight set; refetch
- *    history/stats/facets. Discarding is safe because those events are, by construction,
- *    already reflected in the snapshot and in the database the refetch reads: an event the
- *    client received before it issued the request was published before the server took the
- *    snapshot, so its id is at or below that position. Events above it replay on top.
+ *    held event at or below `logPosition`; rebuild the in-flight rows from the snapshot's
+ *    descriptors; refetch history/stats/facets. Discarding is safe because those events are,
+ *    by construction, already reflected in the snapshot and in the database the refetch reads:
+ *    an event the client received before it issued the request was published before the server
+ *    took the snapshot, so its id is at or below that position. Events above it replay on top.
+ *    **K0b** — the snapshot describes each active request rather than naming it, so a request
+ *    whose `started` frame the feed dropped is *displayed* after recovery, not merely known
+ *    about. The intersection with locally-known starts that stood here is gone.
  * 3. **Between recoveries, ordered replay only** (rule 3). Frames apply strictly in id order;
  *    `cleared` drops the cached rows and the buffer *at its position* and schedules a refetch.
  *    A detected gap goes to rule 2 — never to ad-hoc reasoning about what was missed.
  * 4. **REST reads are authoritative and never client-filtered** (rule 4). No predicate, no
  *    boundary, no provenance set: nothing the client holds ever deletes a row a fetch
  *    returned. A clear or recovery always starts a *new* fetch afterwards, and the
- *    last-started fetch wins. The accepted trade, stated in the contract: a stale pre-clear
+ *    last-started fetch wins. **K0a** — "new" has to be enforced, not assumed: TanStack v5
+ *    hands back the pending promise of an *initial* fetch instead of starting a second one,
+ *    which silently turned this rule into "first fetch wins" and let a pre-clear snapshot
+ *    become authoritative. The trigger therefore cancels the outstanding read first (see
+ *    `refetchAuthoritative`). The accepted trade, stated in the contract: a stale pre-clear
  *    fetch may show briefly until its superseding refetch settles. Settled state converges.
  * 5. **Server identity gates all of it** (R11/H0b/I0b). Every SSE connection opens with a
  *    `hello` carrying the process run id; a change on the *hello* means Vessel restarted, and
@@ -222,18 +230,29 @@ export function useLiveHistory({
   }, [queryClient])
 
   /**
-   * J0 rule 4 — the authoritative read. Always a *new* fetch started after the trigger (clear
-   * or recovery), so a snapshot taken before it can never be the one that wins.
+   * J0 rule 4 / K0a — the authoritative read: cancel, then refetch.
+   *
+   * `refetchQueries` alone does not guarantee a new fetch. When the matching query's *initial*
+   * fetch is still pending with no cached data, TanStack v5 returns that in-flight retryer's
+   * promise instead of starting a second request — so the trigger waited for the very snapshot
+   * it was meant to supersede, and a pre-clear response landed as the authoritative one. That
+   * is the whole of round six's §2.1, under both a received `cleared` frame and a clear learned
+   * through recovery.
+   *
+   * Cancelling first settles that request as discarded: its response can never be written to
+   * the cache, and the refetch that follows is genuinely distinct. Cancellation reaches the
+   * network too, because the list query passes TanStack's `signal` to `fetch` (`client.ts`).
+   * Note what this does *not* do: no row is inspected, filtered or deleted by id or timestamp —
+   * J0 rule 4's no-client-filtering stance is exactly what makes cancellation the right lever.
    */
-  const refetchAuthoritative = useCallback(
-    () =>
-      Promise.all([
-        queryClient.refetchQueries({ queryKey: REQUESTS_QUERY_ROOT }),
-        queryClient.invalidateQueries({ queryKey: ['stats'] }),
-        queryClient.invalidateQueries({ queryKey: ['facets'] }),
-      ]),
-    [queryClient],
-  )
+  const refetchAuthoritative = useCallback(async () => {
+    await queryClient.cancelQueries({ queryKey: REQUESTS_QUERY_ROOT })
+    await Promise.all([
+      queryClient.refetchQueries({ queryKey: REQUESTS_QUERY_ROOT }),
+      queryClient.invalidateQueries({ queryKey: ['stats'] }),
+      queryClient.invalidateQueries({ queryKey: ['facets'] }),
+    ])
+  }, [queryClient])
 
   // R10 — drain the buffer once every list fetch has settled. Waiting for that (rather than
   // merging while one is in flight) is the whole point: a fetch resolving with a snapshot
@@ -325,7 +344,13 @@ export function useLiveHistory({
     // R10 — a list fetch is in flight, and it may be about to resolve with a snapshot taken
     // before these rows existed. Hold them and merge after settlement rather than writing into
     // a cache about to be replaced.
-    if (queryClient.isFetching({ queryKey: REQUESTS_QUERY_ROOT }) > 0) {
+    //
+    // K0a — `cleared` counts as "in flight" even though nothing is fetching yet: the clear's
+    // own authoritative read starts after an await (it cancels first), so `isFetching` cannot
+    // see it here. Merging now would write these post-clear rows into a cache that read is
+    // about to replace with a snapshot taken before they existed — and their completions are
+    // exactly the rows the buffer exists to protect.
+    if (cleared || queryClient.isFetching({ queryKey: REQUESTS_QUERY_ROOT }) > 0) {
       pendingRef.current.push(...toMerge)
       return
     }
@@ -405,15 +430,18 @@ export function useLiveHistory({
       // replay, in order, on top of the replacement.
       const replay = recorded.filter((e) => e.id > position)
 
-      const activeSet = new Set(active.activeSeqs)
       setInFlightMap((prev) => {
-        // In-flight := the server's set. Only rows we have `started` details for can be
-        // rendered, so a seq whose `started` frame this client never received stays invisible
-        // until it completes — it was never displayable in the first place.
+        // K0b — in-flight := the server's set, rebuilt from its descriptors. Nothing is
+        // intersected with what this client happens to have seen: a request whose `started`
+        // frame the bounded queue dropped is displayed from the snapshot alone, which is the
+        // difference between knowing a request is running and monitoring it.
         const base = new Map<number, InFlightRequest>()
-        for (const seq of activeSet) {
-          const known = prev.get(seq)
-          if (known) base.set(seq, known)
+        for (const descriptor of active.active) {
+          const known = prev.get(descriptor.seq)
+          const row = toInFlight(descriptor, known)
+          // Reuse the existing object when nothing about the row changed, so an unremarkable
+          // recovery does not rerender every live row.
+          base.set(descriptor.seq, known && sameInFlight(known, row) ? known : row)
         }
 
         const rebuilt = applyLifecycle(base, replay)
@@ -508,6 +536,42 @@ export function useLiveHistory({
     newSinceFilter,
     clearNewSinceFilter: useCallback(() => setNewSince({ signature: '', count: 0 }), []),
   }
+}
+
+/**
+ * K0b — one recovery descriptor as an in-flight row. `ttftMs` is carried over from what this
+ * client already knew: the descriptor deliberately holds only the started metadata plus the
+ * parsed model, so a `first_token` frame applied before the snapshot position (and therefore
+ * not replayed) would otherwise be forgotten by the row it belongs to.
+ */
+function toInFlight(descriptor: ActiveDescriptor, known: InFlightRequest | undefined): InFlightRequest {
+  return {
+    seq: descriptor.seq,
+    startedAt: descriptor.startedAt,
+    sessionId: descriptor.sessionId,
+    method: descriptor.method,
+    path: descriptor.path,
+    backend: descriptor.backend,
+    tags: descriptor.tags,
+    ...(descriptor.model !== null ? { model: descriptor.model } : {}),
+    ...(known?.ttftMs !== undefined ? { ttftMs: known.ttftMs } : {}),
+  }
+}
+
+/** Field equality for an in-flight row, so recovery can keep an unchanged row's identity. */
+function sameInFlight(a: InFlightRequest, b: InFlightRequest): boolean {
+  return (
+    a.seq === b.seq &&
+    a.startedAt === b.startedAt &&
+    a.sessionId === b.sessionId &&
+    a.method === b.method &&
+    a.path === b.path &&
+    a.backend === b.backend &&
+    a.model === b.model &&
+    a.ttftMs === b.ttftMs &&
+    a.tags.length === b.tags.length &&
+    a.tags.every((tag, i) => tag === b.tags[i])
+  )
 }
 
 /**
