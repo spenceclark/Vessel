@@ -44,8 +44,14 @@ and doubles as the favicon):
 ## 2. Color
 
 Dark is the primary theme (the audience lives in dark terminals); light is fully
-supported via the same token set and `prefers-color-scheme` (no toggle yet — a toggle
-is a later, cheap addition *because* everything goes through tokens).
+supported via the same token set. A Light/Dark/System control lives in the settings
+dialog's Appearance tab (`ThemePanel`, `src/lib/theme.ts`): System (the default) tracks
+`prefers-color-scheme` live with no JS involved; an explicit Light or Dark choice sets
+`data-theme` on `<html>`, persisted in `localStorage`, and wins over the OS preference
+regardless of which way it disagrees. A same-origin `public/theme-init.js` (not an
+inline `<script>` — the embedded UI's CSP is `script-src 'self'` with no
+`'unsafe-inline'`) applies a persisted choice before first paint to avoid a flash of
+the wrong theme.
 
 Base neutrals are slate-cool (a touch of blue, never brown/warm); the accent is
 **teal-cyan** — nautical without being on the nose, and distinct from the blue/purple

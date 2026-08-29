@@ -5,6 +5,7 @@ import { api } from '@/api/client'
 import type { SessionScope } from '@/api/types'
 import { ConfigPanel } from '@/components/ConfigPanel'
 import { DataPanel } from '@/components/DataPanel'
+import { ThemePanel } from '@/components/ThemePanel'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog, Dialog } from '@/components/ui/dialog'
 import { Mark } from '@/components/ui/Mark'
@@ -32,7 +33,7 @@ export function StatsBar({
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsTab, setSettingsTab] = useState<'data' | 'config'>('data')
+  const [settingsTab, setSettingsTab] = useState<'data' | 'config' | 'appearance'>('data')
 
   const statsQuery = useQuery({
     queryKey: ['stats', scope],
@@ -134,7 +135,7 @@ export function StatsBar({
         <Button disabled={resetting} onClick={() => setConfirmOpen(true)}>
           Reset session
         </Button>
-        <Button variant="ghost" size="icon" aria-label="Settings" title="Data & config" onClick={() => setSettingsOpen(true)}>
+        <Button variant="ghost" size="icon" aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}>
           <Settings className="h-4 w-4" strokeWidth={1.75} />
         </Button>
       </div>
@@ -160,17 +161,21 @@ export function StatsBar({
         onCancel={cancelReset}
       />
 
-      <Dialog open={settingsOpen} title="Data & config" onClose={closeSettings} widthClassName="w-[620px]">
-        <Tabs value={settingsTab} onValueChange={(v) => setSettingsTab(v as 'data' | 'config')}>
+      <Dialog open={settingsOpen} title="Settings" onClose={closeSettings} widthClassName="w-[620px]">
+        <Tabs value={settingsTab} onValueChange={(v) => setSettingsTab(v as 'data' | 'config' | 'appearance')}>
           <TabsList>
             <TabsTrigger value="data">Data</TabsTrigger>
             <TabsTrigger value="config">Config</TabsTrigger>
+            <TabsTrigger value="appearance">Appearance</TabsTrigger>
           </TabsList>
           <TabsContent value="data" className="pt-3">
             <DataPanel onCleared={onDataCleared} />
           </TabsContent>
           <TabsContent value="config" className="pt-3">
             <ConfigPanel />
+          </TabsContent>
+          <TabsContent value="appearance" className="pt-3">
+            <ThemePanel />
           </TabsContent>
         </Tabs>
       </Dialog>

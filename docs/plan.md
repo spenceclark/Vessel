@@ -112,9 +112,12 @@ under ten seconds: filter warnings-only, or search a phrase, click, read.
 
 ---
 
-## Phase 5 — Differentiator features
+## Phase 5 — The comparison loop
 
-*Each independent — pick by mood. Suggested order:*
+*The minimum story worth open-sourcing: "same prompt, different model/backend, zero
+client changes." Replay and diff share machinery and UI; they ship together. This is
+deliberately the whole phase — everything else moved to 7/8 so the launch (Phase 6)
+happens behind a tight, demoable story rather than after a long feature tail.*
 
 - [ ] **Replay** (§7): re-send with optional backend/model override; `replay_of` link both
       directions in the UI; **Copy as curl**. *The killer feature — do it first.*
@@ -134,52 +137,114 @@ under ten seconds: filter warnings-only, or search a phrase, click, read.
         follows backend type: `Authorization: Bearer` for openai-type,
         **`x-api-key` (+ `anthropic-version`) for anthropic-type — not Bearer**.
         Missing env var → replay dialog says which variable to set; no paste-and-store.
-- [ ] **Diff**: pick two requests, side-by-side message/param diff. Pairs naturally with
-      replay ("same prompt, two models").
-- [ ] **Warning badges polish**: cold-load detection via Ollama `load_duration`,
-      configurable TTFT threshold (§5.3).
-- [ ] **Cost estimates**: static pricing table + `pricing` config overrides, `~$0.0042`
-      on Overview and session totals; clearly labeled estimate (§9).
-- [ ] **Context-growth chart**: `tokens_in` over time per session/tag — makes agent
-      context bloat visible at a glance.
-- [ ] **Live tail**: stream the in-flight response into the UI as it generates —
-      the in-flight detail's state line (ui-spec §9.1) becomes a live token view.
-      Needs its own design pass: chunk broadcast only while a client has that
-      request open, bounded per-request buffers, drop-never-block — the hot-path
-      rules from §4.1 apply in full.
-- [ ] **Ollama panel**: `ollama ps` proxied view (loaded models, VRAM); server.log viewer
-      if reachable (§7, §10).
-- [ ] **Export to CSV/JSONL**: provide option for a range of requests to be exported to CSV/JSON (with/without bodies).
-      Allows offline analysis by user/AI.
-- [ ] **MCP server**: let the user's own AI tools (Claude Code, etc.) interrogate the
-      captured traffic — "why did my planner agent stall?" answered by the agent
-      querying Vessel directly. Streamable HTTP endpoint at `/vessel/mcp` on the
-      existing host via the official ModelContextProtocol C# SDK (stdio bridge only
-      if a client demands it). **Read-only v1**: `search_requests` (FTS + filters),
-      `get_request`, `get_stats`, `list_sessions` — no replay/clear via MCP without
-      a separate decision. The core design work is token-budget shaping: summaries
-      and truncated bodies by default, explicit params to fetch more — never dump a
-      200K-token context into the caller. Same trust boundary as the UI (localhost,
-      D03 Host guard); docs must say an MCP client gets your captured prompts.
+- [ ] **Compare** (narrowed from "Diff" by decision): renders a **`replay_of` pair
+      only** — original vs its replay, side-by-side responses + metric deltas +
+      param diff. Not an arbitrary two-row picker; no inline word-diff (two sampled
+      generations differ everywhere — the diff would render noise as signal).
+- [x] ~~**Warning badges polish**~~ — already delivered: `cold_load` detection
+      (Phase 2 D6) and the configurable `warnings.slowTtftMs` threshold both landed;
+      badges render per ui-spec. Absorbed, no remaining work.
 
-**Done when:** replay + diff let you answer "would qwen handle what opus handled?" without
-touching client code.
+Spec: [phase-5.md](phase-5.md).
+
+**Done when:** replay + Compare let you answer "would qwen handle what opus handled?"
+without touching client code.
+
+---
+
+## Phase 5b — MCP server (pre-launch, pulled forward from Phase 7)
+
+*Read-only interrogation of captured traffic by the user's own AI tools — pulled
+ahead of launch because it is one small session on the existing read store and
+"works with Claude Code out of the box" is a launch-day differentiator. Everything
+mutating (replay/clear via MCP) stays a separate future decision.*
+
+- [ ] Streamable HTTP endpoint `/vessel/mcp` (official ModelContextProtocol C# SDK,
+      same host, D03 guards; `mcp.enabled` kill-switch, live-applied).
+- [ ] Four read-only tools: `search_requests` (FTS + filters, compact rows, no
+      bodies), `get_request` (windowed flattened text, self-describing truncation),
+      `get_stats`, `list_sessions`.
+- [ ] Token-budget shaping: conservative defaults, hard caps, binary never inlined —
+      a 200K-token context must never arrive in one tool result.
+- [ ] Verified against a real MCP client (Claude Code) on real traffic.
+
+Spec: [phase-5-mcp.md](phase-5-mcp.md).
+
+**Done when:** "find my truncated requests from today and tell me why" works from
+Claude Code against a running Vessel.
 
 ---
 
 ## Phase 6 — Ship / open-source
+
+*Deliberately before the remaining features: the product is complete as
+observe-and-compare, and everything in Phases 7–8 gets better with real users' feedback
+(and makes good headline releases for an open-source project's cadence).*
 
 - [ ] Self-contained single-file publish for win-x64, linux-x64, osx-arm64, osx-x64;
       trimming warnings resolved (§11).
 - [ ] First-run experience: no config → creates Ollama default, prints the two-line
       "point your client here" instructions.
 - [ ] README: what/why, 30-second quickstart per client (Ollama CLI, OpenAI SDK, Aider,
-      Cline), screenshots, the "vessel.db contains your prompts" privacy note (§8).
+      Cline), screenshots, the "vessel.db contains your prompts" privacy note (§8),
+      replay-auth env-var conventions.
 - [ ] MIT license, CI (build + tests + publish artifacts per RID), versioned releases.
 - [ ] Pre-release pass: bind-address banner (§8), error messages, empty states.
 
 **Done when:** a stranger with Ollama installed goes from download to seeing their first
 captured request in under two minutes, without reading more than the quickstart.
+
+---
+
+## Phase 7 — Interrogation & analysis (post-launch)
+
+*Data-out and insight features — the natural first post-launch releases, and the ones
+community feedback should shape. (MCP moved to Phase 5b, pre-launch.) Candidates for
+a future MCP v2 — mutating tools (replay via MCP), pending its own approval — also
+live here.*
+
+- [ ] **Export to CSV/JSONL**: a filtered/date range of requests exported with or
+      without bodies, for offline analysis by user/AI. Pairs with MCP (interactive
+      vs. bulk data-out).
+- [ ] **Context-growth chart**: `tokens_in` over time per session/tag — makes agent
+      context bloat visible at a glance. First chart: add chart tokens to ui-spec §2
+      first (per §2.2's rule).
+- [ ] **Additional reporting**: tokens by agent/tag, tokens by model, etc. — likely a
+      small library of canned queries + visualisations on the same chart foundation.
+- [ ] **Cost estimates**: static pricing table + `pricing` config overrides, `~$0.0042`
+      on Overview and session totals; clearly labeled estimate (§9). (Only matters to
+      live-API users — let post-launch demand prioritize it.)
+- [ ] **Tool-call fumble detection**: new warning `tool_call_in_text` — the request
+      defined tools but the response carries tool-call-shaped JSON in its *text*
+      content with no structured `tool_calls`/`tool_use`. Detection only, in the
+      enricher (writer-side; adapters already parse both sides) — badge on the row,
+      filterable via warnings, and per-model fumble rates once reporting lands.
+      **Explicitly decided: no auto-repair, ever** — rewriting response bodies
+      breaks forward-as-is (the product's trust foundation), is near-impossible for
+      streams without buffering, and hides exactly the failure Vessel exists to
+      surface. The fix belongs client-side (`tool_choice`, template, model choice),
+      informed by this warning. Small enough to ride along with any earlier
+      adapter-touching session that has slack.
+
+---
+
+## Phase 8 — Live & deep integrations (post-launch, higher-risk)
+
+*Features that touch the proxy hot path or grow new product surfaces — sequenced last
+deliberately, with the hot-path rules from §4.1 applying in full.*
+
+- [ ] **Live tail**: stream the in-flight response into the UI as it generates — the
+      in-flight detail's state line (ui-spec §9.1) becomes a live token view. Needs
+      its own design pass: chunk broadcast only while a client has that request
+      open, bounded per-request buffers, drop-never-block. The J0 event-log model is
+      the foundation (chunks become high-frequency events on the same ordered feed).
+- [ ] **Cross-provider replay transformers**: ollama-native ⇄ openai-chat ⇄
+      anthropic-messages request translation so replay crosses wire formats, incl.
+      the non-1:1 params (`num_predict` vs `max_tokens`). Pre-agreed as out of
+      replay v1 (Phase 5 note).
+- [ ] **Ollama panel**: `ollama ps` proxied view (loaded models, VRAM); server.log
+      viewer if reachable (§7, §10) — a host-management surface, distinct from
+      traffic observation.
 
 ---
 

@@ -2,12 +2,17 @@
 
 /*
  * docs/ui-spec.md is the design authority for everything here. Dark is the primary
- * theme (@theme's defaults); light overrides the same emitted custom-property names
- * under prefers-color-scheme (no toggle yet — cheap to add later since everything
- * routes through these tokens). Every color/font/radius/shadow in the spec's §§2-4
- * lives here, once — components use token utilities (bg-surface, text-muted,
- * rounded-panel, shadow-panel, …) or var(--color-…), never raw palette utilities or
- * hex values.
+ * theme (@theme's defaults); light overrides the same emitted custom-property names.
+ * Every color/font/radius/shadow in the spec's §§2-4 lives here, once — components use
+ * token utilities (bg-surface, text-muted, rounded-panel, shadow-panel, …) or
+ * var(--color-…), never raw palette utilities or hex values.
+ *
+ * Theme resolution (src/lib/theme.ts): with no explicit choice, `prefers-color-scheme`
+ * decides. An explicit Light/Dark pick from the settings menu sets `data-theme` on
+ * `<html>` and always wins over the OS preference — `:root[data-theme='light']` below
+ * duplicates the light overrides for that case, and the media-query block is guarded
+ * with `:not([data-theme='dark'])` so an explicit Dark pick isn't overridden by a
+ * light-OS media match. "System" removes the attribute, falling back to the media query.
  */
 @theme {
   --color-canvas: #0b0d10;
@@ -56,7 +61,7 @@
 }
 
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme='dark']) {
     --color-canvas: #eef1f4;
     --color-surface: #ffffff;
     --color-surface-2: #f5f7f9;
@@ -81,6 +86,33 @@
     --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.15), 0 4px 16px rgb(0 0 0 / 0.075);
     --shadow-dialog: 0 4px 8px rgb(0 0 0 / 0.18), 0 16px 48px rgb(0 0 0 / 0.15);
   }
+}
+
+/* Explicit Light choice (any OS preference) — same overrides as the media query above. */
+:root[data-theme='light'] {
+  --color-canvas: #eef1f4;
+  --color-surface: #ffffff;
+  --color-surface-2: #f5f7f9;
+  --color-surface-3: #e9edf1;
+  --color-border: #dde3e9;
+  --color-border-strong: #c3ccd6;
+  --color-text: #171c23;
+  --color-text-secondary: #4b5563;
+  --color-text-muted: #8b95a1;
+  --color-accent: #0d9488;
+  --color-accent-fg: #ffffff;
+  --color-ok: #16a34a;
+  --color-danger: #dc2626;
+  --color-warn: #b45309;
+  --color-info: #0369a1;
+  --color-tag-blue: #2563eb;
+  --color-tag-indigo: #4f46e5;
+  --color-tag-violet: #7c3aed;
+  --color-tag-pink: #db2777;
+  --color-tag-fuchsia: #a21caf;
+  --color-tag-steel: #475569;
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.15), 0 4px 16px rgb(0 0 0 / 0.075);
+  --shadow-dialog: 0 4px 8px rgb(0 0 0 / 0.18), 0 16px 48px rgb(0 0 0 / 0.15);
 }
 
 html,
