@@ -27,7 +27,7 @@ namespace Vessel.Api;
 /// </summary>
 public static class HostOriginGuard
 {
-    private static readonly string[] LoopbackHostNames = ["localhost"];
+    private static readonly string[] _loopbackHostNames = ["localhost"];
 
     /// <summary>Host allowlist for every <c>/vessel/*</c> request.</summary>
     public static bool IsAllowedHost(HttpContext context, ConfigStore configStore)
@@ -38,7 +38,7 @@ public static class HostOriginGuard
             return false;
         }
 
-        if (LoopbackHostNames.Contains(host, StringComparer.OrdinalIgnoreCase))
+        if (_loopbackHostNames.Contains(host, StringComparer.OrdinalIgnoreCase))
         {
             return true;
         }
