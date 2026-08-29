@@ -72,7 +72,7 @@ describe('DetailPane — raw-stream fallback (R24)', () => {
     vi.spyOn(api, 'getStatus').mockResolvedValue({
       name: 'vessel', version: '0.1.0', listen: '127.0.0.1:4550', defaultBackend: 'stub',
       backends: [{ name: 'stub', baseUrl: 'http://localhost:11434', type: 'ollama', default: true, health: { state: 'unknown', lastSeenAt: null } }],
-      capture: { recording: true }, mcp: { enabled: true }, serverRunId: 'run',
+      capture: { recording: true }, mcp: { enabled: true }, listenSecurity: { isNonLoopback: false, isContainer: false }, serverRunId: 'run',
     })
     vi.spyOn(api, 'getReplays').mockResolvedValue([])
     Object.defineProperty(navigator, 'clipboard', {

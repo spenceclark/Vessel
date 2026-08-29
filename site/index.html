@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="vessel is a local-first observability proxy for LLM traffic: capture, search, replay, and compare every prompt across Ollama, OpenAI, and Anthropic backends. One binary, no account, nothing leaves your machine.">
+    <title>vessel — local LLM observability</title>
+    <link rel="icon" href="favicon.svg">
+    <style>
+      @font-face { font-family: InterVariable; src: url('./fonts/inter-latin.woff2') format('woff2'); font-display: swap; }
+      @font-face { font-family: 'JetBrains Mono Variable'; src: url('./fonts/jetbrains-mono-latin.woff2') format('woff2'); font-display: swap; }
+      :root { --canvas:#0b0d10; --surface:#14171c; --surface-2:#1b1f26; --border:#262c36; --text:#e6eaf0; --secondary:#a8b1bd; --muted:#6b7684; --accent:#2dd4bf; --accent-fg:#0b0d10; --warn:#fbbf24; --font-ui:InterVariable,system-ui,sans-serif; --font-mono:'JetBrains Mono Variable',ui-monospace,monospace; }
+      @media (prefers-color-scheme:light) { :root { --canvas:#eef1f4; --surface:#fff; --surface-2:#f5f7f9; --border:#dde3e9; --text:#171c23; --secondary:#4b5563; --muted:#8b95a1; --accent:#0d9488; --accent-fg:#fff; } }
+      * { box-sizing:border-box; } body { margin:0; min-height:100vh; background:var(--canvas); color:var(--text); font:14px/1.5 var(--font-ui); }
+      main { width:min(960px,calc(100% - 32px)); margin:0 auto; padding:24px 0 64px; } header { display:flex; align-items:center; gap:9px; font-size:20px; font-weight:650; letter-spacing:-.02em; } .mark { width:24px; height:24px; }
+      .panel { background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:0 1px 2px rgb(0 0 0 /.3),0 4px 16px rgb(0 0 0 /.15); }
+      .hero { margin-top:64px; padding:48px; } h1 { max-width:700px; margin:0; font-size:clamp(34px,7vw,64px); line-height:1.05; letter-spacing:-.045em; font-weight:600; } .lead { max-width:610px; margin:20px 0 28px; color:var(--secondary); font-size:17px; }
+      .actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center; } a.button { display:inline-flex; min-height:40px; align-items:center; border-radius:8px; padding:0 14px; background:var(--accent); color:var(--accent-fg); font-weight:600; text-decoration:none; } a.text-link { color:var(--secondary); text-decoration:none; } a.text-link:hover { color:var(--accent); }
+      .download-note { color:var(--muted); font:11px/16px var(--font-mono); } #compare { display:none; width:100%; margin-top:32px; border:1px solid var(--border); border-radius:8px; } .features { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; margin-top:12px; } .feature { padding:20px; } .feature h2 { margin:0 0 8px; font-size:14px; font-weight:600; } .feature p { margin:0; color:var(--secondary); }
+      .quickstart { margin-top:12px; padding:22px; } .label { color:var(--muted); font-size:11px; font-weight:550; letter-spacing:.06em; text-transform:uppercase; } code { display:block; overflow:auto; margin-top:8px; padding:12px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2); color:var(--text); font:12.5px/18px var(--font-mono); } footer { margin-top:28px; color:var(--muted); font-size:12.5px; } @media(max-width:680px) { .hero { margin-top:32px; padding:28px; } .features { grid-template-columns:1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header><svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M0 12h4m3 0h10m3 0h4" fill="none" stroke-linecap="round" stroke-width="2" stroke="var(--muted)"/><path d="M7 12h10" stroke="var(--accent)" stroke-linecap="round" stroke-width="2"/></svg>vessel</header>
+      <section class="panel hero">
+        <h1>See what your agents are actually doing.</h1>
+        <p class="lead">vessel sits between your LLM clients and any backend — Ollama, OpenAI, Anthropic, or anything compatible. Change one base URL and every request is captured live: prompts, responses, timing, token counts. Search it, replay it against a different model, compare the results. One small binary. No account. Nothing leaves your machine.</p>
+        <div class="actions"><a id="download" class="button" href="https://github.com/spenceclark/Vessel/releases/latest">Download Vessel</a><a class="text-link" href="https://github.com/spenceclark/Vessel">GitHub →</a></div>
+        <p id="download-note" class="download-note">Finding the latest release for your operating system…</p>
+        <img id="compare" src="assets/compare.gif" alt="Vessel Compare view showing original and replayed LLM responses side by side">
+      </section>
+      <section class="features">
+        <article class="panel feature"><h2>Drop-in capture</h2><p>Change one base URL. Every request and response — streamed or not — captured byte-for-byte with timing, TTFT, and token counts. Unknown traffic passes through untouched.</p></article>
+        <article class="panel feature"><h2>Find the one that went wrong</h2><p>Full-text search across prompts and responses. Filter by model, backend, or agent tag. Truncations, errors, and cold model loads are badged, not buried.</p></article>
+        <article class="panel feature"><h2>Replay against any model</h2><p>Re-send a captured request to a different backend or model — no client changes — and compare output, speed, and tokens side by side.</p></article>
+        <article class="panel feature"><h2>Ask your AI about it</h2><p>A built-in read-only MCP server lets Claude Code — or any MCP client — search and inspect your captured traffic directly. &ldquo;Why did my agent stall?&rdquo; is now a question you can just ask.</p></article>
+      </section>
+      <section class="panel quickstart"><div class="label">Quickstart</div><code>OLLAMA_HOST=127.0.0.1:4550 ollama run llama3.2
+# or any SDK: base_url = "http://127.0.0.1:4550/b/openai/v1"</code></section>
+      <footer>MIT licensed · local-first — your prompts never leave your machine</footer>
+    </main>
+    <script>
+      const repository = 'spenceclark/Vessel';
+      const button = document.getElementById('download'); const note = document.getElementById('download-note');
+      const os = navigator.userAgent.includes('Windows') ? 'win-x64' : navigator.userAgent.includes('Mac') ? 'osx-arm64' : 'linux-x64'; // Mac UAs report Intel even on Apple Silicon; default arm64, note offers x64
+      fetch(`https://api.github.com/repos/${repository}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
+        .then(response => response.ok ? response.json() : Promise.reject(response.status))
+        .then(release => { const asset = release.assets.find(item => item.name.includes(`-${os}.`)); if (!asset) throw new Error('asset missing'); button.href = asset.browser_download_url; button.textContent = `Download for ${os}`; note.textContent = os === 'osx-arm64' ? `Latest ${release.tag_name} — Intel Mac? Get osx-x64 from the release page.` : `Latest ${release.tag_name}`; })
+        .catch(() => { note.textContent = 'Choose your platform from the latest GitHub release.'; });
+      document.getElementById('compare').addEventListener('load', event => event.currentTarget.style.display = 'block');
+    </script>
+  </body>
+</html>

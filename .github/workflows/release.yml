@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  artifact:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [win-x64, linux-x64, osx-arm64, osx-x64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: dotnet publish src/Vessel/Vessel.csproj -c Release -r ${{ matrix.rid }} --self-contained -p:PublishSingleFile=true -p:PublishTrimmed=true -o publish/${{ matrix.rid }}
+      - name: Package artifact
+        shell: bash
+        run: |
+          version="$(git describe --tags --always | sed 's/^v//')"
+          stage="vessel-${version}-${{ matrix.rid }}"
+          mkdir "$stage"
+          if [[ '${{ matrix.rid }}' == win-* ]]; then
+            cp publish/${{ matrix.rid }}/Vessel.exe "$stage/vessel.exe"
+          else
+            cp publish/${{ matrix.rid }}/Vessel "$stage/vessel"
+          fi
+          cp LICENSE "$stage/LICENSE"
+          printf 'Vessel documentation: https://github.com/spenceclark/Vessel\n' > "$stage/README.txt"
+          if [[ '${{ matrix.rid }}' == win-* ]]; then zip -r "${stage}.zip" "$stage"; else tar -czf "${stage}.tar.gz" "$stage"; fi
+          sha256sum "${stage}".* > "${stage}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vessel-${{ matrix.rid }}
+          path: vessel-*-${{ matrix.rid }}.*
+
+  smoke:
+    needs: artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-latest
+          - rid: linux-x64
+            os: ubuntu-latest
+          - rid: osx-arm64
+            os: macos-latest
+          - rid: osx-x64
+            os: macos-13
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: vessel-${{ matrix.rid }}
+          path: download
+      - shell: bash
+        run: |
+          archive="$(find download -type f \( -name '*.zip' -o -name '*.tar.gz' \) | head -1)"
+          if [[ "$archive" == *.zip ]]; then unzip -q "$archive" -d unpacked; else tar -xzf "$archive" -C unpacked; fi
+          chmod +x unpacked/*/vessel 2>/dev/null || true
+          bash verify/publish-smoke.sh --artifact-dir unpacked/*
+
+  container-smoke:
+    needs: artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: docker/setup-buildx-action@v3
+      - run: docker build --tag vessel:test .
+      - name: Verify image state and compose example
+        run: |
+          docker network create vessel-smoke
+          docker run -d --name vessel-stub --network vessel-smoke node:22-alpine node -e 'require("http").createServer((q,r)=>r.end("container-smoke")).listen(11434,"0.0.0.0")'
+          mkdir container-state
+          printf '%s\n' '{"listen":"0.0.0.0:4550","defaultBackend":"stub","backends":{"stub":{"baseUrl":"http://vessel-stub:11434","type":"ollama"}}}' > container-state/vessel.json
+          docker run -d --name vessel-test --network vessel-smoke -p 4550:4550 -v "$PWD/container-state:/data" vessel:test
+          for i in {1..60}; do curl --fail --silent http://127.0.0.1:4550/vessel/api/status && break; sleep .25; done
+          test -f container-state/vessel.db
+          test "$(curl --fail --silent http://127.0.0.1:4550/container-smoke)" = container-smoke
+          docker restart vessel-test
+          curl --fail --silent http://127.0.0.1:4550/vessel/api/status
+          docker rm -f vessel-test vessel-stub
+          VESSEL_IMAGE=vessel:test docker compose up -d
+          docker compose ps vessel
+          VESSEL_IMAGE=vessel:test docker compose down -v
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [smoke, container-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/${{ github.repository_owner }}/vessel:${{ github.ref_name }},ghcr.io/${{ github.repository_owner }}/vessel:latest
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          body_path: CHANGELOG.md
+          files: release/*

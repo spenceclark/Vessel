@@ -80,6 +80,7 @@ export function RequestList({
   // all while there's something in-flight to animate.
   const now = useNowTick(250, inFlightList.length > 0)
 
+  // oxlint-disable-next-line react/incompatible-library -- TanStack Virtual owns DOM measurement and this list is intentionally not compiler-memoized.
   const virtualizer = useVirtualizer({
     count: itemCount,
     getScrollElement: () => parentRef.current,
@@ -97,13 +98,14 @@ export function RequestList({
 
   const virtualItems = virtualizer.getVirtualItems()
   const lastIndex = virtualItems.at(-1)?.index
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = query
 
   useEffect(() => {
     if (lastIndex === undefined) return
-    if (lastIndex >= itemCount - 5 && query.hasNextPage && !query.isFetchingNextPage) {
-      void query.fetchNextPage()
+    if (lastIndex >= itemCount - 5 && hasNextPage && !isFetchingNextPage) {
+      void fetchNextPage()
     }
-  }, [lastIndex, itemCount, query.hasNextPage, query.isFetchingNextPage, query.fetchNextPage])
+  }, [lastIndex, itemCount, hasNextPage, isFetchingNextPage, fetchNextPage])
 
   return (
     <div ref={parentRef} className="h-full overflow-y-auto">

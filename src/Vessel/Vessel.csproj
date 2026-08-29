@@ -3,7 +3,11 @@
   <PropertyGroup>
     <AssemblyName>Vessel</AssemblyName>
     <RootNamespace>Vessel</RootNamespace>
-    <Version>0.1.0</Version>
+    <!-- D1/D8: release artifacts are small, self-contained single files. MinVer derives
+         the stamped version from v* tags; untagged builds receive alpha.0 + git metadata. -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <MinVerTagPrefix>v</MinVerTagPrefix>
+    <MinVerDefaultPreReleaseIdentifiers>alpha.0</MinVerDefaultPreReleaseIdentifiers>
     <InvariantGlobalization>true</InvariantGlobalization>
     <!-- SQLite's e_sqlite3 is a native library; without this it lands beside the exe
          and the "single binary" is a lie. Extracted at first run, standard behavior. -->
@@ -12,9 +16,16 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
+    <PackageReference Include="MinVer" Version="7.0.0" PrivateAssets="all" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
     <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0" />
     <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
+  </ItemGroup>
+
+  <!-- Phase 5b's MCP endpoint is discovered by the SDK at runtime. Root the official
+       SDK assemblies so the single-file trimmer cannot remove endpoint/tool metadata. -->
+  <ItemGroup>
+    <TrimmerRootDescriptor Include="Mcp\ILLink.Descriptors.xml" />
   </ItemGroup>
 
   <!-- D1: frontend/dist is embedded under a fixed "vessel-ui/" logical-name prefix that
@@ -36,7 +47,7 @@
        and `dotnet build`/`dotnet test` stay npm-free (phase-3 D1). It is an SDK-internal
        name, so VerifyFrontendEmbedded below makes a regression here fail the publish loudly
        rather than silently reproducing R01. -->
-  <Target Name="BuildFrontend" Condition="'$(_IsPublishing)' == 'true' AND Exists('$(FrontendDir)\package.json')">
+  <Target Name="BuildFrontend" Condition="'$(_IsPublishing)' == 'true' AND '$(SkipFrontendBuild)' != 'true' AND Exists('$(FrontendDir)\package.json')">
     <Message Importance="high" Text="Vessel: building frontend for publish ($(FrontendDir))" />
     <Exec Command="npm ci" WorkingDirectory="$(FrontendDir)" />
     <Exec Command="npm run build" WorkingDirectory="$(FrontendDir)" />

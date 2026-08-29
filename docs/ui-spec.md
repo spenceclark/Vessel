@@ -152,6 +152,11 @@ Mono for anything a developer might copy.
 - **Depth model**: canvas → panel (`--surface`) → nested block (`--surface-2`) →
   selected (`--surface-3`). Never stack a shadow inside a panel; inner structure is
   borders and fills only.
+- **Bind-address notice (Phase 6):** when the actual Kestrel listener is non-loopback,
+  a non-dismissable, full-width strip sits above the header panel. It uses a 14% `--warn`
+  tinted fill, border, warning icon, and sentence-length text; in a container it uses the
+  same shape with the 14% `--info` tint because `0.0.0.0` is the normal published-port
+  state. Loopback listeners render nothing. This is a status disclosure, never a toast.
 
 ---
 

@@ -12,7 +12,7 @@ public static class StatusEndpoint
 {
     public static readonly string Version =
         Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-            .InformationalVersion.Split('+')[0]
+            .InformationalVersion
         ?? "0.0.0";
 
     public static Task Handle(HttpContext context)
@@ -28,6 +28,10 @@ public static class StatusEndpoint
         // One backend set for the whole payload, so default and list can't disagree (R02).
         BackendSet backends = registry.Latest;
 
+        bool isNonLoopback = Uri.TryCreate(listen, UriKind.Absolute, out Uri? boundUri)
+            && System.Net.IPAddress.TryParse(boundUri.Host, out System.Net.IPAddress? boundAddress)
+            && !System.Net.IPAddress.IsLoopback(boundAddress);
+
         var payload = new StatusPayload(
             "vessel",
             Version,
@@ -40,6 +44,7 @@ public static class StatusEndpoint
                 .ToArray(),
             new CaptureHealth(!captureChannel.IsStopped, captureChannel.StoppedReason),
             new McpStatus(configStore.Current.Mcp.Enabled),
+            new ListenSecurity(isNonLoopback, ConfigLoader.IsRunningInContainer),
             captureEvents.RunId);
 
         context.Response.ContentType = "application/json; charset=utf-8";

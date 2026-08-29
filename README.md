@@ -1,190 +1,173 @@
-# Vessel
+# vessel
 
-> The lightweight observability reverse proxy for LLM traffic.
-> Single binary. Point a `base_url` at it; get capture, search, and a UI.
+> The lightweight, local-first observability proxy for LLM traffic. Point a client’s
+> `base_url` at one small binary and get capture, search, metrics, replay, Compare, and
+> a private UI—without sending prompts to a third party.
 
-Vessel sits between LLM clients (agents, SDK scripts, dev tools) and LLM backends
-(Ollama, LM Studio, OpenAI, Anthropic, anything OpenAI-compatible). It forwards traffic
-as-is — never mutating it beyond stripping its own `X-Vessel-*` control headers — while
-capturing every request/response, including streamed ones, into a local SQLite database
-with a full-text-searchable, filterable, embedded web UI.
-
-**Current status: Phases 0–4 implemented** — transparent proxying, capture/persistence,
-format-aware parsing (OpenAI chat, OpenAI Responses, Anthropic messages, Ollama native),
-and the full UI (history, search/filters, rendered message view, live config editing,
-retention/clear) are all in place. See [docs/plan.md](docs/plan.md) for the phased
-roadmap (Phase 5 differentiator features — replay, diff, cost estimates — and Phase 6
-release packaging are not started) and
-[docs/code-review-phase-4-plan.md](docs/code-review-phase-4-plan.md) for the current
-acceptance status: an external review found real defects in the Phase 0–4 implementation,
-and that plan tracks their remediation to completion.
-
-## Requirements
-
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (to build; published
-  binaries are self-contained and need no runtime)
-- [Node.js](https://nodejs.org/) (only to build the embedded frontend for `dotnet
-  publish` — an ordinary `dotnet build`/`dotnet test` never needs npm)
+<!-- Human release asset: add docs/assets/compare.gif before publishing v0.1.0. -->
+<!-- Human release asset: add docs/assets/main-ui.png before publishing v0.1.0. -->
 
 ## Quickstart
 
-Run Vessel (first run creates `vessel.json` with a default Ollama backend):
+1. Download the archive for your OS from [Releases](https://github.com/spenceclark/Vessel/releases), extract it, and run `vessel` (or `vessel.exe`). A first run creates the config and opens `http://127.0.0.1:4550/vessel/`.
+2. Point a client at Vessel. Your first request appearing in the UI means it worked.
 
 ```bash
-dotnet run --project src/Vessel
-```
-
-```text
-Vessel listening on http://127.0.0.1:4550  ->  default backend: ollama (http://localhost:11434)
-Point your client at http://127.0.0.1:4550 - UI at http://127.0.0.1:4550/vessel/
-```
-
-Then point any client at it:
-
-```bash
-# Ollama CLI — literal drop-in
+# Ollama CLI
 OLLAMA_HOST=127.0.0.1:4550 ollama run llama3.2
 
-# OpenAI SDK against local Ollama
-# base_url = "http://127.0.0.1:4550/v1"
+# OpenAI SDK — use base_url="http://127.0.0.1:4550/b/openai/v1"
+# Anthropic SDK — use base_url="http://127.0.0.1:4550/b/anthropic"
 
-# OpenAI SDK against live OpenAI (add an "openai" backend to vessel.json first)
-# base_url = "http://127.0.0.1:4550/b/openai/v1"
-
-# curl, streamed
-curl -N http://127.0.0.1:4550/api/chat -d '{"model":"llama3.2","messages":[{"role":"user","content":"hi"}],"stream":true}'
+# curl (Ollama-native)
+curl http://127.0.0.1:4550/api/chat -d '{"model":"llama3.2","messages":[{"role":"user","content":"hello"}],"stream":false}'
 ```
 
-Open `http://127.0.0.1:4550/vessel/` to browse captured traffic: search, filter by
-backend/model/tag/status, inspect a rendered message view per request, and edit config
-live.
+Vessel is a **foreground process**: its terminal is Vessel, so closing the terminal
+stops capture. For always-on use, use your OS’s normal mechanism (Task Scheduler,
+systemd, or launchd).
 
-A custom config path:
+Unsigned first-run note: macOS may require right-click → Open or
+`xattr -d com.apple.quarantine vessel`; Windows may show SmartScreen, where **More info**
+then **Run anyway** is needed. Signing/notarization is intentionally deferred.
+
+## Features
+
+- Captures and searches OpenAI Chat/Responses, Anthropic Messages, Ollama, and unknown
+  traffic; live history, sessions/tags, filters, health, warnings, and themes.
+- Replay and Compare direct replay pairs. Same wire format only in v0.1: OpenAI-compatible
+  backends compare broadly; cross-provider transformations are deliberately not performed.
+- Copy as curl and a read-only MCP endpoint (`/vessel/mcp`) for searches, request detail,
+  stats, and sessions from your own AI tools.
+
+## Routing and tags
+
+Route any request to any configured backend — per request, with no client
+reconfiguration. Any OpenAI-compatible server (LM Studio, llama.cpp, vLLM, …) is just
+a backend entry away:
 
 ```bash
-dotnet run --project src/Vessel -- --config path/to/vessel.json
+# by path — works with any client that can set a base URL
+base_url = "http://127.0.0.1:4550/b/lmstudio/v1"
+
+# by header — for your own code
+curl http://127.0.0.1:4550/api/chat -H "X-Vessel-Backend: ollama" -d '...'
 ```
+
+Tag requests to attribute traffic — for example, one tag per agent in a multi-agent
+app — then filter, search, and compare by tag in the UI:
+
+```bash
+curl http://127.0.0.1:4550/api/chat -H "X-Vessel-Tags: DungeonMaster,run-42" -d '...'
+# or the path form, for header-less clients:  /t/DungeonMaster/api/chat
+```
+
+Both compose: `/b/ollama/t/planner/api/chat`. Routing precedence is `/b/{backend}/…`,
+then `X-Vessel-Backend`, then the default backend. Vessel strips its own `X-Vessel-*`
+headers before forwarding — backends never see them.
+
+## Query your traffic from AI tools (MCP)
+
+Vessel serves a read-only [MCP](https://modelcontextprotocol.io) endpoint, so tools
+like Claude Code can search and inspect your captured traffic — "why did my planner
+agent stall this afternoon?" answered by the agent querying Vessel directly:
+
+```bash
+claude mcp add --transport http --scope user vessel http://127.0.0.1:4550/vessel/mcp
+```
+
+`--scope user` makes it available in every project (omit it to register for the
+current folder only). The endpoint exposes search, request detail, stats, and
+sessions — read-only, and any MCP client you connect can read your captured prompts.
+Disable it with `mcp.enabled: false`.
+
+## Container / compose
+
+For Docker users, the shipped [`compose.yaml`](compose.yaml) is the canonical setup:
+
+```bash
+docker compose up -d
+```
+
+It runs `ghcr.io/spenceclark/vessel`, persists state in `vessel-data`, and assumes Ollama
+runs on the host. In Open WebUI, set `OLLAMA_BASE_URL=http://vessel:4550` when Open WebUI
+runs in the same compose stack (use `http://localhost:4550` from a host-side Open WebUI);
+the path is Open WebUI → Vessel → Ollama. For bare Docker, `host.docker.internal` is the
+default backend host name (and is supplied by the compose file’s `host-gateway` mapping).
+
+To run Ollama in the same compose stack, uncomment the commented service in
+`compose.yaml`, then change Vessel’s backend `baseUrl` to `http://ollama:11434`.
 
 ## Configuration
 
-`vessel.json` lives next to the executable (or wherever `--config` points), and is also
-editable live from the UI's gear icon (backends/retention/capture/warnings apply
-immediately for new requests; `listen` needs a restart, and the panel shows that state):
+`--config <path>` always wins. Otherwise, an existing `vessel.json` beside the executable
+selects portable mode; a fresh download creates one under `%LOCALAPPDATA%\vessel-proxy`
+(Windows), `~/.config/vessel-proxy` (Linux/XDG), or
+`~/Library/Application Support/vessel-proxy` (macOS). `vessel.db` lives alongside it.
+`vessel --help` prints the resolved paths.
 
-```jsonc
+<!-- config-fields: backends.authEnv backends.baseUrl backends.injectStreamUsage backends.type capture.maxBodyMb defaultBackend listen mcp.enabled retention.maxDbSizeMb retention.maxRequests timeouts.activitySeconds warnings.slowTtftMs -->
+
+| Field | Meaning |
+| --- | --- |
+| `listen` | `host:port`; defaults to `127.0.0.1:4550` (or `0.0.0.0:4550` in a container). |
+| `defaultBackend` | Backend name used when no route selector is supplied. |
+| `backends.<name>.baseUrl` | Required HTTP(S) backend URL. |
+| `backends.<name>.type` | `ollama`, `openai`, `anthropic`, or `auto`; informs parsing and replay. |
+| `backends.<name>.injectStreamUsage` | For OpenAI backends, request exact streamed usage; off by default. |
+| `backends.<name>.authEnv` | Optional process environment variable used only for replay credentials. |
+| `timeouts.activitySeconds` | Maximum no-byte-movement interval (default `1800`). |
+| `retention.maxRequests` / `retention.maxDbSizeMb` | Local history caps (defaults `10000` / `500`). |
+| `capture.maxBodyMb` | Per-body capture cap (default `32`); forwarding is never truncated. |
+| `warnings.slowTtftMs` | Slow-TTFT threshold; `0` disables it. |
+| `mcp.enabled` | Enables the read-only MCP endpoint (default `true`). |
+
+Example:
+
+```json
 {
   "listen": "127.0.0.1:4550",
   "defaultBackend": "ollama",
   "backends": {
-    "ollama":    { "baseUrl": "http://localhost:11434",    "type": "ollama" },
-    "lmstudio":  { "baseUrl": "http://localhost:1234",     "type": "openai" },
-    "openai":    { "baseUrl": "https://api.openai.com",    "type": "openai", "injectStreamUsage": false },
-    "anthropic": { "baseUrl": "https://api.anthropic.com", "type": "anthropic" }
-  },
-  "timeouts": { "activitySeconds": 1800 },
-  "retention": { "maxRequests": 10000, "maxDbSizeMb": 500 },
-  "capture": { "maxBodyMb": 32 },
-  "warnings": { "slowTtftMs": 5000 }
+    "ollama": { "baseUrl": "http://localhost:11434", "type": "ollama" },
+    "openai": { "baseUrl": "https://api.openai.com", "type": "openai", "authEnv": "OPENAI_API_KEY" }
+  }
 }
 ```
 
-## Routing
+## Replay auth
 
-Requests are routed in this precedence order:
+Vessel never stores keys. Replay reads the credential from the environment of the Vessel
+process: `OPENAI_API_KEY` for OpenAI, `ANTHROPIC_API_KEY` for Anthropic, or the backend’s
+`authEnv` name for another compatible backend.
 
-1. **Path prefix** — `/b/{backend}/…` (stripped before forwarding), e.g.
-   `http://127.0.0.1:4550/b/openai/v1/chat/completions`. For clients that can only set
-   a base URL.
-2. **Header** — `X-Vessel-Backend: {backend}`. For your own code, where the base URL
-   stays clean.
-3. **Default backend** — everything else. This makes Vessel a drop-in Ollama endpoint.
+## Privacy and data
 
-Free-form tags for later filtering: `X-Vessel-Tags: planner,run42` or a `/t/{tags}/…`
-path prefix, composable with `/b/`: `/b/ollama/t/planner/api/chat`. Tags show up on
-every captured row and are filterable from the UI.
+Requests are forwarded **byte-for-byte** — Vessel never modifies traffic beyond
+stripping its own `X-Vessel-*` control headers (the opt-in `injectStreamUsage` is the
+single documented exception). Vessel’s own per-request overhead is measured and shown
+on every request in the UI — typically around a millisecond.
 
-Everything Vessel-owned lives under `/vessel/` and is never proxied:
+`vessel.db` contains your prompts and responses, stored locally with compressed bodies.
+Authorization headers are redacted at rest, and Vessel never stores API keys anywhere.
+Vessel binds localhost by default; if you bind a non-loopback address, the UI and
+startup log warn that people on the network may read captured prompts (and access MCP
+when enabled). Keep retention caps appropriate, and use the UI’s Data panel to clear
+history. To remove Vessel completely: delete the executable and the `vessel-proxy`
+data folder — there is nothing else.
 
-```bash
-curl http://127.0.0.1:4550/vessel/api/status
-```
+## Building from source
 
-The API surface (all under `/vessel/api/`): `status`, `requests` (list/filter/paginate,
-detail by id, delete/clear), `requests/facets`, `stats`, `sessions`, `config`
-(`GET`/`PUT`, live-apply), `events` (SSE lifecycle stream for the UI's live rows).
-Control-plane requests are subject to a Host allowlist (loopback or the configured
-`listen` address) and a same-origin check on mutating calls — closing a browser-origin
-gap, not a login system; see [docs/architecture.md](docs/architecture.md) §8.
-
-Errors generated by Vessel itself (as opposed to proxied backend errors) carry an
-`X-Vessel-Error` header and a JSON body with `"source": "vessel"` — `unknown_backend`
-(404, lists valid names), `upstream_unreachable` (502), `upstream_timeout` (504), among
-others.
-
-## What gets captured
-
-Every request/response — including streamed ones — is parsed (for the OpenAI chat and
-Responses APIs, Anthropic messages, and Ollama's native `/api/chat`/`/api/generate`;
-anything else is still captured, just as raw bytes), timed, and stored: model, token
-counts, tok/s, stop reason, warnings (truncated response, slow TTFT, cold model load,
-estimated tokens, and more), and the full request/response bodies. Traffic your adapter
-doesn't recognize is proxied and captured unmodified rather than rejected.
-
-## Development
+Requires .NET 10 and Node.js.
 
 ```bash
-# Build (backend only — no npm needed)
 dotnet build Vessel.sln
-```
-
-```bash
-# Run all backend tests
-dotnet test
-```
-
-```bash
-# Run the frontend dev server (proxies /vessel/api to a locally running Vessel instance)
-cd frontend && npm install && npm run dev
-```
-
-```bash
-# Frontend unit/component tests
-cd frontend && npm test
-```
-
-```bash
-# Byte-identical verification against a real Ollama (start Vessel first)
-powershell -File verify/verify.ps1 -Model llama3.2
-```
-
-```bash
-# Single-file publish smoke test (win-x64) — publishes from a clean, tracked-files-only
-# copy (not the working tree) so a stale frontend/dist can't mask a broken build order
-powershell -File verify/publish-smoke.ps1
-```
-
-Self-contained single-file publish (builds the embedded frontend as part of publishing):
-
-```bash
+dotnet test Vessel.sln
+cd frontend && npm ci && npm test && npm run build && npm run lint
 dotnet publish src/Vessel -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
 ```
 
-## Docs
-
-- [docs/brief.md](docs/brief.md) — what and why
-- [docs/architecture.md](docs/architecture.md) — technical design (design authority)
-- [docs/ui-spec.md](docs/ui-spec.md) — UI design system and component rules
-- [docs/plan.md](docs/plan.md) — phased delivery plan
-- `docs/phase-{0,1,2,3,4}.md` — per-phase specs, each with a matching `-report.md`
-- [docs/code-review-phase-4-plan.md](docs/code-review-phase-4-plan.md) — current
-  acceptance status: an external review's findings and their remediation
-
-## Privacy note
-
-Vessel binds to `127.0.0.1` by default and holds no API keys — auth headers pass
-through untouched (though `Authorization`/`x-api-key`/`cookie`/etc. are redacted before
-the *stored* copy, so a leaked `vessel.db` doesn't leak your keys). Captured traffic —
-including full prompts and responses — is stored in a local `vessel.db`; treat that file
-accordingly. The UI itself never makes a network request when rendering captured
-content (an embedded image renders from its own captured bytes; a URL-sourced image or
-a link shows as inert text, never fetched or navigated).
+See [`docs/brief.md`](docs/brief.md) for the product overview,
+[`docs/architecture.md`](docs/architecture.md) for the design, and
+[`CONTRIBUTING.md`](CONTRIBUTING.md) to get involved. Vessel is licensed under
+[MIT](LICENSE).

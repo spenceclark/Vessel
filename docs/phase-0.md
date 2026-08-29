@@ -119,9 +119,11 @@ listening) and are logged at Debug only.
 Plain `System.Text.Json` (source-generated context — required for trimming anyway), not
 `IConfiguration` binding. Load once at startup; hot-reload is a later phase. Unknown
 JSON properties are **preserved on save** (`JsonExtensionData`) so a Phase-0 binary
-doesn't destroy Phase-4 settings. Config path: `vessel.json` next to the executable,
-overridable with `--config <path>`. Malformed config → print error and exit non-zero
-(never silently fall back to defaults over a typo).
+doesn't destroy Phase-4 settings. Config path: `--config <path>` first; otherwise an
+existing `vessel.json` next to the executable selects portable mode; otherwise Vessel
+creates the platform `vessel-proxy` config directory on first run. This Phase 6 update
+supersedes the original beside-the-exe-only rule. Malformed config → print error and exit
+non-zero (never silently fall back to defaults over a typo).
 
 First run (file absent): write the default config (Ollama backend, §9 of architecture.md)
 and print:

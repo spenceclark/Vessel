@@ -325,3 +325,18 @@ human-assisted by nature (item 3 needs a fresh machine with Ollama and a real
 download; item 6 needs the author's live keys) — performed by or with the author
 and recorded. Item 7's human steps checklist handed to the author. plan.md Phase 6
 ticked; deviations recorded here.
+
+## 6. Implementation record (2026-08-29)
+
+- D1 shipped trimmed: `verify/publish-smoke.ps1 -Trimmed -InPlace` passed its status,
+  proxy, embedded-UI, and Phase 5b MCP-initialize checks at 24.6 MB on win-x64. The MCP
+  SDK assemblies are rooted through `Mcp/ILLink.Descriptors.xml`; no untrimmed fallback.
+- D2/D3 ship all four artifacts, per-native-runner smoke jobs, checksums, GHCR publishing,
+  and a draft release. The first GitHub validation must run `Release` via
+  `workflow_dispatch` from the release commit and confirm win-x64, linux-x64, osx-arm64,
+  osx-x64, and container-smoke all pass; workflow dispatch deliberately does not publish.
+- D9 uses the more specific Cloudflare Pages instruction rather than the earlier "GitHub
+  Pages" wording: `site/` is static with no build/deploy workflow. Compare GIF and UI
+  screenshot remain author-recorded release assets; no synthetic media was substituted.
+- D10 builds linux/amd64 and linux/arm64 through Buildx/QEMU. The release container gate
+  verifies status, a proxy stub, `/data` persistence, restart, and the shipped compose file.

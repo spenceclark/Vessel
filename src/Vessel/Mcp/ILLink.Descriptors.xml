@@ -1,0 +1,4 @@
+<linker>
+  <assembly fullname="ModelContextProtocol" preserve="all" />
+  <assembly fullname="ModelContextProtocol.AspNetCore" preserve="all" />
+</linker>

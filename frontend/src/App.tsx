@@ -5,6 +5,7 @@ import { REQUEST_DETAIL_QUERY_ROOT } from '@/api/queryKeys'
 import { EMPTY_FILTERS, type RequestDetail, type RequestFilters, type SessionScope } from '@/api/types'
 import { useLiveHistory } from '@/api/useLiveHistory'
 import { CaptureHealthBanner } from '@/components/CaptureHealthBanner'
+import { BindAddressBanner } from '@/components/BindAddressBanner'
 import { StatsBar } from '@/components/StatsBar'
 import { FilterBar } from '@/components/FilterBar'
 import { RequestList } from '@/components/RequestList'
@@ -38,6 +39,7 @@ export default function App() {
     if (currentSessionId !== null) return
     const newest = sessionsQuery.data?.[0]
     if (newest) {
+      // oxlint-disable-next-line react/set-state-in-effect -- this synchronizes the initial server-owned session into local view state exactly once.
       setCurrentSessionId(newest.id)
       setScope(newest.id)
     }
@@ -98,6 +100,7 @@ export default function App() {
     <div className="h-screen overflow-hidden bg-canvas">
       <div className="mx-auto flex h-full max-w-[1600px] flex-col gap-3 p-4 lg:p-6">
         <CaptureHealthBanner />
+        <BindAddressBanner />
         <StatsBar
           scope={scope}
           currentSessionId={currentSessionId}

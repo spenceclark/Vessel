@@ -29,7 +29,10 @@ export function ConfigPanel() {
   const [renameError, setRenameError] = useState<{ backend: string; message: string } | null>(null)
 
   useEffect(() => {
-    if (configQuery.data && draft === null) setDraft(configQuery.data.config)
+    if (configQuery.data && draft === null) {
+      // oxlint-disable-next-line react/set-state-in-effect -- initializes the editable draft once from the async persisted config.
+      setDraft(configQuery.data.config)
+    }
   }, [configQuery.data, draft])
 
   if (configQuery.isError && !draft) {
@@ -257,6 +260,7 @@ function BackendRow({
   onRemove: () => void
 }) {
   const [nameDraft, setNameDraft] = useState(name)
+  // oxlint-disable-next-line react/set-state-in-effect -- a backend rename from the parent must replace this row's local text draft.
   useEffect(() => setNameDraft(name), [name])
 
   return (
