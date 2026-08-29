@@ -26,7 +26,8 @@ namespace Vessel.Capture;
 public sealed class CaptureWriterService(
     CaptureChannel channel, ICaptureStore store, FormatEnricher enricher,
     CaptureEvents events, CurrentSession currentSession,
-    ILogger<CaptureWriterService> logger) : IHostedService
+    ILogger<CaptureWriterService> logger,
+    BackendHealthTracker backendHealthTracker) : IHostedService
 {
     public const int MaxBatchSize = 64;
 
@@ -41,6 +42,7 @@ public sealed class CaptureWriterService(
     public Task StartAsync(CancellationToken cancellationToken)
     {
         store.Initialize();
+        backendHealthTracker.Seed();
         currentSession.Set(store.EnsureInitialSession().Id);
         _loop = Task.Run(RunAsync, CancellationToken.None);
         return Task.CompletedTask;
@@ -345,7 +347,7 @@ public sealed class CaptureWriterService(
             StatusCode: record.StatusCode,
             Error: record.Error,
             Streamed: record.Streamed,
-            ReplayOf: null,
+            ReplayOf: record.ReplayOf,
             DurationMs: record.DurationMs,
             TtftMs: record.TtftMs,
             VesselOverheadMs: record.VesselOverheadMs,

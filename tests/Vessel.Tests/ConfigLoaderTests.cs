@@ -24,6 +24,8 @@ public class ConfigLoaderTests : IDisposable
         Assert.Equal("127.0.0.1:4550", config.Listen);
         Assert.Equal("ollama", config.DefaultBackend);
         Assert.Equal("http://localhost:11434", config.Backends["ollama"].BaseUrl);
+        Assert.Equal("ollama", config.Backends["ollama"].Type);
+        Assert.Equal(["ollama"], config.Backends.Keys);
         Assert.Equal(1800, config.Timeouts.ActivitySeconds);
         Assert.Equal(10_000, config.Retention.MaxRequests);
         Assert.Equal(500, config.Retention.MaxDbSizeMb);

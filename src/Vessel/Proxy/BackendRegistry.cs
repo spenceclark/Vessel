@@ -3,7 +3,8 @@ using Vessel.Config;
 namespace Vessel.Proxy;
 
 /// <summary>A configured backend with its name resolved and base URL normalized.</summary>
-public sealed record ResolvedBackend(string Name, string BaseUrl, string Type, bool IsDefault, bool InjectStreamUsage);
+public sealed record ResolvedBackend(
+    string Name, string BaseUrl, string Type, bool IsDefault, bool InjectStreamUsage, string? AuthEnv);
 
 /// <summary>
 /// R02 — the backends of exactly one <see cref="ConfigSnapshot"/>, resolved together. The
@@ -126,7 +127,7 @@ public sealed class BackendRegistry
         {
             bool isDefault = string.Equals(name, config.DefaultBackend, StringComparison.OrdinalIgnoreCase);
             byName[name] = new ResolvedBackend(
-                name, backend.BaseUrl.TrimEnd('/'), backend.Type, isDefault, backend.InjectStreamUsage);
+                name, backend.BaseUrl.TrimEnd('/'), backend.Type, isDefault, backend.InjectStreamUsage, backend.AuthEnv);
         }
 
         return new BackendSet(snapshot, byName, byName.Values.Single(b => b.IsDefault));

@@ -356,7 +356,7 @@ Everything Vessel-owned lives under `/vessel/` (impossible to collide with `/v1/
 | `GET /vessel/api/requests` | paged list; filters: text (FTS), backend, model, tag, status, format, session, has-warning |
 | `GET /vessel/api/requests/{id}` | full detail, bodies decompressed |
 | `POST /vessel/api/requests/{id}/replay` | re-send captured request; body may override `backend` and/or `model`; result is a new request row with `replay_of` set |
-| `GET /vessel/api/requests/{id}/curl` | request as a copy-pasteable curl command |
+| `GET /vessel/api/requests/{id}/replays` | direct replay children, for Compare entry points |
 | `GET /vessel/api/sessions` · `POST /vessel/api/sessions` | list / reset (create marker) |
 | `GET /vessel/api/stats?session=` | totals, failures, avg latency / tok/s / ttft, token totals in/out/cached (accepted scope, post-Phase-4 addition — phase-3.md D3) |
 | `GET /vessel/api/events` | SSE lifecycle feed: `hello`, `started`, `request_ready`, `first_token`, `completed`, `cleared` (§4.4) |
@@ -364,9 +364,15 @@ Everything Vessel-owned lives under `/vessel/` (impossible to collide with `/v1/
 | `GET/PUT /vessel/api/config` | backends, retention, ports, redaction — persisted to `vessel.json` |
 | `GET /vessel/api/ollama/ps` | (Ollama backends) proxied `ollama ps` — loaded models, memory |
 
-Replay uses stored redacted headers **minus** auth (§8); auth is re-attached only from a
-live pass-through toggle the user sets per-backend, or the replay is sent without auth
-(fine for local backends, which is the primary replay use case).
+Replay is an internal request to Vessel's own `/b/{backend}/…` route, so it follows the
+normal proxy/capture pipeline. It sends only Content-Type, optional Accept, Vessel control
+headers and target auth — never stored headers. Local no-auth targets omit auth. Remote
+OpenAI-style targets use `Authorization: Bearer $OPENAI_API_KEY`; Anthropic targets use
+`x-api-key: $ANTHROPIC_API_KEY` plus `anthropic-version`. An optional per-backend `authEnv`
+names a different process environment variable; no secret is stored in config or the database.
+Copy-as-curl is generated client-side from the detail payload and targets Vessel, with the
+same environment-variable placeholders. There is deliberately no server-side curl endpoint;
+`GET /vessel/api/requests/{id}/replays` is the only Phase 5 request-child read route.
 
 ---
 
@@ -416,14 +422,40 @@ editable in the UI:
   "backends": {
     "ollama":    { "baseUrl": "http://localhost:11434", "type": "ollama" },
     "lmstudio":  { "baseUrl": "http://localhost:1234",  "type": "openai" },
-    "openai":    { "baseUrl": "https://api.openai.com", "type": "openai", "injectStreamUsage": false },
-    "anthropic": { "baseUrl": "https://api.anthropic.com", "type": "anthropic" }
+    "unsloth":   { "baseUrl": "http://localhost:8888",  "type": "openai" },
+    "llamacpp":  { "baseUrl": "http://localhost:8080",  "type": "openai" },
+    "vllm":      { "baseUrl": "http://localhost:8000",  "type": "openai" },
+    "lemonade":  { "baseUrl": "http://localhost:13305", "type": "openai" },
+    "openai":    { "baseUrl": "https://api.openai.com", "type": "openai", "authEnv": "OPENAI_API_KEY" },
+    "anthropic": { "baseUrl": "https://api.anthropic.com", "type": "anthropic", "authEnv": "ANTHROPIC_API_KEY" },
+    "gemini":    { "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "type": "openai", "authEnv": "GEMINI_API_KEY" }
   },
   "retention": { "maxRequests": 10000, "maxDbSizeMb": 500 },
   "capture":   { "maxBodyMb": 32 },
   "pricing":   {}   // optional per-model {in, out} $/Mtok overrides for cost estimates
 }
 ```
+
+New configs include every backend above and retain Ollama as the default. `type: openai`
+means OpenAI-compatible wire format, not OpenAI-hosted. Unsloth Desktop requires an API
+key created in its UI, but does not define an environment-variable name for it; configure
+`authEnv` yourself if Vessel should re-attach that key for replay. LM Studio, llama.cpp,
+vLLM, and Lemonade are unauthenticated by default; each can be configured to require a key
+by its own server settings. Gemini's OpenAI compatibility endpoint uses Bearer
+`GEMINI_API_KEY` (Google also supports `GOOGLE_API_KEY`, which takes precedence in its own
+SDKs).
+
+| Backend | Default endpoint | Wire format | Authentication at default | Auth environment variable when enabled/required |
+| --- | --- | --- | --- | --- |
+| Ollama | `http://localhost:11434` | Ollama native | none | — |
+| LM Studio | `http://localhost:1234` | OpenAI-compatible | none | `LM_API_TOKEN` if API-token auth is enabled |
+| Unsloth Desktop | `http://localhost:8888` | OpenAI-compatible | required | none; create the key in Unsloth Desktop and choose an `authEnv` name in Vessel if replay needs it |
+| llama.cpp `llama-server` | `http://localhost:8080` | OpenAI-compatible | none | `LLAMA_ARG_API_KEY` if API-key auth is enabled |
+| vLLM | `http://localhost:8000` | OpenAI-compatible | none | `VLLM_API_KEY` if API-key auth is enabled |
+| Lemonade | `http://localhost:13305` | OpenAI-compatible | none | `LEMONADE_API_KEY` if API-key auth is enabled |
+| OpenAI | `https://api.openai.com` (443) | OpenAI | required | `OPENAI_API_KEY` |
+| Anthropic | `https://api.anthropic.com` (443) | Anthropic Messages | required | `ANTHROPIC_API_KEY` |
+| Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` (443) | OpenAI-compatible | required | `GEMINI_API_KEY` (`GOOGLE_API_KEY` also supported) |
 
 ### 9.1 Live apply (Phase 4)
 

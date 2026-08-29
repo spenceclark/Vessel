@@ -87,7 +87,6 @@ export function Dialog({
     <div
       className="dialog-fade fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       role="presentation"
-      onClick={onClose}
     >
       <div
         ref={containerRef}
@@ -98,7 +97,6 @@ export function Dialog({
           'flex max-h-[85vh] flex-col rounded-panel border border-border bg-surface shadow-dialog',
           widthClassName ?? 'w-[420px]',
         )}
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2.5">
           <h2 id="dialog-title" className="text-lg font-medium text-text">
@@ -144,7 +142,6 @@ export function ConfirmDialog({
     <div
       className="dialog-fade fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       role="presentation"
-      onClick={onCancel}
     >
       <div
         ref={containerRef}
@@ -152,7 +149,6 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-labelledby="confirm-dialog-title"
         className="w-80 rounded-panel border border-border bg-surface p-4 shadow-dialog"
-        onClick={(e) => e.stopPropagation()}
       >
         <h2 id="confirm-dialog-title" className="text-lg font-medium text-text">
           {title}

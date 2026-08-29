@@ -119,7 +119,7 @@ client changes." Replay and diff share machinery and UI; they ship together. Thi
 deliberately the whole phase — everything else moved to 7/8 so the launch (Phase 6)
 happens behind a tight, demoable story rather than after a long feature tail.*
 
-- [ ] **Replay** (§7): re-send with optional backend/model override; `replay_of` link both
+- [x] **Replay** (§7): re-send with optional backend/model override; `replay_of` link both
       directions in the UI; **Copy as curl**. *The killer feature — do it first.*
       Decisions pre-agreed for the phase spec:
       - **Same wire format only in v1** — replay to any backend speaking the captured
@@ -137,7 +137,7 @@ happens behind a tight, demoable story rather than after a long feature tail.*
         follows backend type: `Authorization: Bearer` for openai-type,
         **`x-api-key` (+ `anthropic-version`) for anthropic-type — not Bearer**.
         Missing env var → replay dialog says which variable to set; no paste-and-store.
-- [ ] **Compare** (narrowed from "Diff" by decision): renders a **`replay_of` pair
+- [x] **Compare** (narrowed from "Diff" by decision): renders a **`replay_of` pair
       only** — original vs its replay, side-by-side responses + metric deltas +
       param diff. Not an arbitrary two-row picker; no inline word-diff (two sampled
       generations differ everywhere — the diff would render noise as signal).
@@ -183,12 +183,13 @@ observe-and-compare, and everything in Phases 7–8 gets better with real users'
 
 - [ ] Self-contained single-file publish for win-x64, linux-x64, osx-arm64, osx-x64;
       trimming warnings resolved (§11).
-- [ ] First-run experience: no config → creates Ollama default, prints the two-line
-      "point your client here" instructions.
+- [ ] First-run experience: no config → creates the Ollama-only default (reconfirmed by
+      Phase 5 PD1), then prints the two-line "point your client here" instructions.
 - [ ] README: what/why, 30-second quickstart per client (Ollama CLI, OpenAI SDK, Aider,
       Cline), screenshots, the "vessel.db contains your prompts" privacy note (§8),
       replay-auth env-var conventions.
-- [ ] MIT license, CI (build + tests + publish artifacts per RID), versioned releases.
+- [ ] MIT license, CI (backend tests already run on `ubuntu-latest` + `windows-latest`
+      per Phase 5 PD4; add build + publish artifacts per RID), versioned releases.
 - [ ] Pre-release pass: bind-address banner (§8), error messages, empty states.
 
 **Done when:** a stranger with Ollama installed goes from download to seeing their first
@@ -214,6 +215,15 @@ live here.*
 - [ ] **Cost estimates**: static pricing table + `pricing` config overrides, `~$0.0042`
       on Overview and session totals; clearly labeled estimate (§9). (Only matters to
       live-API users — let post-launch demand prioritize it.)
+- [ ] **Replay dialect fix-ups**: a tiny, documented table of known *intra*-format
+      param renames applied when composing a replay for a target that requires them —
+      canonical entry: `max_tokens → max_completion_tokens` for openai-type targets
+      (reasoning-era models reject the old name; observed live). Principled because
+      forward-as-is does not bind replay — replay is a request Vessel composes (it
+      already rewrites `model`). **Transparency required:** every applied fix-up
+      appears in Compare's param-diff as `max_tokens → max_completion_tokens (auto)`.
+      List stays minimal and mechanical; anything needing judgment (sampler
+      semantics, `num_predict` mapping) belongs to Phase 8's transformers.
 - [ ] **Tool-call fumble detection**: new warning `tool_call_in_text` — the request
       defined tools but the response carries tool-call-shaped JSON in its *text*
       content with no structured `tool_calls`/`tool_use`. Detection only, in the

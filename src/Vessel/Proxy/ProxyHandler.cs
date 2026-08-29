@@ -20,6 +20,7 @@ public sealed class ProxyHandler
     private readonly BackendRegistry _registry;
     private readonly CaptureChannel _captureChannel;
     private readonly CaptureEvents _captureEvents;
+    private readonly BackendHealthTracker _backendHealthTracker;
     private readonly RequestModelSnifferService _modelSniffer;
     private readonly CurrentSession _currentSession;
     private readonly ConfigStore _configStore;
@@ -28,13 +29,15 @@ public sealed class ProxyHandler
 
     public ProxyHandler(
         IHttpForwarder forwarder, BackendRegistry registry, CaptureChannel captureChannel,
-        CaptureEvents captureEvents, RequestModelSnifferService modelSniffer, CurrentSession currentSession,
+        CaptureEvents captureEvents, BackendHealthTracker backendHealthTracker,
+        RequestModelSnifferService modelSniffer, CurrentSession currentSession,
         ConfigStore configStore, ILogger<ProxyHandler> logger)
     {
         _forwarder = forwarder;
         _registry = registry;
         _captureChannel = captureChannel;
         _captureEvents = captureEvents;
+        _backendHealthTracker = backendHealthTracker;
         _modelSniffer = modelSniffer;
         _currentSession = currentSession;
         _configStore = configStore;
@@ -85,10 +88,12 @@ public sealed class ProxyHandler
 
         // D5 — as early as backend/tags are known, before any forwarding work begins. This
         // allocates the seq *and* registers it as in-flight in one step (I0b(1)).
+        long? replayOf = TryParseReplayOf(context.Request.Headers);
+        capture.SetReplayOf(replayOf);
         capture.Register(
             context.Request.Method,
             decision.ForwardPath.Value + context.Request.QueryString.Value,
-            decision.Backend?.Name ?? decision.RequestedName ?? "", decision.Tags);
+            decision.Backend?.Name ?? decision.RequestedName ?? "", decision.Tags, replayOf);
 
         // R26/I1 — everything after registration runs inside the guarded span, so "registered →
         // terminal" holds for *every* exit. Request preparation used to sit above this try: with
@@ -153,7 +158,9 @@ public sealed class ProxyHandler
             // seq would leak in the active set and the viewer would show it as forever-running.
             // Complete it here so every registered request reaches a terminal transition,
             // regardless of capture health — forwarding already succeeded either way.
-            if (!_captureChannel.Enqueue(capture.BuildRecord(context, decision)))
+            CaptureRecord record = capture.BuildRecord(context, decision);
+            _backendHealthTracker.Observe(record);
+            if (!_captureChannel.Enqueue(record))
             {
                 _captureEvents.Completed(capture.Seq, null);
             }
@@ -178,6 +185,11 @@ public sealed class ProxyHandler
     }
 
     private const string ChatCompletionsSuffix = "/chat/completions";
+
+    public const string ReplayHeader = "X-Vessel-Replay-Of";
+
+    private static long? TryParseReplayOf(IHeaderDictionary headers) =>
+        long.TryParse(headers[ReplayHeader].FirstOrDefault(), out long replayOf) && replayOf > 0 ? replayOf : null;
 
     /// <summary>
     /// Installs the request-body tee. For an injectStreamUsage-eligible backend (D11), the
@@ -313,7 +325,7 @@ public sealed class ProxyHandler
         switch (error)
         {
             case ForwarderError.RequestTimedOut:
-                capture.Error = VesselErrors.UpstreamTimeout;
+                capture.Error = error.ToString();
                 // R08 — what lands in the response buffer from here on is Vessel's, not the
                 // backend's; enrichment must not read it as a completion.
                 capture.ResponseAuthoredByVessel = true;
@@ -330,7 +342,7 @@ public sealed class ProxyHandler
                 break;
 
             default:
-                capture.Error = VesselErrors.UpstreamUnreachable;
+                capture.Error = error.ToString();
                 capture.ResponseAuthoredByVessel = true;
                 await VesselErrors.Write(
                     context, StatusCodes.Status502BadGateway, VesselErrors.UpstreamUnreachable,

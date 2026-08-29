@@ -65,6 +65,11 @@ export function RequestRow({
             {row.warnings.length}
           </Badge>
         )}
+        {row.replayOf != null && (
+          <Badge variant="neutral" className="ml-auto shrink-0">
+            replay #{row.replayOf}
+          </Badge>
+        )}
       </div>
     </button>
   )
@@ -124,6 +129,7 @@ export function InFlightRow({
         <Badge variant="neutral" className="shrink-0">
           {item.backend}
         </Badge>
+        {item.replayOf != null && <Badge variant="neutral">replay #{item.replayOf}</Badge>}
         {item.ttftMs != null && (
           <span className="ml-auto shrink-0 font-mono text-xs text-text-secondary">TTFT {formatMs(item.ttftMs)}</span>
         )}

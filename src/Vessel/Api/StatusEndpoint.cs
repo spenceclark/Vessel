@@ -19,6 +19,7 @@ public static class StatusEndpoint
         var registry = context.RequestServices.GetRequiredService<BackendRegistry>();
         var captureChannel = context.RequestServices.GetRequiredService<CaptureChannel>();
         var captureEvents = context.RequestServices.GetRequiredService<CaptureEvents>();
+        var backendHealthTracker = context.RequestServices.GetRequiredService<BackendHealthTracker>();
         var server = context.RequestServices.GetRequiredService<IServer>();
         string listen = server.Features.Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault() ?? "";
 
@@ -32,7 +33,8 @@ public static class StatusEndpoint
             backends.Default.Name,
             backends.All
                 .OrderBy(b => b.Name, StringComparer.OrdinalIgnoreCase)
-                .Select(b => new StatusBackend(b.Name, b.BaseUrl, b.Type, b.IsDefault))
+                .Select(b => new StatusBackend(
+                    b.Name, b.BaseUrl, b.Type, b.IsDefault, b.AuthEnv, backendHealthTracker.Get(b.Name)))
                 .ToArray(),
             new CaptureHealth(!captureChannel.IsStopped, captureChannel.StoppedReason),
             captureEvents.RunId);

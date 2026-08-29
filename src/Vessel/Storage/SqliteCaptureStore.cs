@@ -148,13 +148,13 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
             """
             INSERT INTO requests (
                 started_at, session_id, backend, tags, method, path, format, model, status_code, error,
-                streamed, duration_ms, ttft_ms, vessel_overhead_ms, tok_per_sec,
+                streamed, replay_of, duration_ms, ttft_ms, vessel_overhead_ms, tok_per_sec,
                 tokens_in, tokens_out, tokens_cached_read, tokens_cached_write, tokens_estimated,
                 stop_reason, warnings,
                 request_headers, response_headers, request_body, response_body, response_raw, truncated)
             VALUES (
                 $started_at, $session_id, $backend, $tags, $method, $path, $format, $model, $status_code, $error,
-                $streamed, $duration_ms, $ttft_ms, $vessel_overhead_ms, $tok_per_sec,
+                $streamed, $replay_of, $duration_ms, $ttft_ms, $vessel_overhead_ms, $tok_per_sec,
                 $tokens_in, $tokens_out, $tokens_cached_read, $tokens_cached_write, $tokens_estimated,
                 $stop_reason, $warnings,
                 $request_headers, $response_headers, $request_body, $response_body, $response_raw, $truncated)
@@ -180,6 +180,7 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
         SqliteParameter statusCode = Add("$status_code");
         SqliteParameter error = Add("$error");
         SqliteParameter streamed = Add("$streamed");
+        SqliteParameter replayOf = Add("$replay_of");
         SqliteParameter durationMs = Add("$duration_ms");
         SqliteParameter ttftMs = Add("$ttft_ms");
         SqliteParameter overheadMs = Add("$vessel_overhead_ms");
@@ -221,6 +222,7 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
             statusCode.Value = (object?)record.StatusCode ?? DBNull.Value;
             error.Value = (object?)record.Error ?? DBNull.Value;
             streamed.Value = record.Streamed ? 1 : 0;
+            replayOf.Value = (object?)record.ReplayOf ?? DBNull.Value;
             durationMs.Value = (object?)record.DurationMs ?? DBNull.Value;
             ttftMs.Value = (object?)record.TtftMs ?? DBNull.Value;
             overheadMs.Value = (object?)record.VesselOverheadMs ?? DBNull.Value;

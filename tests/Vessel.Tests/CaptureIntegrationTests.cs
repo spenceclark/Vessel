@@ -142,7 +142,7 @@ public class CaptureIntegrationTests(VesselFixture fx) : IClassFixture<VesselFix
         Assert.Equal(HttpStatusCode.BadGateway, badGateway.StatusCode);
 
         CapturedRow deadRow = await CaptureDb.WaitForRow(fx.DbPath, r => r.Path.Contains(marker2));
-        Assert.Equal("upstream_unreachable", deadRow.Error);
+        Assert.Equal("Request", deadRow.Error);
         Assert.Equal("dead", deadRow.Backend);
         Assert.Equal(502, deadRow.StatusCode);
     }

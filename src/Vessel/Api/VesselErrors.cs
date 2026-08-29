@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Vessel.Capture;
 
 namespace Vessel.Api;
 
@@ -18,6 +19,8 @@ public static class VesselErrors
     public const string NotFound = "not_found";
     public const string InvalidRequest = "invalid_request";
     public const string InvalidConfig = "invalid_config";
+    public const string FormatMismatch = "format_mismatch";
+    public const string MissingReplayAuth = "missing_replay_auth";
 
     /// <summary>R06 — the writer gave up; commands that need it can't be honoured (503).</summary>
     public const string CaptureStopped = "capture_stopped";
@@ -62,7 +65,13 @@ public sealed record StatusPayload(
     // H0b(1) — this process's run id, so a client can distinguish a restart from a reconnect.
     string ServerRunId);
 
-public sealed record StatusBackend(string Name, string BaseUrl, string Type, bool Default);
+public sealed record StatusBackend(
+    string Name,
+    string BaseUrl,
+    string Type,
+    bool Default,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? AuthEnv,
+    BackendHealth Health);
 
 /// <summary>
 /// R06 — whether the background writer is still recording. A give-up used to be visible

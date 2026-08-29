@@ -16,6 +16,9 @@ import { formatMs, formatTimestamp, formatTokPerSec, formatTokenCount } from '@/
 import { warningLabel, warningVariant } from '@/lib/warnings'
 import { tagVariant } from '@/lib/tags'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { ReplayDialog } from '@/components/ReplayDialog'
+import { buildCurl } from '@/lib/curl'
 
 type TabKey = 'overview' | 'request' | 'response' | 'headers'
 type ViewMode = 'rendered' | 'raw'
@@ -35,15 +38,24 @@ function isErrorStopReason(reason: string | null): boolean {
  * a toggle back to the raw-JSON view — kept exactly as-is, on every tab, regardless of
  * format.
  */
-export function DetailPane({ id }: { id: number | null }) {
+export function DetailPane({ id, onCompare }: { id: number | null; onCompare?: (originalId: number, replayId: number) => void }) {
   const [tab, setTab] = useState<TabKey>('overview')
   const [responseView, setResponseView] = useState<'reassembled' | 'raw'>('reassembled')
   const [requestDisplay, setRequestDisplay] = useState<ViewMode>('rendered')
   const [responseDisplay, setResponseDisplay] = useState<ViewMode>('rendered')
+  const [replayOpen, setReplayOpen] = useState(false)
+  const [curlCopied, setCurlCopied] = useState(false)
+  const [curlCopyError, setCurlCopyError] = useState(false)
 
   const query = useQuery({
     queryKey: requestDetailQueryKey(id ?? -1),
     queryFn: () => api.getRequest(id as number),
+    enabled: id !== null,
+  })
+  const statusQuery = useQuery({ queryKey: ['status'], queryFn: api.getStatus })
+  const replaysQuery = useQuery({
+    queryKey: ['replays', id],
+    queryFn: () => api.getReplays(id as number),
     enabled: id !== null,
   })
 
@@ -54,6 +66,9 @@ export function DetailPane({ id }: { id: number | null }) {
     setResponseView('reassembled')
     setRequestDisplay('rendered')
     setResponseDisplay('rendered')
+    setReplayOpen(false)
+    setCurlCopied(false)
+    setCurlCopyError(false)
   }, [id])
 
   if (id === null) {
@@ -85,86 +100,113 @@ export function DetailPane({ id }: { id: number | null }) {
   const responseInRawView = !responseRendered || responseDisplay === 'raw'
   const responseBodyShown =
     responseInRawView && responseView === 'raw' ? detail.responseRaw : detail.responseBody
+  const backend = statusQuery.data?.backends.find((item) => item.name === detail.backend)
+
+  async function copyCurl() {
+    if (!statusQuery.data) return
+    try {
+      await navigator.clipboard.writeText(buildCurl(detail, statusQuery.data.listen, backend))
+      setCurlCopyError(false)
+      setCurlCopied(true)
+      window.setTimeout(() => setCurlCopied(false), 1200)
+    } catch {
+      setCurlCopied(false)
+      setCurlCopyError(true)
+      window.setTimeout(() => setCurlCopyError(false), 3000)
+    }
+  }
 
   return (
-    <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-        <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="request">Request</TabsTrigger>
-          <TabsTrigger value="response">Response</TabsTrigger>
-          <TabsTrigger value="headers">Headers</TabsTrigger>
-        </TabsList>
-      </div>
+    <>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} className="flex h-full flex-col">
+        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+          <TabsList>
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="request">Request</TabsTrigger>
+            <TabsTrigger value="response">Response</TabsTrigger>
+            <TabsTrigger value="headers">Headers</TabsTrigger>
+          </TabsList>
+          <Button variant="ghost" onClick={() => setReplayOpen(true)}>Replay</Button>
+        </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <TabsContent value="overview" className="p-3">
-          <OverviewTab detail={detail} isError={isError} />
-        </TabsContent>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <TabsContent value="overview" className="p-3">
+            <OverviewTab detail={detail} isError={isError} replays={replaysQuery.data ?? []} onCompare={onCompare} />
+          </TabsContent>
 
-        <TabsContent value="request">
-          {requestRendered && <ViewModeToggle mode={requestDisplay} onChange={setRequestDisplay} />}
-          <DecodeTruncatedNotice body={detail.requestBody} />
-          {requestDisplay === 'rendered' && requestRendered ? (
-            <RenderErrorBoundary key={id} fallback={<PrettyJson body={detail.requestBody} emptyLabel="No request body" />}>
-              <MessageView view={requestRendered} />
-            </RenderErrorBoundary>
-          ) : (
-            <PrettyJson body={detail.requestBody} emptyLabel="No request body" />
-          )}
-        </TabsContent>
+          <TabsContent value="request">
+            <div className="flex justify-end border-b border-border px-2 py-1">
+              <Button variant="ghost" onClick={copyCurl} disabled={!statusQuery.data}>{curlCopied ? 'Curl copied' : 'Copy as curl'}</Button>
+            </div>
+            {requestRendered && <ViewModeToggle mode={requestDisplay} onChange={setRequestDisplay} />}
+            <DecodeTruncatedNotice body={detail.requestBody} />
+            {requestDisplay === 'rendered' && requestRendered ? (
+              <RenderErrorBoundary key={id} fallback={<PrettyJson body={detail.requestBody} emptyLabel="No request body" />}>
+                <MessageView view={requestRendered} />
+              </RenderErrorBoundary>
+            ) : (
+              <PrettyJson body={detail.requestBody} emptyLabel="No request body" />
+            )}
+          </TabsContent>
 
-        <TabsContent value="response">
-          {responseRendered && <ViewModeToggle mode={responseDisplay} onChange={setResponseDisplay} />}
-          <DecodeTruncatedNotice body={responseBodyShown} />
-          {responseDisplay === 'rendered' && responseRendered ? (
-            <RenderErrorBoundary key={id} fallback={<PrettyJson body={detail.responseBody} emptyLabel="No response body" />}>
-              <MessageView view={responseRendered} />
-            </RenderErrorBoundary>
-          ) : (
-            <>
-              {detail.streamed && detail.responseRaw && (
-                <div className="flex items-center gap-2 border-b border-border px-2 py-1 text-xs">
-                  <span className="text-text-muted">View:</span>
-                  <button
-                    type="button"
-                    onClick={() => setResponseView('reassembled')}
-                    className={cn(
-                      'rounded-control px-2 py-0.5',
-                      responseView === 'reassembled' ? 'bg-surface-2 font-medium text-text' : 'text-text-muted',
-                    )}
-                  >
-                    Reassembled
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setResponseView('raw')}
-                    className={cn(
-                      'rounded-control px-2 py-0.5',
-                      responseView === 'raw' ? 'bg-surface-2 font-medium text-text' : 'text-text-muted',
-                    )}
-                  >
-                    Raw stream
-                  </button>
-                </div>
-              )}
-              <PrettyJson body={responseBodyShown} emptyLabel="No response body" />
-            </>
-          )}
-        </TabsContent>
+          <TabsContent value="response">
+            {responseRendered && <ViewModeToggle mode={responseDisplay} onChange={setResponseDisplay} />}
+            <DecodeTruncatedNotice body={responseBodyShown} />
+            {responseDisplay === 'rendered' && responseRendered ? (
+              <RenderErrorBoundary key={id} fallback={<PrettyJson body={detail.responseBody} emptyLabel="No response body" />}>
+                <MessageView view={responseRendered} />
+              </RenderErrorBoundary>
+            ) : (
+              <>
+                {detail.streamed && detail.responseRaw && (
+                  <div className="flex items-center gap-2 border-b border-border px-2 py-1 text-xs">
+                    <span className="text-text-muted">View:</span>
+                    <button
+                      type="button"
+                      onClick={() => setResponseView('reassembled')}
+                      className={cn(
+                        'rounded-control px-2 py-0.5',
+                        responseView === 'reassembled' ? 'bg-surface-2 font-medium text-text' : 'text-text-muted',
+                      )}
+                    >
+                      Reassembled
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setResponseView('raw')}
+                      className={cn(
+                        'rounded-control px-2 py-0.5',
+                        responseView === 'raw' ? 'bg-surface-2 font-medium text-text' : 'text-text-muted',
+                      )}
+                    >
+                      Raw stream
+                    </button>
+                  </div>
+                )}
+                <PrettyJson body={responseBodyShown} emptyLabel="No response body" />
+              </>
+            )}
+          </TabsContent>
 
-        <TabsContent value="headers" className="p-3">
-          <div className="flex flex-col gap-6">
-            <HeaderTable title="Request headers" headers={detail.requestHeaders} />
-            <HeaderTable title="Response headers" headers={detail.responseHeaders} />
-          </div>
-        </TabsContent>
-      </div>
-    </Tabs>
+          <TabsContent value="headers" className="p-3">
+            <div className="flex flex-col gap-6">
+              <HeaderTable title="Request headers" headers={detail.requestHeaders} />
+              <HeaderTable title="Response headers" headers={detail.responseHeaders} />
+            </div>
+          </TabsContent>
+        </div>
+      </Tabs>
+      <ReplayDialog detail={detail} backends={statusQuery.data?.backends ?? []} open={replayOpen} onClose={() => setReplayOpen(false)} />
+      {curlCopyError && (
+        <div role="alert" className="fixed bottom-4 right-4 z-50 rounded-control border border-danger bg-surface px-3 py-2 text-sm text-danger shadow-dialog">
+          Could not copy curl. Check clipboard permissions and try again.
+        </div>
+      )}
+    </>
   )
 }
 
-function OverviewTab({ detail, isError }: { detail: import('@/api/types').RequestDetail; isError: boolean }) {
+function OverviewTab({ detail, isError, replays, onCompare }: { detail: import('@/api/types').RequestDetail; isError: boolean; replays: import('@/api/types').Summary[]; onCompare?: (originalId: number, replayId: number) => void }) {
   return (
     <div className="flex flex-col gap-4 text-sm">
       <div>
@@ -181,6 +223,20 @@ function OverviewTab({ detail, isError }: { detail: import('@/api/types').Reques
               {warningLabel(w)}
             </Badge>
           ))}
+        </div>
+      )}
+
+      {detail.replayOf != null && (
+        <div className="rounded-control bg-surface-2 p-2 text-sm">
+          Replay of <button type="button" className="font-mono text-accent hover:underline" onClick={() => onCompare?.(detail.replayOf!, detail.id)}>#{detail.replayOf}</button>
+          {onCompare && <button type="button" className="ml-2 text-accent hover:underline" onClick={() => onCompare(detail.replayOf!, detail.id)}>Compare</button>}
+        </div>
+      )}
+
+      {replays.length > 0 && (
+        <div className="rounded-control bg-surface-2 p-2 text-sm">
+          <span className="text-text-muted">Replays ({replays.length}): </span>
+          {replays.map((replay, index) => <span key={replay.id}>{index > 0 && ', '}<button type="button" className="font-mono text-accent hover:underline" onClick={() => onCompare?.(detail.id, replay.id)}>#{replay.id}</button></span>)}
         </div>
       )}
 

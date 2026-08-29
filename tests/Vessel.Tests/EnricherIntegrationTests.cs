@@ -64,7 +64,7 @@ public class EnricherIntegrationTests(VesselFixture fx) : IClassFixture<VesselFi
         CapturedRow row = await CaptureDb.WaitForRow(fx.DbPath, r => r.Path.Contains(marker));
         Assert.Equal(FormatNames.OllamaChat, row.Format);       // detected from the path
         Assert.Equal("dead-model", row.Model);                  // from the request body
-        Assert.Equal("upstream_unreachable", row.Error);
+        Assert.Equal("Request", row.Error);
         Assert.Null(row.TokensOut);                             // response side stays null
         Assert.Null(row.StopReason);
         Assert.Null(row.TokPerSec);

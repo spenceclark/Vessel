@@ -136,4 +136,19 @@ public static class RequestsEndpoints
         await JsonSerializer.SerializeAsync(
             context.Response.Body, detail, ApiJsonContext.Default.RequestDetail, context.RequestAborted);
     }
+
+    public static async Task Replays(HttpContext context)
+    {
+        if (!long.TryParse((string?)context.Request.RouteValues["id"], out long id))
+        {
+            await VesselErrors.Write(context, StatusCodes.Status404NotFound, VesselErrors.NotFound, "no such request");
+            return;
+        }
+
+        var store = context.RequestServices.GetRequiredService<SqliteReadStore>();
+        Summary[] rows = store.ListReplays(id);
+        context.Response.ContentType = "application/json; charset=utf-8";
+        await JsonSerializer.SerializeAsync(
+            context.Response.Body, rows, ApiJsonContext.Default.SummaryArray, context.RequestAborted);
+    }
 }

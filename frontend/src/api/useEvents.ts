@@ -15,6 +15,7 @@ export interface InFlightRequest {
   path: string
   backend: string
   tags: string[]
+  replayOf: number | null
   model?: string
   ttftMs?: number
 }

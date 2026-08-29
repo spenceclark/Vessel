@@ -239,6 +239,18 @@ error string), Truncated (`true`), and Stop reason when it's one of the error-cl
 values (`content_filter`, `refusal`, `error`) rather than a normal completion
 (`stop`, `length`, `end_turn`, …).
 
+### 5.3 Compare (Phase 5)
+
+Compare replaces the detail pane only for a direct `replay_of` pair. Its compact header
+identifies `#original → #replay` and each backend/model, with Close returning to the replay
+detail. A metric strip shows original → replay for duration, TTFT, tok/s, tokens in/out and
+stop reason; numeric deltas are neutral data, never success/error colors — larger and smaller
+are contextual, not inherently good or bad. The request is rendered once with a short list of
+the differing top-level parameters (`name: before → after`). Responses are two equal side-by-
+side panels using the ordinary MessageView/raw fallback. There is deliberately no inline word
+diff: sampled generations differ throughout, so word-level highlighting would add noise rather
+than signal. On narrow viewports, response panels stack.
+
 ---
 
 ## 6. Components (canonical looks)
@@ -268,7 +280,8 @@ values (`content_filter`, `refusal`, `error`) rather than a normal completion
   `--text-muted`; focus per §7. Search inputs get a leading 14px icon.
 - **Dialogs**: radius-panel, `--surface`, `--shadow-dialog`, 420px default width,
   backdrop `rgb(0 0 0 / .5)`; title `lg`, body `sm`. Destructive confirmations keep
-  the typed-confirmation pattern.
+  the typed-confirmation pattern. Dialogs close only through Escape or an explicit
+  close/cancel action; backdrop clicks do not discard dialog state.
 - **Scrollbars**: styled thin (8px, `--border-strong` thumb, transparent track,
   `border-radius: 4px`) via `::-webkit-scrollbar` + `scrollbar-width: thin` — default
   chrome scrollbars inside rounded panels are the fastest way to look unfinished.
@@ -378,11 +391,10 @@ values (`content_filter`, `refusal`, `error`) rather than a normal completion
   stylable surface area and the spec doesn't call out a distinct Select look; worth
   promoting to a real primitive if a phase ever needs to style the open dropdown
   itself.
-- **Dialog's Escape-to-close + focus trap**: §8.7 names this as the existing
-  primitive's job. It wasn't actually implemented before this pass (Phase 4 shipped
-  backdrop-click-to-close only) — added both (plus focus-on-open and
-  focus-restore-on-close) to `ui/dialog.tsx`, shared by `Dialog` and `ConfirmDialog`.
-  Verified live: Escape closes and returns focus to the triggering element.
+- **Dialog dismissal + focus trap**: §8.7 names this as the primitive's job. `Dialog`
+  and `ConfirmDialog` trap/focus on open, close on Escape or an explicit action, and
+  restore focus to the triggering element. Backdrop clicks deliberately do not close:
+  typed confirmations and replay settings must not be discarded by an incidental click.
 - **Tags as pills**: the original overhaul left tags in `Badge`'s default
   radius-chip shape along with every other badge variant. Post-launch feedback asked
   for tags specifically to read as pills, to distinguish "a label the request was
@@ -559,3 +571,41 @@ values (`content_filter`, `refusal`, `error`) rather than a normal completion
   renders through `ReactMarkdown`). The code-block styling was confirmed token-correct
   in both themes (surface/border/text colors exactly matching §2.1's dark and light
   values; `max-height: 432px` = 60vh of a 720px viewport; mono `sm` font).
+- **Header backend list collapses past the default (implemented)**: with many
+  configured backends (observed: nine) the inline dot-name list wrapped the header
+  panel onto a second line, breaking its one-line composure. It now renders
+  `● {default} DEFAULT` inline always and, when other backends exist, one `+N`
+  chip. The chip opens a popover listing every backend — dot, name, type, DEFAULT
+  marker — so the header stays the same width from 1 to 50 backends. Deliberately
+  not "show as many as fit, then +N": viewport-dependent content means the same
+  config renders differently per monitor, and the measurement logic isn't worth it.
+  `components/ui/popover.tsx` is the reusable primitive: `--surface`, border,
+  `radius-control`, `--shadow-panel`, dismiss on outside-click/Escape. The status
+  endpoint carries passive health state for each configured backend, so the `+N`
+  chip shows the worst non-default state.
+
+  **Health is passive-observed, not probed** (the former always-green dots were a
+  defect: `/status` had no reachability signal at all).
+  Vessel never generates its own traffic to check backends: the dot derives from
+  the most recent *captured* outcome per backend — green = last capture
+  succeeded; red = last capture was a **proxy-level** upstream failure
+  (`upstream_unreachable`/`upstream_timeout`; a backend returning 4xx/5xx is
+  reachable and stays green-dot territory — the row's own status tells that
+  story); hollow `--text-muted` outline = no traffic observed → **unknown, shown
+  as unknown, never fake-green**. Backend: in-memory per-backend last-outcome map
+  updated at capture, seeded from the DB at startup, exposed on `/status` as
+  `backends[].health {state, lastSeenAt}`; popover shows the timestamp ("last
+  seen 14:32"). The `+N` chip carries the worst state among collapsed backends
+  (red > unknown > green). Active probing is explicitly rejected (auth-costing
+  probes against live APIs, traffic Vessel wasn't asked to make); an on-demand
+  per-backend "check now" for local backends is a possible later addition —
+  opt-in, one-shot, never background.
+- **Config panel: injectStreamUsage needs an explainer (review TODO, not yet
+  implemented)**: the checkbox is bare jargon — the product's own author had to ask
+  what it does. Add a one-line `xs --text-muted` explainer under the control:
+  "Adds `include_usage` to streamed OpenAI-format requests so token counts are
+  exact instead of estimated (~). Modifies requests; your client's original bytes
+  are still what's stored." Same treatment for any future config control whose
+  name alone doesn't explain its effect — a settings control gets either a
+  self-explanatory label or an explainer line, never a bare internal name (§8
+  standing rule from this finding).
