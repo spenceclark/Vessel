@@ -1,8 +1,11 @@
 using System.Linq;
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Vessel.Config;
 using Xunit;
 
 namespace Vessel.Tests;
@@ -28,6 +31,76 @@ public class ApiTests
         string text = await response.Content.ReadAsStringAsync(ct);
         using JsonDocument doc = JsonDocument.Parse(text);
         return doc.RootElement.Clone();
+    }
+
+    [Fact]
+    public async Task BackendBaseUrlPathPrefix_IsRetainedWhenForwarding()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        var configStore = vessel.Services.GetRequiredService<ConfigStore>();
+        VesselConfig config = configStore.Snapshot.Config;
+        config.Backends["gemini"] = new BackendConfig
+        {
+            BaseUrl = $"{vessel.Stub.BaseUrl}/v1beta/openai",
+            Type = "openai",
+        };
+        config.DefaultBackend = "gemini";
+        configStore.Apply(config);
+
+        using var client = new HttpClient();
+        using HttpResponseMessage response = await client.GetAsync(
+            $"{vessel.BaseUrl}/v1/responses?gemini-path-prefix", CT);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        JsonElement body = await ReadJson(response, CT);
+        Assert.Equal("/v1beta/openai/v1/responses", body.GetProperty("Path").GetString());
+    }
+
+    [Fact]
+    public async Task Status_BackendHealth_IsPassiveAndReflectsCapturedOutcomes()
+    {
+        int deadPort = ReserveClosedPort();
+        await using TestVessel vessel = await TestVessel.StartAsync(config =>
+            config.Backends["dead"] = new BackendConfig { BaseUrl = $"http://127.0.0.1:{deadPort}" });
+        using var client = new HttpClient();
+
+        JsonElement initial = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/status", CT);
+        AssertHealth(initial, "stub", "unknown", expectedLastSeen: false);
+        AssertHealth(initial, "dead", "unknown", expectedLastSeen: false);
+
+        using HttpResponseMessage success = await client.GetAsync($"{vessel.BaseUrl}/echo", CT);
+        Assert.Equal(HttpStatusCode.OK, success.StatusCode);
+        JsonElement afterSuccess = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/status", CT);
+        AssertHealth(afterSuccess, "stub", "green", expectedLastSeen: true);
+
+        // A backend-owned 4xx/5xx remains reachable; the request row itself reports its status.
+        using HttpResponseMessage backendError = await client.GetAsync($"{vessel.BaseUrl}/respond", CT);
+        Assert.Equal((HttpStatusCode)418, backendError.StatusCode);
+        JsonElement afterBackendError = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/status", CT);
+        AssertHealth(afterBackendError, "stub", "green", expectedLastSeen: true);
+
+        using HttpResponseMessage unreachable = await client.GetAsync($"{vessel.BaseUrl}/b/dead/echo", CT);
+        Assert.Equal(HttpStatusCode.BadGateway, unreachable.StatusCode);
+        JsonElement afterUnreachable = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/status", CT);
+        AssertHealth(afterUnreachable, "dead", "red", expectedLastSeen: true);
+    }
+
+    private static void AssertHealth(JsonElement status, string backendName, string state, bool expectedLastSeen)
+    {
+        JsonElement backend = status.GetProperty("backends").EnumerateArray()
+            .Single(item => item.GetProperty("name").GetString() == backendName);
+        JsonElement health = backend.GetProperty("health");
+        Assert.Equal(state, health.GetProperty("state").GetString());
+        Assert.Equal(expectedLastSeen ? JsonValueKind.String : JsonValueKind.Null, health.GetProperty("lastSeenAt").ValueKind);
+    }
+
+    private static int ReserveClosedPort()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
     }
 
     // U1: reverse-chron, limit honored + capped at 500, before cursor pages without

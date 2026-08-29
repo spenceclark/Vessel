@@ -78,6 +78,13 @@ export interface StatusBackend {
   baseUrl: string
   type: string
   default: boolean
+  authEnv?: string
+  health: BackendHealth
+}
+
+export interface BackendHealth {
+  state: 'green' | 'red' | 'unknown'
+  lastSeenAt: string | null
 }
 
 /** R06 — whether the background writer is still recording (a give-up used to be a log line only). */
@@ -175,6 +182,7 @@ export interface ActiveDescriptor {
   path: string
   backend: string
   tags: string[]
+  replayOf: number | null
   model: string | null
   ttftMs: number | null
 }
@@ -183,6 +191,7 @@ export interface BackendConfigDto {
   baseUrl: string
   type: string
   injectStreamUsage?: boolean
+  authEnv?: string
 }
 
 export interface VesselConfigDto {
@@ -218,6 +227,7 @@ export interface StartedEvent {
   path: string
   backend: string
   tags: string[]
+  replayOf: number | null
 }
 
 export interface RequestReadyEvent {

@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Vessel.Capture;
 using Vessel.Storage;
 
 namespace Vessel.Api;
@@ -13,15 +14,18 @@ namespace Vessel.Api;
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true)]
 [JsonSerializable(typeof(ErrorPayload))]
 [JsonSerializable(typeof(StatusPayload))]
+[JsonSerializable(typeof(BackendHealth))]
 [JsonSerializable(typeof(ActiveRequestsPayload))]
 [JsonSerializable(typeof(RequestListResponse))]
 [JsonSerializable(typeof(RequestDetail))]
+[JsonSerializable(typeof(Summary[]))]
 [JsonSerializable(typeof(StatsResponse))]
 [JsonSerializable(typeof(SessionInfo))]
 [JsonSerializable(typeof(SessionInfo[]))]
 [JsonSerializable(typeof(CreateSessionRequest))]
 [JsonSerializable(typeof(FacetsResponse))]
 [JsonSerializable(typeof(ClearResponse))]
+[JsonSerializable(typeof(ReplayRequest))]
 [JsonSerializable(typeof(Vessel.Config.ConfigApplyResult))]
 [JsonSerializable(typeof(Vessel.Config.ConfigGetResult))]
 [JsonSerializable(typeof(JsonNode))]

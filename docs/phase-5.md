@@ -167,3 +167,70 @@ frontend: replay/compare/curl component tests
 Suites green (backend + frontend); manual gate done; the plan's "done when" — answer
 "would qwen handle what opus handled?" without touching client code — demonstrated
 end to end on real traffic.
+
+---
+
+## 6. Post-implementation remediation (from phase-5-report.md — acceptance blocked)
+
+### 6.1 Decisions
+
+> **Status: PD1–PD4 ALL APPROVED as recommended, 2026-08-29.** Implementing agents
+> treat the recommendation column as authoritative; R11's doc pass records the
+> outcomes in their owning documents.
+
+| # | Decision | Recommendation |
+|---|---|---|
+| PD1 | Default config: nine backends or one? (report deviation 2) | **Revert to Ollama-only first-run default.** Zero-config drop-in is a core principle, Phase 6's first-run item promises exactly that, and eight unused backends make a stranger's first popover a wall of "unknown". Existing user configs are untouched (vessel.json is never overwritten); the README documents adding backends. |
+| PD2 | Local anthropic-type backends and replay auth (finding 8) | **Align with the openai loopback rule**: loopback anthropic-type targets omit auth. Ollama's Anthropic-compat endpoint is precisely the local anthropic-type use case, and D2's "local no-auth backends replay with auth omitted" already says this — the implementation is the outlier, not the spec. |
+| PD3 | Dialog backdrop-click-to-close removal (report deviation 4) | **Keep the new behavior** (Escape + explicit close only — safer for typed-confirmation dialogs, and now test-pinned) and correct ui-spec's older narrative in place so the doc carries one account. |
+| PD4 | CI on windows-latest only (report deviation 3) | **Restore Linux**: matrix `ubuntu-latest` + `windows-latest` for the backend job. If ubuntu was dropped because it failed, the failure is a Phase 6 blocker to diagnose now, not a runner to delete — linux-x64 is a shipping RID. |
+
+### 6.2 Fixes (correctness findings 1–9, then coverage)
+
+- [x] R1 — `shellQuote` emits the correct `'"'"'` sequence; test pins the exact output
+  and covers URL/method/content-type paths (the prior test was vacuous — heredoc path
+  only).
+- [x] R2 — curl auth placeholder uses the same rule as `ReplayEndpoint.TryBuildAuth`:
+  `authEnv` name when set (`StatusBackend` gains `authEnv` — a variable *name*, never a
+  secret), no auth for loopback openai/auto, anthropic shape for anthropic-type. D2
+  and D6 are one rule; extract it if needed.
+- [x] R3 — Compare renders the request once with the param diff on top, per D5/§5.3.
+- [x] R4 — `MetricDelta` formats `Math.abs(delta)` and prepends the sign (Δ −1.50s,
+  not −1500ms).
+- [x] R5 — Replay rejects capture-truncated bodies (`Summary.Truncated`) and
+  decode-failed still-encoded bodies with clear 400s; never sends partial or
+  mis-encoded bytes.
+- [x] R6 — `ReplayDialog` backend state reconciles against `allowed`
+  (`allowed.find(...) ?? allowed[0]`); blank model override treated as no override.
+- [x] R7 — PD2 implemented (loopback anthropic omits auth).
+- [x] R8 — F9: rows keep the precise `ForwarderError` identity; `BackendHealthTracker`
+  classifies unreachability itself from the specific errors that mean it
+  (`upstream_unreachable`, `upstream_timeout`, connect-class failures), not from the
+  row's collapsed label. Health dot never flips red on client-side or mid-stream
+  delivery errors.
+- [x] R9 — Smaller items from the report: required (non-nullable) tracker dependency;
+  drain timeout bounded explicitly; loopback-normalized executor target for
+  `0.0.0.0`/`[::]` binds; a small cap on concurrent replay dispatches; single-snapshot
+  config read in `ReplayEndpoint`; clipboard write wrapped with a visible failure
+  toast; popover a11y (labelled `group`, drop bare `role="dialog"`); indent tidy.
+- [x] R10 — Coverage to the §3 table: complete P1–P4/P7 (full D3 matrix incl.
+  nothing-fired assertions, stub-side wire inspection via the already-built
+  `ReflectPayload` fields, gzip-original decoded-body case, only-model/original-
+  unchanged/unparseable-400, per-format curl snapshots + stub round-trip) and add
+  P5, P6, P8 (started/descriptor `replayOf` incl. frame-loss recovery; streamed
+  drain + enrichment + concurrent replays; CompareView/ReplayDialog component tests).
+- [x] R11 — Doc truth pass: PD1/PD3/PD4 outcomes recorded (Phase 6 first-run item,
+  ui-spec dialog narrative, CI note); report deviation 6's endpoint-table change
+  confirmed in architecture.md; report updated to accepted when done.
+
+**Acceptance:** spec §5 criteria all met, including the §3 table fully covered; report
+flipped to accepted.
+
+- [x] R12 — Backend `type` semantics surfaced (follow-on from report deviation 5,
+  which is accepted as the correct reading): (a) the first-run default config
+  creates the Ollama backend with `type: "ollama"`, **not** `auto` — `auto` means
+  "unknown dialect" and correctly locks a backend out of cross-backend replay
+  targeting, which is wrong for the one backend we *know*; (b) the config panel's
+  type dropdown gains a one-line `xs --text-muted` explainer per ui-spec's
+  settings-control rule: "auto = detect from traffic; observation only — typed
+  backends unlock replay targeting and correct replay auth."

@@ -24,6 +24,38 @@ public sealed class SqliteReadStore(string dbPath)
     private const int SummaryColumnCount = 25;
 
     /// <summary>
+    /// The most recently persisted capture for each backend, by insertion order. This is
+    /// startup-only state for passive backend health; it does not generate backend traffic.
+    /// </summary>
+    public BackendHealthSeed[] ReadBackendHealthSeeds()
+    {
+        using SqliteConnection connection = Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT requests.backend, requests.started_at, requests.error
+            FROM requests
+            INNER JOIN (
+                SELECT MAX(id) AS id
+                FROM requests
+                WHERE error IS NULL
+                   OR error IN ('upstream_unreachable', 'upstream_timeout', 'Request', 'RequestTimedOut')
+                GROUP BY backend COLLATE NOCASE
+            ) latest ON latest.id = requests.id
+            """;
+
+        var outcomes = new List<BackendHealthSeed>();
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            outcomes.Add(new BackendHealthSeed(
+                reader.GetString(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2)));
+        }
+
+        return outcomes.ToArray();
+    }
+
+    /// <summary>
     /// D3/D1 — reverse-chron by id, with every filter combinable: <paramref name="before"/>
     /// and <paramref name="sessionId"/> (the cursor and session scope), plus <paramref
     /// name="q"/> (FTS5, sanitized so hostile input can never throw a syntax error),
@@ -290,6 +322,24 @@ public sealed class SqliteReadStore(string dbPath)
         return RequestDetail.From(summary, requestHeaders, responseHeaders, requestBody, responseBody, responseRaw);
     }
 
+    /// <summary>Replay children of one original, newest first, for the Compare entry points.</summary>
+    public Summary[] ListReplays(long replayOf)
+    {
+        using SqliteConnection connection = Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = $"SELECT {SummaryColumns} FROM requests WHERE replay_of = $replay_of ORDER BY id DESC";
+        command.Parameters.AddWithValue("$replay_of", replayOf);
+
+        var rows = new List<Summary>();
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(ReadSummary(reader));
+        }
+
+        return rows.ToArray();
+    }
+
     /// <summary>
     /// D3 — totals/averages, optionally scoped to one session. <paramref name="sessionId"/>
     /// null means "all". <c>failed</c> = error set or status &gt;= 400; <c>avgTtftMs</c> is
@@ -427,11 +477,12 @@ public sealed class SqliteReadStore(string dbPath)
         // than dropping the payload, so the row keeps evidence either way.
         byte[] raw = decoded.Bytes ?? stored;
         bool truncated = decoded.Status == BodyDecoder.DecodeStatus.TruncatedDecode;
+        bool failed = decoded.Status == BodyDecoder.DecodeStatus.Failed;
 
         string text = Encoding.UTF8.GetString(raw);
         return Encoding.UTF8.GetBytes(text).AsSpan().SequenceEqual(raw)
-            ? new BodyPayload(text, null, truncated)
-            : new BodyPayload(null, Convert.ToBase64String(raw), truncated);
+            ? new BodyPayload(text, null, truncated, failed)
+            : new BodyPayload(null, Convert.ToBase64String(raw), truncated, failed);
     }
 
     /// <summary>The <c>Content-Encoding</c> value from an already-parsed header object, or null.</summary>
@@ -469,3 +520,6 @@ public sealed class SqliteReadStore(string dbPath)
         return connection;
     }
 }
+
+/// <summary>Startup seed for the last captured proxy outcome of one backend.</summary>
+public sealed record BackendHealthSeed(string Backend, string StartedAt, string? Error);

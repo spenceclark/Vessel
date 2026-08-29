@@ -36,6 +36,7 @@ public static class VesselApp
         builder.Services.AddSingleton(sp => new ConfigStore(config, configPath));
         builder.Services.AddSingleton<BackendRegistry>();
         builder.Services.AddSingleton<ProxyHandler>();
+        builder.Services.AddSingleton<ReplayExecutor>();
         builder.Services.AddSingleton<CaptureChannel>();
         builder.Services.AddSingleton<CaptureEvents>();
         builder.Services.AddSingleton<RequestModelSnifferService>();
@@ -45,6 +46,7 @@ public static class VesselApp
         builder.Services.AddSingleton(sp => new SqliteCaptureStore(dbPath, sp.GetRequiredService<ConfigStore>()));
         builder.Services.AddSingleton<ICaptureStore>(sp => sp.GetRequiredService<SqliteCaptureStore>());
         builder.Services.AddSingleton(sp => new SqliteReadStore(dbPath));
+        builder.Services.AddSingleton<BackendHealthTracker>();
         // Registered before Kestrel's own hosted service starts the listener, so the
         // database initializes (fail-fast) before any traffic is accepted.
         builder.Services.AddHostedService<CaptureWriterService>();
@@ -111,6 +113,8 @@ public static class VesselApp
         app.MapDelete("/vessel/api/requests", (RequestDelegate)RequestsEndpoints.Delete);
         app.MapGet("/vessel/api/requests/facets", (RequestDelegate)FacetsEndpoint.Handle);
         app.MapGet("/vessel/api/requests/{id:long}", (RequestDelegate)RequestsEndpoints.Detail);
+        app.MapGet("/vessel/api/requests/{id:long}/replays", (RequestDelegate)RequestsEndpoints.Replays);
+        app.MapPost("/vessel/api/requests/{id:long}/replay", (RequestDelegate)ReplayEndpoint.Handle);
         app.MapGet("/vessel/api/stats", (RequestDelegate)StatsEndpoint.Handle);
         app.MapGet("/vessel/api/sessions", (RequestDelegate)SessionsEndpoints.List);
         app.MapPost("/vessel/api/sessions", (RequestDelegate)SessionsEndpoints.Create);

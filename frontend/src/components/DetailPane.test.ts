@@ -68,6 +68,25 @@ async function openResponseTab() {
 }
 
 describe('DetailPane — raw-stream fallback (R24)', () => {
+  it('shows a visible failure notice when clipboard access rejects', async () => {
+    vi.spyOn(api, 'getStatus').mockResolvedValue({
+      name: 'vessel', version: '0.1.0', listen: '127.0.0.1:4550', defaultBackend: 'stub',
+      backends: [{ name: 'stub', baseUrl: 'http://localhost:11434', type: 'ollama', default: true, health: { state: 'unknown', lastSeenAt: null } }],
+      capture: { recording: true }, serverRunId: 'run',
+    })
+    vi.spyOn(api, 'getReplays').mockResolvedValue([])
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error('clipboard denied')) },
+    })
+    renderPane(detail({ requestBody: { text: '{"model":"m"}' } }))
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Request' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy as curl' }))
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Could not copy curl')
+  })
+
   // The review's exact repro: an unknown-format streamed response (three NDJSON lines in
   // responseRaw, responseBody null). "Raw stream" must show them, not "No response body".
   it('shows the raw stream for an unknown-format streamed response when Raw stream is selected', async () => {

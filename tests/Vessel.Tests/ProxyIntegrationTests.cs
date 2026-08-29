@@ -191,6 +191,9 @@ public class ProxyIntegrationTests(VesselFixture fx) : IClassFixture<VesselFixtu
     [Fact]
     public async Task T8_UpstreamDiesMidStream_ClientConnectionAborted()
     {
+        using HttpResponseMessage healthy = await fx.Client.GetAsync($"{fx.VesselBaseUrl}/b/beta/echo?health-before-die", CT);
+        Assert.Equal(HttpStatusCode.OK, healthy.StatusCode);
+
         using var request = new HttpRequestMessage(HttpMethod.Get, $"{fx.VesselBaseUrl}/b/beta/die");
         using HttpResponseMessage response = await fx.Client.SendAsync(
             request, HttpCompletionOption.ResponseHeadersRead, CT);
@@ -217,6 +220,15 @@ public class ProxyIntegrationTests(VesselFixture fx) : IClassFixture<VesselFixtu
         Assert.NotNull(failure);
         Assert.True(failure is IOException or HttpRequestException,
             $"expected an aborted-connection error, got {failure.GetType()}: {failure.Message}");
+
+        CapturedRow row = await CaptureDb.WaitForRow(fx.DbPath, captured => captured.Path == "/die");
+        Assert.Equal("ResponseBodyDestination", row.Error);
+
+        using HttpResponseMessage statusResponse = await fx.Client.GetAsync($"{fx.VesselBaseUrl}/vessel/api/status", CT);
+        using JsonDocument status = JsonDocument.Parse(await statusResponse.Content.ReadAsStringAsync(CT));
+        JsonElement beta = status.RootElement.GetProperty("backends").EnumerateArray()
+            .Single(backend => backend.GetProperty("name").GetString() == "beta");
+        Assert.Equal("green", beta.GetProperty("health").GetProperty("state").GetString());
     }
 
     // T9: backend unreachable (closed port) → 502 upstream_unreachable.
@@ -265,6 +277,13 @@ public class ProxyIntegrationTests(VesselFixture fx) : IClassFixture<VesselFixtu
 
         Assert.Equal(HttpStatusCode.GatewayTimeout, response.StatusCode);
         Assert.Equal("upstream_timeout", response.Headers.GetValues("X-Vessel-Error").Single());
+
+        using HttpResponseMessage statusResponse = await fx.Client.GetAsync(
+            $"{fx.ShortTimeoutBaseUrl}/vessel/api/status", CT);
+        using JsonDocument status = JsonDocument.Parse(await statusResponse.Content.ReadAsStringAsync(CT));
+        JsonElement beta = status.RootElement.GetProperty("backends").EnumerateArray()
+            .Single(backend => backend.GetProperty("name").GetString() == "beta");
+        Assert.Equal("red", beta.GetProperty("health").GetProperty("state").GetString());
     }
 
     // Reserved namespace: /vessel/* is never proxied. Unknown API paths still get the

@@ -40,6 +40,13 @@ public sealed class BackendConfig
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool InjectStreamUsage { get; set; }
 
+    /// <summary>
+    /// Optional name of the process environment variable that holds this backend's replay
+    /// credential. The credential itself is never persisted by Vessel.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AuthEnv { get; set; }
+
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }

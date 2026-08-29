@@ -146,6 +146,11 @@ public static class ConfigLoader
                 throw new ConfigException($"config '{path}': backend '{name}' is null");
             }
 
+            if (backend.AuthEnv is not null && string.IsNullOrWhiteSpace(backend.AuthEnv))
+            {
+                throw new ConfigException($"config '{path}': backend '{name}' authEnv must be a non-empty environment variable name");
+            }
+
             if (!Uri.TryCreate(backend.BaseUrl, UriKind.Absolute, out Uri? uri)
                 || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
             {

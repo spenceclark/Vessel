@@ -136,15 +136,22 @@ public sealed class StubBackend : IAsyncDisposable
 
         // Reflects the request body it received (text + declared Content-Length), so the
         // injectStreamUsage tests can assert exactly what was forwarded upstream.
-        app.Map("/v1/chat/completions", (RequestDelegate)(async context =>
+        RequestDelegate reflectRequest = async context =>
         {
             using var received = new MemoryStream();
             await context.Request.Body.CopyToAsync(received);
             var payload = new ReflectPayload(
-                Encoding.UTF8.GetString(received.ToArray()), context.Request.ContentLength);
+                Encoding.UTF8.GetString(received.ToArray()),
+                context.Request.ContentLength,
+                context.Request.Headers.ContainsKey("Authorization"),
+                context.Request.Headers.ContainsKey("x-api-key"),
+                context.Request.Headers["anthropic-version"].FirstOrDefault(),
+                context.Request.Headers.ContainsKey("X-Stale-Header"));
             context.Response.ContentType = "application/json";
             await JsonSerializer.SerializeAsync(context.Response.Body, payload);
-        }));
+        };
+        app.Map("/v1/chat/completions", reflectRequest);
+        app.Map("/v1/messages", reflectRequest);
 
         // D01/R05 — a gzip-encoded JSON response. ?bomb=1 makes the *decoded* size huge from
         // a tiny wire body (highly compressible zeros), which is how the decode budget gets
@@ -275,4 +282,10 @@ public sealed record EchoPayload(
     string BodySha256,
     long BodyLength);
 
-public sealed record ReflectPayload(string SeenBody, long? SeenContentLength);
+public sealed record ReflectPayload(
+    string SeenBody,
+    long? SeenContentLength,
+    bool HasAuthorization = false,
+    bool HasAnthropicApiKey = false,
+    string? AnthropicVersion = null,
+    bool HasStaleHeader = false);

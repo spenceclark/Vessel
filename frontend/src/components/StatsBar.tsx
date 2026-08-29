@@ -2,13 +2,14 @@ import { useCallback, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Settings } from 'lucide-react'
 import { api } from '@/api/client'
-import type { SessionScope } from '@/api/types'
+import type { BackendHealth, SessionScope, StatusBackend } from '@/api/types'
 import { ConfigPanel } from '@/components/ConfigPanel'
 import { DataPanel } from '@/components/DataPanel'
 import { ThemePanel } from '@/components/ThemePanel'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog, Dialog } from '@/components/ui/dialog'
 import { Mark } from '@/components/ui/Mark'
+import { Popover } from '@/components/ui/popover'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import { formatCompactTokenCount, formatMs, formatTokPerSec } from '@/lib/format'
@@ -45,7 +46,8 @@ export function StatsBar({
   const statusQuery = useQuery({
     queryKey: ['status'],
     queryFn: api.getStatus,
-    staleTime: 60_000,
+    staleTime: 5_000,
+    refetchInterval: 5_000,
   })
 
   const stats = statsQuery.data
@@ -138,19 +140,10 @@ export function StatsBar({
         <Button variant="ghost" size="icon" aria-label="Settings" title="Settings" onClick={() => setSettingsOpen(true)}>
           <Settings className="h-4 w-4" strokeWidth={1.75} />
         </Button>
+        {statusQuery.data && statusQuery.data.backends.length > 0 && (
+          <BackendIndicator backends={statusQuery.data.backends} />
+        )}
       </div>
-
-      {statusQuery.data && statusQuery.data.backends.length > 0 && (
-        <div className="flex items-center gap-3 text-xs text-text-muted">
-          {statusQuery.data.backends.map((b) => (
-            <span key={b.name} className="inline-flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-ok" />
-              {b.name}
-              {b.default && <span className="text-[10px] uppercase tracking-wide">default</span>}
-            </span>
-          ))}
-        </div>
-      )}
 
       <ConfirmDialog
         open={confirmOpen}
@@ -180,6 +173,90 @@ export function StatsBar({
         </Tabs>
       </Dialog>
     </div>
+  )
+}
+
+function BackendIndicator({ backends }: { backends: StatusBackend[] }) {
+  const defaultBackend = backends.find((backend) => backend.default) ?? backends[0]
+  const otherBackends = backends.filter((backend) => backend !== defaultBackend)
+  const otherHealth = worstHealth(otherBackends.map((backend) => backend.health))
+
+  return (
+    <div className="flex shrink-0 items-center gap-2 text-xs text-text-muted">
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+        <BackendDot health={defaultBackend.health} />
+        <span className="font-mono text-text-secondary">{defaultBackend.name}</span>
+        <span className="text-[10px] uppercase tracking-wide">default</span>
+        <HealthText health={defaultBackend.health} />
+      </span>
+      {otherBackends.length > 0 && (
+        <Popover
+          label="Backend health"
+          trigger={(open, toggle, contentId) => (
+            <button
+              type="button"
+              aria-expanded={open}
+              aria-controls={open ? contentId : undefined}
+              aria-label={`Show ${otherBackends.length} other backend${otherBackends.length === 1 ? '' : 's'}`}
+              onClick={toggle}
+              className="inline-flex h-6 items-center gap-1 rounded-control border border-border bg-surface-2 px-2 font-mono text-xs text-text-secondary hover:bg-surface-3 hover:text-text"
+            >
+              <BackendDot health={otherHealth} />+{otherBackends.length}
+            </button>
+          )}
+        >
+          <div className="mb-1 px-1 text-[10px] font-[550] uppercase tracking-[0.06em] text-text-muted">Backends</div>
+          <div className="flex flex-col gap-1">
+            {backends.map((backend) => (
+              <div key={backend.name} className="flex items-center gap-2 rounded-control px-1 py-1 text-xs">
+                <BackendDot health={backend.health} />
+                <span className="min-w-0 flex-1 truncate font-mono text-text">{backend.name}</span>
+                <span className="font-mono text-[10px] text-text-muted">{backend.type}</span>
+                {backend.default && <span className="text-[10px] uppercase tracking-wide text-text-secondary">default</span>}
+                <HealthText health={backend.health} showTimestamp />
+              </div>
+            ))}
+          </div>
+        </Popover>
+      )}
+    </div>
+  )
+}
+
+function BackendDot({ health }: { health: BackendHealth }) {
+  const className = health.state === 'red'
+    ? 'bg-danger'
+    : health.state === 'unknown'
+      ? 'border border-text-muted bg-transparent'
+      : 'bg-ok'
+
+  return (
+    <span
+      className={cn('h-1.5 w-1.5 shrink-0 rounded-full', className)}
+      role="img"
+      aria-label={`Backend ${health.state}`}
+    />
+  )
+}
+
+function HealthText({ health, showTimestamp = false }: { health: BackendHealth; showTimestamp?: boolean }) {
+  if (health.state === 'unknown') return <span className="text-[10px]">unknown</span>
+  const state = health.state === 'red'
+    ? <span className="text-[10px] text-danger">unreachable</span>
+    : null
+  if (!showTimestamp || !health.lastSeenAt) return state
+
+  const seen = new Date(health.lastSeenAt)
+  if (Number.isNaN(seen.getTime())) return state
+  const time = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false }).format(seen)
+  return <span className="text-[10px]">{state} last seen {time}</span>
+}
+
+function worstHealth(health: BackendHealth[]): BackendHealth {
+  const rank = { green: 0, unknown: 1, red: 2 } as const
+  return health.reduce<BackendHealth>(
+    (worst, next) => rank[next.state] > rank[worst.state] ? next : worst,
+    { state: 'green', lastSeenAt: null },
   )
 }
 

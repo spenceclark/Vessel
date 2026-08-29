@@ -52,7 +52,8 @@ public sealed record RequestListResponse(Summary[] Rows, long? NextBefore);
 public sealed record BodyPayload(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Text,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Base64,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool DecodeTruncated = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool DecodeTruncated = false,
+    [property: JsonIgnore] bool DecodeFailed = false);
 
 /// <summary>
 /// D3 — <c>GET /requests/{id}</c> response: every <see cref="Summary"/> field flattened to

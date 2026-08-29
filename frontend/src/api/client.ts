@@ -99,6 +99,15 @@ export const api = {
 
   getRequest: (id: number) => request<RequestDetail>(`/requests/${id}`),
 
+  getReplays: (id: number) => request<import('./types').Summary[]>(`/requests/${id}/replays`),
+
+  replay: (id: number, payload: { backend?: string; model?: string }) =>
+    request<void>(`/requests/${id}/replay`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
   getStats: (session?: StatsSessionParam) =>
     request<StatsResponse>(`/stats${session !== undefined ? `?session=${session}` : ''}`),
 

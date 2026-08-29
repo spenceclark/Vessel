@@ -82,8 +82,8 @@ public sealed class CaptureContext
     /// one atomic step, publishing <c>started</c>. Called from the handler as soon as the
     /// backend and tags are known, and before anything reads <see cref="Seq"/>.
     /// </summary>
-    public void Register(string method, string path, string backend, string[] tags) =>
-        Seq = _events.Register(StartedAtIso, SessionId, method, path, backend, tags);
+    public void Register(string method, string path, string backend, string[] tags, long? replayOf) =>
+        Seq = _events.Register(StartedAtIso, SessionId, method, path, backend, tags, replayOf);
 
     private double ElapsedMs => Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
 
@@ -190,8 +190,13 @@ public sealed class CaptureContext
             ResponseRaw: streamed ? responseBytes : null,
             Truncated: RequestBuffer.Truncated || ResponseBuffer.Truncated,
             UsageInjected: UsageInjected,
-            ResponseAuthoredByVessel: ResponseAuthoredByVessel);
+            ResponseAuthoredByVessel: ResponseAuthoredByVessel,
+            ReplayOf: ReplayOf);
     }
+
+    public long? ReplayOf { get; private set; }
+
+    public void SetReplayOf(long? replayOf) => ReplayOf = replayOf;
 
     /// <summary>
     /// Wire-level streamed heuristic (no parsing exists until Phase 2): SSE or NDJSON

@@ -17,6 +17,28 @@ public class EventsTests
 {
     private static CancellationToken CT => TestContext.Current.CancellationToken;
 
+    [Fact]
+    public async Task ReplayCorrelation_IsPresentInStartedAndFrameLossRecoveryDescriptor()
+    {
+        var hub = new CaptureEvents();
+        using CaptureSubscription subscription = hub.Subscribe();
+
+        long seq = hub.Register(
+            "2026-08-29T00:00:01.0000000Z", 7, "POST", "/api/chat", "stub", ["phase5"], 42);
+
+        SseEvent started = await subscription.Reader.ReadAsync(CT);
+        Assert.Equal("started", started.Name);
+        using JsonDocument payload = JsonDocument.Parse(started.Json);
+        Assert.Equal(seq, payload.RootElement.GetProperty("seq").GetInt64());
+        Assert.Equal(42, payload.RootElement.GetProperty("replayOf").GetInt64());
+
+        ActiveDescriptor descriptor = Assert.Single(hub.GetActiveRequests().Active);
+        Assert.Equal(seq, descriptor.Seq);
+        Assert.Equal(42, descriptor.ReplayOf);
+
+        hub.Completed(seq, null);
+    }
+
     /// <summary>One open <c>/vessel/api/events</c> connection; reads can be resumed across multiple calls.</summary>
     private sealed class SseReader : IDisposable
     {

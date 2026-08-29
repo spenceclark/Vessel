@@ -264,13 +264,16 @@ function BackendRow({
           className="min-w-[180px] flex-1 font-mono"
           placeholder="http://localhost:11434"
         />
-        <select value={backend.type} onChange={(e) => onUpdate({ type: e.target.value })} className={SELECT_CLASS}>
-          {['auto', 'ollama', 'openai', 'anthropic'].map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
+        <div className="flex flex-col gap-1">
+          <select value={backend.type} onChange={(e) => onUpdate({ type: e.target.value })} className={SELECT_CLASS}>
+            {['auto', 'ollama', 'openai', 'anthropic'].map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-text-muted">auto = detect from traffic; observation only — typed backends unlock replay targeting and correct replay auth.</p>
+        </div>
         <label className="flex items-center gap-1 text-xs text-text-muted">
           <input
             type="checkbox"
@@ -279,6 +282,14 @@ function BackendRow({
           />
           injectStreamUsage
         </label>
+        <Input
+          type="text"
+          value={backend.authEnv ?? ''}
+          onChange={(e) => onUpdate({ authEnv: e.target.value || undefined })}
+          className="w-40 font-mono"
+          placeholder="auth env (optional)"
+          aria-label={`Authentication environment variable for ${name}`}
+        />
         <label className="ml-auto flex items-center gap-1 text-xs text-text-muted">
           <input type="radio" name="default-backend" checked={isDefault} onChange={onMakeDefault} />
           default

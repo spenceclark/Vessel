@@ -10,6 +10,7 @@ import { FilterBar } from '@/components/FilterBar'
 import { RequestList } from '@/components/RequestList'
 import { DetailPane } from '@/components/DetailPane'
 import { InFlightDetailPane } from '@/components/InFlightDetailPane'
+import { CompareView } from '@/components/CompareView'
 
 /**
  * ui-spec.md §9.1 — selection spans both a completed row (by DB id) and an in-flight
@@ -17,7 +18,10 @@ import { InFlightDetailPane } from '@/components/InFlightDetailPane'
  * in-flight seq hands over to the real row id so the detail pane replaces itself in
  * place rather than reverting to empty.
  */
-export type Selection = { kind: 'row'; id: number } | { kind: 'inflight'; seq: number }
+export type Selection =
+  | { kind: 'row'; id: number }
+  | { kind: 'inflight'; seq: number }
+  | { kind: 'compare'; originalId: number; replayId: number }
 
 /** D6/D3 — one screen: StatsBar / FilterBar / RequestList / DetailPane. No router. */
 export default function App() {
@@ -45,6 +49,9 @@ export default function App() {
     scope,
     filters,
     onCompleted: (row, seq) => {
+      if (row?.replayOf != null) {
+        void queryClient.invalidateQueries({ queryKey: ['replays', row.replayOf] })
+      }
       // Selection handover (ui-spec.md §9.1): the in-flight detail replaces itself with
       // the real row in place, rather than the pane reverting to empty on completion.
       setSelection((sel) => (sel?.kind === 'inflight' && sel.seq === seq && row ? { kind: 'row', id: row.id } : sel))
@@ -119,10 +126,12 @@ export default function App() {
             </div>
           </div>
           <div className="min-w-0 flex-1 overflow-hidden rounded-panel border border-border bg-surface shadow-panel">
-            {selection?.kind === 'inflight' ? (
+            {selection?.kind === 'compare' ? (
+              <CompareView originalId={selection.originalId} replayId={selection.replayId} onClose={() => setSelection({ kind: 'row', id: selection.replayId })} />
+            ) : selection?.kind === 'inflight' ? (
               <InFlightDetailPane item={inFlight.find((i) => i.seq === selection.seq) ?? null} />
             ) : (
-              <DetailPane id={selection?.kind === 'row' ? selection.id : null} />
+              <DetailPane id={selection?.kind === 'row' ? selection.id : null} onCompare={(originalId, replayId) => setSelection({ kind: 'compare', originalId, replayId })} />
             )}
           </div>
         </div>

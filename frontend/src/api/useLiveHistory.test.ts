@@ -110,6 +110,7 @@ function startedEvent(seq: number, row: Summary) {
     path: row.path,
     backend: row.backend,
     tags: row.tags,
+    replayOf: row.replayOf,
   }
 }
 

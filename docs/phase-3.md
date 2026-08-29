@@ -145,11 +145,14 @@ so the API can respond with it. No second write connection, no lock dance.
   against a boundary at all; it adopts the snapshot's active set wholesale and orders its own
   pending work against the snapshot's log position.
 - Events (named SSE events, JSON data): `started` `{seq, startedAt, sessionId, method,
-  path, backend, tags}` — emitted at handler entry; `first_token` `{seq, ttftMs}` — emitted
+  path, backend, tags, replayOf?}` — emitted at handler entry; `first_token` `{seq, ttftMs}` — emitted
   on the first-response-byte mark of streamed responses; `completed` `{seq, row:
   Summary}` — emitted by the **writer after the row is inserted** (so it carries the
   real DB id and enriched fields). A dropped batch (writer resilience path) emits
   `completed` with `row: null` so the UI can clear the in-flight entry.
+  **Phase 5 addition (D4):** `replayOf` is immutable capture metadata read from
+  `X-Vessel-Replay-Of`; it is also present on active descriptors, so a recovery snapshot
+  preserves the replay badge when its `started` frame was dropped.
 - Broadcast: `CaptureEvents` singleton; each SSE connection gets its own bounded
   channel (capacity 256, `DropOldest`) — a stalled browser can never back-pressure the
   request path or the writer. Comment heartbeat (`: ping`) every 15 s. No replay: the

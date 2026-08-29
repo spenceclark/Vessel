@@ -12,8 +12,30 @@ namespace Vessel.Tests;
 /// only <see cref="CaptureWriterService.MaxConsecutiveFailures"/> failures in a row make
 /// the writer give up.
 /// </summary>
-public class CaptureWriterResilienceTests
+public class CaptureWriterResilienceTests : IDisposable
 {
+    private readonly string _healthDir = Directory.CreateTempSubdirectory("vessel-writer-health-").FullName;
+    private readonly BackendHealthTracker _healthTracker;
+
+    public CaptureWriterResilienceTests()
+    {
+        string dbPath = Path.Combine(_healthDir, "vessel.db");
+        using var store = new SqliteCaptureStore(dbPath, new VesselConfig());
+        store.Initialize();
+        _healthTracker = new BackendHealthTracker(new SqliteReadStore(dbPath));
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(_healthDir, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+    }
+
     private sealed class FakeStore : ICaptureStore
     {
         private readonly object _lock = new();
@@ -81,10 +103,10 @@ public class CaptureWriterResilienceTests
         }
     }
 
-    private static CaptureWriterService NewWriter(
+    private CaptureWriterService NewWriter(
         CaptureChannel channel, ICaptureStore store, CaptureEvents? events = null) =>
         new(channel, store, new FormatEnricher(new VesselConfig()), events ?? new CaptureEvents(), new CurrentSession(),
-            NullLogger<CaptureWriterService>.Instance);
+            NullLogger<CaptureWriterService>.Instance, _healthTracker);
 
     private static async Task WaitFor(Func<bool> condition)
     {
