@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useIsFetching, useQueryClient, type InfiniteData } from '@tanstack/react-query'
+import { useQueryClient, type InfiniteData } from '@tanstack/react-query'
 import {
   filtersActive,
-  type ClearState,
   type CompletedEvent,
   type FirstTokenEvent,
   type RequestFilters,
@@ -18,52 +17,51 @@ import { useEvents, type InFlightRequest } from './useEvents'
 
 /**
  * R10/R11/R22/R23/D05 — one reconciliation model for live rows, rather than independent
- * patches. The pieces have to hold together:
+ * patches. **J0 (approved 2026-08-29) replaced the accreted merge rules with two operations:
+ * snapshot recovery and ordered replay.** Everything below follows from that:
  *
- * 1. **A completion must never be lost across a fetch boundary** (R10). An *initial* list
- *    fetch (no cached data) reuses its existing promise instead of queueing a fresh one, so
- *    a completion arriving while it is unsettled would be dropped. Completions arriving while
- *    any list fetch is unsettled are therefore **buffered** and merged once fetching settles.
- * 2. **Lifecycle truth is server-authoritative** (R11/F2). The client cannot infer "still
- *    running" from paginated history — a completion off the loaded pages, filtered out, or
- *    for a since-cleared row is simply invisible there. Reconciliation instead asks the
- *    server for its live in-flight set (`GET /active`) and removes any in-flight row the
- *    server no longer lists as active (below the completed-seq boundary, so a request that
- *    started after the snapshot is never expired). A genuinely long-running request survives
- *    because it is genuinely in the set — never expired by a timer or a distance heuristic.
- * 3. **Server identity is explicit, and evidence has a validity window** (R11/H0b/I0b). Every
- *    SSE connection opens with a `hello` carrying the process run id, and `/active` echoes it.
- *    A run-id change *on the hello* means Vessel restarted: the client's in-flight seqs belong
- *    to a dead process (their low watermark can't be boundary-compared against old high seqs),
- *    so it discards the whole map. A recovery *response* is different: it is applied only if
- *    its own run id and its issuing request's run id both still equal the current run.
- *    Anything else is a response from an obsolete lifetime and is discarded outright — never
- *    read as evidence that the run we are connected to restarted, which would delete the live
- *    requests of the run that is actually running.
- * 4. **Loss detection is ordered, and recovery is coalesced** (R22/F1). The server publishes
- *    SSE ids under a lock, so a gap means real loss rather than a reordering; the client
- *    never rewinds its watermark, and a burst of gaps collapses (debounced, single-flight)
- *    into one recovery instead of a reconciliation storm.
- * 5. **Clearing is versioned, recoverable state — the frame is only the fast path**
- *    (R23/H0a/I0a). The server publishes `cleared` under the same lock as `completed`, so a
- *    row a clear deletes is always seen `completed` *before* `cleared`, and it reports the
- *    same versioned predicate on `/active`. The client purges buffered + listed rows by that
- *    predicate on arrival, re-applies it once every list fetch outstanding at that moment has
- *    settled (a pending REST snapshot can be older than the clear — TanStack reuses an
- *    unsettled initial fetch rather than replacing it on invalidation), and learns a clear it
- *    never saw from the version on `/active` during recovery. Correctness therefore never
- *    depends on a `cleared` frame surviving a deliberately lossy feed.
+ * 1. **The SSE event id is the single log position.** The server allocates it under the
+ *    publish lock, so every lifecycle change — including `cleared` — has one position that
+ *    orders it against every other, and `GET /active` reports the position its in-flight set
+ *    is true as of. The client never invents an ordering of its own.
+ * 2. **Recovery is wholesale replacement** (rule 2). On reconnect, gap, or run change: fetch
+ *    the snapshot, then discard the applied map, the *entire* completion buffer, and every
+ *    held event at or below `logPosition`; take `activeSeqs` as the in-flight set; refetch
+ *    history/stats/facets. Discarding is safe because those events are, by construction,
+ *    already reflected in the snapshot and in the database the refetch reads: an event the
+ *    client received before it issued the request was published before the server took the
+ *    snapshot, so its id is at or below that position. Events above it replay on top.
+ * 3. **Between recoveries, ordered replay only** (rule 3). Frames apply strictly in id order;
+ *    `cleared` drops the cached rows and the buffer *at its position* and schedules a refetch.
+ *    A detected gap goes to rule 2 — never to ad-hoc reasoning about what was missed.
+ * 4. **REST reads are authoritative and never client-filtered** (rule 4). No predicate, no
+ *    boundary, no provenance set: nothing the client holds ever deletes a row a fetch
+ *    returned. A clear or recovery always starts a *new* fetch afterwards, and the
+ *    last-started fetch wins. The accepted trade, stated in the contract: a stale pre-clear
+ *    fetch may show briefly until its superseding refetch settles. Settled state converges.
+ * 5. **Server identity gates all of it** (R11/H0b/I0b). Every SSE connection opens with a
+ *    `hello` carrying the process run id; a change on the *hello* means Vessel restarted, and
+ *    seqs and log positions alike belong to a dead process, so map, buffer, queue and floor
+ *    are all dropped. A recovery *response* from another run is discarded as evidence — never
+ *    read as a restart, which would expire the live requests of the run actually running.
  * 6. **In-flight rows obey session scope and nothing else** (D05). `started` carries
  *    `sessionId`; other filters can't apply to a row with no final status/model, so the list
  *    collapses them to a count.
- * 7. **Event application is coalesced** (I0c). A frame is queued, not applied: every ~100 ms
- *    the whole window lands as one state update and one cache write. Profiling a live 10k
- *    burst with the tab connected showed the per-frame version stalling the main thread for
- *    10.3 s in a single task while the JS heap climbed from 76 MB to 3.1 GB — a throughput
- *    shape, independent of ordering correctness, which the coalesced version does not have.
+ * 7. **Event application is coalesced** (I0c, kept). A frame is queued, not applied: every
+ *    ~100 ms the whole window lands as one state update and one cache write. Profiling a live
+ *    10k burst with the tab connected showed the per-frame version stalling the main thread
+ *    for 10.3 s in a single task while the JS heap climbed from 76 MB to 3.1 GB. Under J0 the
+ *    queue is no longer a hazard to reconcile against — it *is* the replay log.
+ *
+ * What J0 deleted, and why it cannot come back: the versioned clear predicate, its
+ * re-application at fetch settlement, the post-clear id exemption and the completed-seq
+ * boundary. Each was a client-side rule for deciding which rows a *past* server operation had
+ * deleted, and the round-five review broke all of them at once — a queued completion
+ * misclassified as post-clear, a valid row purged for reusing a cleared id, and an earlier
+ * missed clear erased by a later narrower one. A position needs none of those decisions.
  */
 
-/** How long to wait after the first gap before reconciling, so a burst coalesces into one run. */
+/** How long to wait after the first gap before recovering, so a burst coalesces into one run. */
 const RECONCILE_DEBOUNCE_MS = 150
 
 /**
@@ -76,13 +74,19 @@ const EVENT_FLUSH_MS = 100
 
 type ListCache = InfiniteData<RequestListResponse, number | undefined>
 
-/** One queued SSE frame, tagged so the flush can apply a window's worth in arrival order. */
-type QueuedEvent =
+/**
+ * One received SSE frame, tagged with its log position so recovery can order the client's
+ * pending work against a server snapshot (J0). `id` is the frame's SSE `id:`; a frame that
+ * somehow carried no usable id is queued as `Infinity` — "no known position" — so it is
+ * applied rather than silently discarded by a position comparison it cannot participate in.
+ */
+type QueuedEvent = { id: number } & (
   | { kind: 'started'; data: StartedEvent }
   | { kind: 'request_ready'; data: RequestReadyEvent }
   | { kind: 'first_token'; data: FirstTokenEvent }
   | { kind: 'completed'; data: CompletedEvent }
-  | { kind: 'cleared'; data: ClearState }
+  | { kind: 'cleared' }
+)
 
 export interface LiveHistory {
   /** In-flight requests within the viewed session scope, in arrival order. */
@@ -118,26 +122,36 @@ export function useLiveHistory({
     onCompletedRef.current = onCompleted
   })
 
-  // R10 — completions held while a list fetch is unsettled, drained on the falling edge.
+  // R10 — completions held while a list fetch is unsettled, drained once one settles.
   const pendingRef = useRef<Summary[]>([])
-  const listFetching = useIsFetching({ queryKey: REQUESTS_QUERY_ROOT })
 
   // R11/H0b — the run id the current SSE connection last announced via `hello`. This is the
   // *only* signal of a restart (I0b): a mismatching `/active` response is a stale response, not
   // evidence about the run we are connected to.
   const serverRunIdRef = useRef<string | null>(null)
 
-  // I0c — frames arrive far faster than React can usefully render them (a 10k burst runs at
-  // ~1.3k frames/s). They are queued here and applied on a ~10 Hz window by `flushEvents`.
+  // I0c/J0 — frames arrive far faster than React can usefully render them (a 10k burst runs at
+  // ~1.3k frames/s). They are queued here in arrival (= id) order and applied on a ~10 Hz
+  // window by `flushEvents`. Under J0 this queue is also half of the replay log: recovery
+  // prunes it by log position, and `recordingRef` below covers the other half — frames a
+  // window already applied while the snapshot request was in flight.
   const eventQueueRef = useRef<QueuedEvent[]>([])
   const flushTimerRef = useRef<number | null>(null)
 
-  // I0a/R23 — the latest clear this client knows about (from the in-band frame or from
-  // recovery), the ids it knows to be post-clear, and whether a list fetch that could predate
-  // that clear may still be outstanding. See `learnClear` / `purgeCleared`.
-  const clearRef = useRef<ClearState | null>(null)
-  const postClearIdsRef = useRef<Set<number>>(new Set())
-  const clearPendingSettleRef = useRef(false)
+  // J0 — while a recovery is in flight, every arriving frame is also recorded here. Those are
+  // exactly the frames a snapshot cannot be assumed to account for (anything received *before*
+  // the request went out was published before the snapshot was taken, so the snapshot covers
+  // it), and the ones above the returned position have to survive wholesale replacement even
+  // if the coalescing window applied them while the request was in flight. Recording rather
+  // than suspending the flush keeps the UI live while `/active` is slow. See `reconcile`.
+  const recordingRef = useRef<QueuedEvent[] | null>(null)
+
+  // J0 — the newest accepted snapshot's `logPosition`. Frames at or below it are already
+  // reflected in that snapshot and in the database its refetch read, so they are dropped
+  // rather than applied. Recovery prunes the queue by this; the check at flush time covers the
+  // same frames still in transit when the snapshot was taken. Reset on a run change: positions
+  // restart with the process.
+  const logFloorRef = useRef(0)
 
   // Scoped to the view it was counted for, so switching scope/filters resets it without an
   // effect (a setState-in-effect here would cascade a second render on every switch).
@@ -191,149 +205,235 @@ export function useLiveHistory({
   )
 
   /**
-   * I0a/R23 — is `row` one the recorded clear deleted? The server's own predicate: for a
-   * clear-before, the `startedAt` cutoff it deleted by; for a clear-all, the id boundary (every
-   * row that existed then is at or below it).
-   *
-   * `postClearIds` is the exemption that makes re-application safe. A clear-all empties the
-   * table, so SQLite hands the *next* rows ids starting from 1 again — squarely inside the
-   * boundary. Any row the client learned from a completion published after the clear is
-   * post-clear by construction (the wire order guarantees it), so it is recorded and never
-   * purged, however its id compares.
+   * J0 rule 3 — a `cleared` frame means "history was deleted at this position": drop every
+   * cached row, without inspecting any of them. There is no predicate to apply, deliberately.
+   * The rows that survived the clear come back from the refetch rule 4 schedules, which reads
+   * the post-clear database; a clear-before therefore repopulates rather than filters.
    */
-  const clearedRow = useCallback((clear: ClearState, row: Summary) => {
-    if (postClearIdsRef.current.has(row.id)) return false
-    return clear.scope === 'all'
-      ? row.id <= clear.boundaryId
-      : clear.beforeTs !== null && new Date(row.startedAt) < new Date(clear.beforeTs)
-  }, [])
-
-  /** Applies a recorded clear to the completion buffer and every cached list page. Idempotent. */
-  const purgeCleared = useCallback(
-    (clear: ClearState) => {
-      if (pendingRef.current.length > 0) {
-        pendingRef.current = pendingRef.current.filter((row) => !clearedRow(clear, row))
-      }
-
-      for (const [key, cache] of queryClient.getQueriesData<ListCache>({ queryKey: REQUESTS_QUERY_ROOT })) {
-        if (!cache) continue
-        let changed = false
-        const pages = cache.pages.map((page) => {
-          const rows = page.rows.filter((r) => !clearedRow(clear, r))
-          if (rows.length === page.rows.length) return page
-          changed = true
-          return { ...page, rows }
-        })
-        if (changed) queryClient.setQueryData<ListCache>(key, { ...cache, pages })
-      }
-    },
-    [clearedRow, queryClient],
-  )
+  const purgeListCaches = useCallback(() => {
+    for (const [key, cache] of queryClient.getQueriesData<ListCache>({ queryKey: REQUESTS_QUERY_ROOT })) {
+      if (!cache) continue
+      if (cache.pages.every((page) => page.rows.length === 0)) continue
+      queryClient.setQueryData<ListCache>(key, {
+        ...cache,
+        pages: cache.pages.map((page) => ({ ...page, rows: [] })),
+      })
+    }
+  }, [queryClient])
 
   /**
-   * I0a/R23 — record a clear (from the in-band frame or from `/active` during recovery) and
-   * purge by it. Older or repeated versions are ignored, so the two paths are safe to overlap.
-   *
-   * The re-application is armed only when a list fetch is outstanding right now: those are
-   * exactly the fetches whose server-side snapshot can predate this clear, and they resolve
-   * into the cache *after* this purge. Once list fetching next reaches zero they have all
-   * settled, and every later response comes from a post-clear database — so the predicate is
-   * applied one final time and retired, rather than left standing to fight reused ids forever.
+   * J0 rule 4 — the authoritative read. Always a *new* fetch started after the trigger (clear
+   * or recovery), so a snapshot taken before it can never be the one that wins.
    */
-  const learnClear = useCallback(
-    (clear: ClearState) => {
-      if (clearRef.current !== null && clear.version <= clearRef.current.version) return
-      clearRef.current = clear
-      postClearIdsRef.current = new Set()
-      clearPendingSettleRef.current = queryClient.isFetching({ queryKey: REQUESTS_QUERY_ROOT }) > 0
-      purgeCleared(clear)
-    },
-    [purgeCleared, queryClient],
+  const refetchAuthoritative = useCallback(
+    () =>
+      Promise.all([
+        queryClient.refetchQueries({ queryKey: REQUESTS_QUERY_ROOT }),
+        queryClient.invalidateQueries({ queryKey: ['stats'] }),
+        queryClient.invalidateQueries({ queryKey: ['facets'] }),
+      ]),
+    [queryClient],
   )
 
-  // R10 — drain the buffer once every list fetch has settled. Doing this on the falling
-  // edge (and not while fetching) is the whole point: a fetch resolving with a snapshot
+  // R10 — drain the buffer once every list fetch has settled. Waiting for that (rather than
+  // merging while one is in flight) is the whole point: a fetch resolving with a snapshot
   // older than the completion would otherwise overwrite the row back out of the cache.
-  // I0a — and it is the moment a pre-clear snapshot has finished landing in the cache, so the
-  // clear predicate is re-applied here, before the buffer drains into it.
+  //
+  // Driven off the query cache itself, not off a rendered `useIsFetching` value. A fetch that
+  // starts and settles inside one React batch never renders an intermediate "fetching" value,
+  // so an effect keyed on that count sees 0 → 0, does not re-run, and strands the buffer until
+  // some unrelated fetch happens to move it — losing a completion that arrived alongside a
+  // clear's own refetch. The cache notifies on every state change, batched or not.
   useEffect(() => {
-    if (listFetching > 0) return
-
-    const clear = clearRef.current
-    if (clear !== null && clearPendingSettleRef.current) {
-      clearPendingSettleRef.current = false
-      purgeCleared(clear)
+    const drain = () => {
+      if (pendingRef.current.length === 0) return
+      if (queryClient.isFetching({ queryKey: REQUESTS_QUERY_ROOT }) > 0) return
+      const buffered = pendingRef.current
+      pendingRef.current = [] // before the write: mergeRows notifies, and this runs re-entrantly
+      mergeRows(buffered)
     }
 
-    if (pendingRef.current.length === 0) return
-    const buffered = pendingRef.current
-    pendingRef.current = []
-    mergeRows(buffered)
-  }, [listFetching, mergeRows, purgeCleared])
+    drain()
+    return queryClient.getQueryCache().subscribe(drain)
+  }, [mergeRows, queryClient])
 
   /**
-   * R11/F2 — the authoritative path. Ask the server which requests are genuinely still in
-   * flight, drop any in-flight row it no longer lists (and that is old enough to have been
-   * accounted for), then refetch history, stats and facets together so completed rows land.
+   * I0c/J0 — apply one coalescing window's worth of events. Two passes over the same queue, in
+   * arrival (= id) order: one functional state update for every lifecycle change, then the
+   * cache and buffer effects. Order within the window is preserved exactly, which is what lets
+   * a `cleared` still divide the completions it deletes from the ones it does not.
+   */
+  const flushEvents = useCallback(() => {
+    const queued = eventQueueRef.current
+    if (queued.length === 0) return
+    eventQueueRef.current = []
+
+    // Frames at or below the last accepted snapshot are already reflected in it (and in the
+    // database its refetch read). Recovery prunes the queue; this catches the ones that were
+    // still in transit at that moment and arrived afterwards.
+    const events = logFloorRef.current === 0 ? queued : queued.filter((e) => e.id > logFloorRef.current)
+    if (events.length === 0) return
+
+    // One state update for the whole window. Previously every frame produced its own Map
+    // clone and its own render pass; at ~1.3k frames/s that was the burst's dominant cost.
+    setInFlightMap((prev) => applyLifecycle(prev, events))
+
+    const toMerge: Summary[] = []
+    let cleared = false
+    for (const event of events) {
+      if (event.kind === 'cleared') {
+        // J0 rule 3 — everything known at this position goes: the cached rows, the completion
+        // buffer, and the rows completed earlier in *this* window (which are not in the cache
+        // yet, so the purge above cannot see them). No row is inspected; the refetch below
+        // brings back whatever survived.
+        pendingRef.current = []
+        toMerge.length = 0
+        purgeListCaches()
+        cleared = true
+        continue
+      }
+
+      if (event.kind !== 'completed') continue
+      const { row, seq } = event.data
+      onCompletedRef.current?.(row, seq)
+      if (!row) continue
+
+      // A completed row can introduce a tag/model/backend/format the filter bar's cached
+      // facets don't know about. Only invalidate entries actually missing something, so
+      // ordinary traffic doesn't refetch facets on every completion.
+      for (const [key, cached] of queryClient.getQueriesData<{
+        backends: string[]
+        models: string[]
+        formats: string[]
+        tags: string[]
+      }>({ queryKey: ['facets'] })) {
+        if (introducesNewFacet(row, cached)) {
+          void queryClient.invalidateQueries({ queryKey: key })
+        }
+      }
+
+      toMerge.push(row)
+    }
+
+    // J0 rule 4 — a fetch that starts after the clear, so the last-started fetch is one that
+    // read a post-clear database. Any pre-clear fetch still outstanding may land first; it is
+    // superseded, which is the contract's stated transient-display trade.
+    if (cleared) void refetchAuthoritative()
+
+    if (toMerge.length === 0) return
+
+    // R10 — a list fetch is in flight, and it may be about to resolve with a snapshot taken
+    // before these rows existed. Hold them and merge after settlement rather than writing into
+    // a cache about to be replaced.
+    if (queryClient.isFetching({ queryKey: REQUESTS_QUERY_ROOT }) > 0) {
+      pendingRef.current.push(...toMerge)
+      return
+    }
+
+    mergeRows(toMerge)
+  }, [mergeRows, purgeListCaches, queryClient, refetchAuthoritative])
+
+  /** Arm the coalescing window if it is not already running and there is something to apply. */
+  const scheduleFlush = useCallback(() => {
+    if (eventQueueRef.current.length === 0) return
+    if (flushTimerRef.current !== null) return
+    flushTimerRef.current = window.setTimeout(() => {
+      flushTimerRef.current = null
+      flushEvents()
+    }, EVENT_FLUSH_MS)
+  }, [flushEvents])
+
+  /** Queue one frame with its log position, arming the coalescing window if needed. */
+  const enqueueEvent = useCallback(
+    (event: QueuedEvent) => {
+      eventQueueRef.current.push(event)
+      recordingRef.current?.push(event)
+      scheduleFlush()
+    },
+    [scheduleFlush],
+  )
+
+  useEffect(
+    () => () => {
+      if (flushTimerRef.current !== null) window.clearTimeout(flushTimerRef.current)
+    },
+    [],
+  )
+
+  /**
+   * J0 rule 2 — recovery, the only operation that reasons about anything other than frame
+   * order. It replaces state rather than editing it: the server's in-flight set becomes the
+   * client's, and everything the client was holding at or below the snapshot's position is
+   * discarded as already-accounted-for.
    */
   const reconcile = useCallback(async () => {
     // I0b(2) — the run this recovery is *about*. A response is evidence only while both this
     // and its own run id still match the connection's current run.
     const runAtIssue = serverRunIdRef.current
 
+    // Start recording *before* the request goes out. That single ordering is what makes the
+    // discard sound: everything received earlier was published before the server took the
+    // snapshot, so the snapshot accounts for it and it needs no replay; everything from here
+    // on might not be, so it is kept and ordered against the returned position.
+    recordingRef.current = []
+
     let active
     try {
       active = await api.getActiveRequests()
     } catch {
+      recordingRef.current = null
       return // transient; the next gap or reconnect retries
     }
+
+    const recorded = recordingRef.current ?? []
+    recordingRef.current = null
 
     const currentRun = serverRunIdRef.current
     const applies =
       currentRun === runAtIssue && (currentRun === null || active.serverRunId === currentRun)
 
     if (applies) {
+      const position = active.logPosition
+      logFloorRef.current = Math.max(logFloorRef.current, position)
+      // The whole buffer goes: `completed` is published after the row is inserted, so every
+      // buffered row is in the database the refetch below reads.
+      pendingRef.current = []
+      eventQueueRef.current = eventQueueRef.current.filter((e) => e.id > position)
+
+      // Frames published after the snapshot are not described by it, whether they are still
+      // queued or were applied by a coalescing window while the request was in flight. They
+      // replay, in order, on top of the replacement.
+      const replay = recorded.filter((e) => e.id > position)
+
       const activeSet = new Set(active.activeSeqs)
       setInFlightMap((prev) => {
-        let changed = false
-        const next = new Map(prev)
-        for (const seq of prev.keys()) {
-          // Absent from the server's active set and at/below the completed boundary: finished
-          // or dropped. A seq above the boundary may just have started after the snapshot —
-          // and since I0b(1) allocates a seq only as it registers it, a seq missing from a
-          // coherent snapshot was necessarily allocated after that snapshot, hence above its
-          // boundary. So "absent and at/below the boundary" now means finished, full stop.
-          if (!activeSet.has(seq) && seq <= active.newestCompletedSeq) {
-            next.delete(seq)
-            changed = true
-          }
+        // In-flight := the server's set. Only rows we have `started` details for can be
+        // rendered, so a seq whose `started` frame this client never received stays invisible
+        // until it completes — it was never displayable in the first place.
+        const base = new Map<number, InFlightRequest>()
+        for (const seq of activeSet) {
+          const known = prev.get(seq)
+          if (known) base.set(seq, known)
         }
 
-        return changed ? next : prev
+        const rebuilt = applyLifecycle(base, replay)
+        const unchanged =
+          prev.size === rebuilt.size && [...rebuilt].every(([seq, item]) => prev.get(seq) === item)
+        return unchanged ? prev : rebuilt
       })
-
-      // I0a — the deletion state we may have missed: this is how a clear whose `cleared` frame
-      // the bounded queue dropped still reaches the cache and the completion buffer.
-      if (active.clear !== null) {
-        learnClear(active.clear)
-      }
     }
     // Otherwise the response describes a Vessel lifetime we are no longer connected to (or one
     // that changed under the request). It is discarded, *not* treated as a restart: expiring
     // the current run's live requests on obsolete evidence is exactly the R11 failure. Only a
-    // `hello` changes the run, and it schedules its own reconciliation. The refetches below
-    // still run — history/stats/facets are not run-scoped and are stale either way.
+    // `hello` changes the run, and it schedules its own recovery. The refetches below still
+    // run — history/stats/facets are not run-scoped and are stale either way.
 
-    await Promise.all([
-      queryClient.refetchQueries({ queryKey: REQUESTS_QUERY_ROOT }),
-      queryClient.invalidateQueries({ queryKey: ['stats'] }),
-      queryClient.invalidateQueries({ queryKey: ['facets'] }),
-    ])
-  }, [learnClear, queryClient])
+    await refetchAuthoritative()
+  }, [refetchAuthoritative])
 
-  // R22/F1 — coalesce recovery: a burst of gaps produces one reconciliation, not one per
-  // gap. A debounce collapses the burst; a single-flight guard folds gaps that arrive during
-  // a run into exactly one follow-up, so overlapping reconciliations never pile up.
+  // R22/F1 — coalesce recovery: a burst of gaps produces one recovery, not one per gap. A
+  // debounce collapses the burst; a single-flight guard folds gaps that arrive during a run
+  // into exactly one follow-up, so overlapping recoveries never pile up.
   const reconcileTimerRef = useRef<number | null>(null)
   const reconcilingRef = useRef(false)
   const reconcileQueuedRef = useRef(false)
@@ -367,147 +467,25 @@ export function useLiveHistory({
     [],
   )
 
-  /**
-   * I0c — apply one coalescing window's worth of events. Two passes over the same queue, in
-   * arrival order: one functional state update for every lifecycle change, then the cache and
-   * buffer effects. Order within the window is preserved exactly, which is what lets a
-   * `cleared` still divide the completions it deletes from the ones it does not.
-   */
-  const flushEvents = useCallback(() => {
-    const queued = eventQueueRef.current
-    if (queued.length === 0) return
-    eventQueueRef.current = []
-
-    // One state update for the whole window. Previously every frame produced its own Map
-    // clone and its own render pass; at ~1.3k frames/s that was the burst's dominant cost.
-    setInFlightMap((prev) => {
-      let next: Map<number, InFlightRequest> | null = null
-      const current = () => next ?? prev
-      const edit = () => (next ??= new Map(prev))
-      for (const event of queued) {
-        switch (event.kind) {
-          case 'started':
-            edit().set(event.data.seq, { ...event.data })
-            break
-          case 'request_ready': {
-            const existing = current().get(event.data.seq)
-            if (existing) edit().set(event.data.seq, { ...existing, model: event.data.model })
-            break
-          }
-
-          case 'first_token': {
-            const existing = current().get(event.data.seq)
-            if (existing) edit().set(event.data.seq, { ...existing, ttftMs: event.data.ttftMs })
-            break
-          }
-
-          case 'completed':
-            if (current().has(event.data.seq)) edit().delete(event.data.seq)
-            break
-        }
-      }
-
-      return next ?? prev
-    })
-
-    const toMerge: Summary[] = []
-    for (const event of queued) {
-      if (event.kind === 'cleared') {
-        learnClear(event.data)
-        // Rows completed earlier in *this* window are not in the cache yet, so the purge above
-        // cannot see them: apply the predicate to them here, keeping the wire's ordering.
-        const clear = clearRef.current
-        if (clear !== null && toMerge.length > 0) {
-          const kept = toMerge.filter((row) => !clearedRow(clear, row))
-          toMerge.length = 0
-          toMerge.push(...kept)
-        }
-
-        continue
-      }
-
-      if (event.kind !== 'completed') continue
-      const { row, seq } = event.data
-      onCompletedRef.current?.(row, seq)
-      if (!row) continue
-
-      // A completed row can introduce a tag/model/backend/format the filter bar's cached
-      // facets don't know about. Only invalidate entries actually missing something, so
-      // ordinary traffic doesn't refetch facets on every completion.
-      for (const [key, cached] of queryClient.getQueriesData<{
-        backends: string[]
-        models: string[]
-        formats: string[]
-        tags: string[]
-      }>({ queryKey: ['facets'] })) {
-        if (introducesNewFacet(row, cached)) {
-          void queryClient.invalidateQueries({ queryKey: key })
-        }
-      }
-
-      // I0a — this completion is published after any clear we already know about (the wire
-      // orders a deleted row's `completed` before `cleared`), so the row is post-clear however
-      // its id compares to the boundary. Record it, so re-applying the predicate at settlement
-      // never purges a live row that merely reuses a cleared id.
-      if (clearRef.current !== null && clearedRow(clearRef.current, row)) {
-        postClearIdsRef.current.add(row.id)
-      }
-
-      toMerge.push(row)
-    }
-
-    if (toMerge.length === 0) return
-
-    // R10 — a list fetch is in flight, and it may be about to resolve with a snapshot taken
-    // before these rows existed. Hold them and merge after settlement rather than writing into
-    // a cache about to be replaced. A `cleared` arriving before the drain will purge whatever
-    // the clear removed (R23/H0a).
-    if (queryClient.isFetching({ queryKey: REQUESTS_QUERY_ROOT }) > 0) {
-      pendingRef.current.push(...toMerge)
-      return
-    }
-
-    mergeRows(toMerge)
-  }, [clearedRow, learnClear, mergeRows, queryClient])
-
-  /** Queue one event, arming the coalescing window if it is not already running. */
-  const enqueueEvent = useCallback(
-    (event: QueuedEvent) => {
-      eventQueueRef.current.push(event)
-      if (flushTimerRef.current !== null) return
-      flushTimerRef.current = window.setTimeout(() => {
-        flushTimerRef.current = null
-        flushEvents()
-      }, EVENT_FLUSH_MS)
-    },
-    [flushEvents],
-  )
-
-  useEffect(
-    () => () => {
-      if (flushTimerRef.current !== null) window.clearTimeout(flushTimerRef.current)
-    },
-    [],
-  )
-
   const { connected } = useEvents({
-    onStarted: (data) => enqueueEvent({ kind: 'started', data }),
-    onRequestReady: (data) => enqueueEvent({ kind: 'request_ready', data }),
-    onFirstToken: (data) => enqueueEvent({ kind: 'first_token', data }),
-    onCompleted: (data) => enqueueEvent({ kind: 'completed', data }),
-    onCleared: (data) => enqueueEvent({ kind: 'cleared', data }),
+    onStarted: (data, id) => enqueueEvent({ kind: 'started', data, id }),
+    onRequestReady: (data, id) => enqueueEvent({ kind: 'request_ready', data, id }),
+    onFirstToken: (data, id) => enqueueEvent({ kind: 'first_token', data, id }),
+    onCompleted: (data, id) => enqueueEvent({ kind: 'completed', data, id }),
+    onCleared: (id) => enqueueEvent({ kind: 'cleared', id }),
     onHello: (data) => {
       const prev = serverRunIdRef.current
       serverRunIdRef.current = data.serverRunId
       if (prev !== null && prev !== data.serverRunId) {
         // R11/H0b — Vessel restarted under this reconnecting connection. Every in-flight seq
-        // is from the dead process; discard them, then reconcile against the fresh server.
-        // I0a — clear versions are per run too (they restart with the process), so the recorded
-        // predicate is dropped rather than compared against the new run's versions.
+        // is from the dead process, and so is every queued frame id and the position floor
+        // derived from them (J0: log positions restart with the process). Discard all of it,
+        // then recover against the fresh server.
         setInFlightMap((current) => (current.size === 0 ? current : new Map()))
-        clearRef.current = null
-        postClearIdsRef.current = new Set()
-        clearPendingSettleRef.current = false
+        eventQueueRef.current = []
+        recordingRef.current = recordingRef.current === null ? null : []
+        pendingRef.current = []
+        logFloorRef.current = 0
         scheduleReconcile()
       }
     },
@@ -530,6 +508,45 @@ export function useLiveHistory({
     newSinceFilter,
     clearNewSinceFilter: useCallback(() => setNewSince({ signature: '', count: 0 }), []),
   }
+}
+
+/**
+ * J0 — fold lifecycle frames, in id order, over an in-flight map. The one place the map's
+ * shape is decided, so the coalescing flush and the post-recovery replay cannot drift apart.
+ * Copy-on-write: `prev` is returned untouched when the window changed nothing, which is what
+ * keeps a quiet tab from re-rendering on every flush.
+ */
+function applyLifecycle(
+  prev: Map<number, InFlightRequest>,
+  events: QueuedEvent[],
+): Map<number, InFlightRequest> {
+  let next: Map<number, InFlightRequest> | null = null
+  const current = () => next ?? prev
+  const edit = () => (next ??= new Map(prev))
+  for (const event of events) {
+    switch (event.kind) {
+      case 'started':
+        edit().set(event.data.seq, { ...event.data })
+        break
+      case 'request_ready': {
+        const existing = current().get(event.data.seq)
+        if (existing) edit().set(event.data.seq, { ...existing, model: event.data.model })
+        break
+      }
+
+      case 'first_token': {
+        const existing = current().get(event.data.seq)
+        if (existing) edit().set(event.data.seq, { ...existing, ttftMs: event.data.ttftMs })
+        break
+      }
+
+      case 'completed':
+        if (current().has(event.data.seq)) edit().delete(event.data.seq)
+        break
+    }
+  }
+
+  return next ?? prev
 }
 
 /** True when `row` has a tag/model/backend/format not already in `cached`. */

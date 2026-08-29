@@ -62,7 +62,7 @@ public class CaptureWriterResilienceTests
         public SessionInfo CreateSession(string? name) =>
             new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name);
 
-        public ClearResult Clear(string? beforeIso) => new(0, 0);
+        public int Clear(string? beforeIso) => 0;
 
         public int SnapshotAttempts()
         {
@@ -365,14 +365,14 @@ public class CaptureWriterResilienceTests
         public SessionInfo CreateSession(string? name) =>
             new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name);
 
-        public ClearResult Clear(string? beforeIso)
+        public int Clear(string? beforeIso)
         {
             lock (_lock)
             {
                 _operations.Add("clear");
                 int deleted = _live.Count;
                 _live.Clear();
-                return new ClearResult(deleted, _nextId - 1);
+                return deleted;
             }
         }
     }

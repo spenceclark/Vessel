@@ -163,25 +163,32 @@ in-flight requests live with a running timer, plus a lightweight client-side det
 (method/path/backend/model/tags/elapsed — no REST fetch, since a request that hasn't
 completed has no response to show yet).
 
-**Lifecycle authority (code-review Batches H and I, R11/R23/R25/R26).** Reconciliation is
-server-authoritative, not history-derived: `GET /vessel/api/active` returns the live
-in-flight set `{ activeSeqs, newestCompletedSeq, serverRunId, clear }`, read under the hub's
-one lock so every field is coherent. A request's `seq` is allocated *inside* that lock, as it
-is registered, so a seq can never exist unregistered — which is what makes "absent from the
-set and at/below the watermark ⇒ finished" sound. `serverRunId` (a per-process GUID, also on
-`hello` and `/status`) lets the client distinguish a restart from a reconnect and discard a
-dead process's `seq`s wholesale; only `hello` signals that change, since a `/active` response
-carrying a different run id is merely stale and is discarded rather than acted on. Every
-registered request is guaranteed a terminal transition — the writer completes it, or (when
-capture admission is closed) `ProxyHandler` and the writer's drain do, and the guarded span
-covers request preparation too — so a `seq` can never leak in the active set while forwarding
-stays independent of capture health. Clearing is the in-band `cleared` event (published under
-the same lock as `completed`, so it orders correctly against completions) *and* versioned
-state on `/active`, so a client whose frame was dropped recovers the same deletion predicate;
-the client purges the rows the server deleted by the server's own predicate, with no
-client-side generation counter. The UI applies the feed on a ~10 Hz coalescing window rather
-than per frame — at burst rates the per-frame path was a main-thread/allocation hazard
-independent of ordering. Full contract in phase-3.md D5.
+**Lifecycle authority (code-review Batches H, I and J, R11/R23/R25/R26).** Recovery is a
+snapshot plus an ordered log, not a set of merge rules. The SSE event id — allocated under the
+hub's publish lock — is the single position for every lifecycle change, and
+`GET /vessel/api/active` returns `{ activeSeqs, logPosition, serverRunId }` read in that same
+critical section: lifecycle truth *as of one stream position*. A request's `seq` is allocated
+inside the lock as it is registered, so a seq can never exist unregistered and a snapshot can
+never omit one silently. On reconnect, gap or run change the client adopts `activeSeqs`
+wholesale and discards everything it is holding at or below `logPosition` — queued frames, the
+completion buffer, the lot — because a frame it received before issuing the request was
+published before the snapshot was taken; frames above the position replay in order on top.
+Between recoveries frames apply strictly in id order. `serverRunId` (a per-process GUID, also
+on `hello` and `/status`) lets the client distinguish a restart from a reconnect and discard a
+dead process's seqs and positions wholesale; only `hello` signals that change, since a
+`/active` response carrying a different run id is merely stale and is discarded rather than
+acted on. Every registered request is guaranteed a terminal transition — the writer completes
+it, or (when capture admission is closed) `ProxyHandler` and the writer's drain do, and the
+guarded span covers request preparation too — so a `seq` can never leak in the active set while
+forwarding stays independent of capture health. Clearing is the in-band `cleared` event,
+published under the same lock as `completed` so it orders correctly against them, and it
+carries **no payload**: the client drops the rows and buffered completions it holds at that
+position and refetches, and REST reads are authoritative and never client-filtered. Earlier
+rounds tried to ship the deletion *predicate* to the client (an id boundary, then a versioned
+`{scope, beforeTs, boundaryId}`); both failed, because a client cannot re-derive which rows a
+past deletion removed once ids are reused or a clear is missed. The UI applies the feed on a
+~10 Hz coalescing window rather than per frame — at burst rates the per-frame path was a
+main-thread/allocation hazard independent of ordering. Full contract in phase-3.md D5.
 
 **Accepted scope (post-Phase-4 addition, code review E2).** `request_ready {seq, model}`
 was added after Phase 3/4 landed (ui-spec.md §9.1's in-flight-detail TODO): emitted once
@@ -348,7 +355,7 @@ Everything Vessel-owned lives under `/vessel/` (impossible to collide with `/v1/
 | `GET /vessel/api/sessions` · `POST /vessel/api/sessions` | list / reset (create marker) |
 | `GET /vessel/api/stats?session=` | totals, failures, avg latency / tok/s / ttft, token totals in/out/cached (accepted scope, post-Phase-4 addition — phase-3.md D3) |
 | `GET /vessel/api/events` | SSE lifecycle feed: `hello`, `started`, `request_ready`, `first_token`, `completed`, `cleared` (§4.4) |
-| `GET /vessel/api/active` | server-authoritative in-flight set `{ activeSeqs, newestCompletedSeq, serverRunId, clear }` for reconciliation (§4.4, Batch F/H/I) |
+| `GET /vessel/api/active` | recovery snapshot `{ activeSeqs, logPosition, serverRunId }` — the in-flight set and the log position it is true as of (§4.4, Batch F/H/I/J) |
 | `GET/PUT /vessel/api/config` | backends, retention, ports, redaction — persisted to `vessel.json` |
 | `GET /vessel/api/ollama/ps` | (Ollama backends) proxied `ollama ps` — loaded models, memory |
 

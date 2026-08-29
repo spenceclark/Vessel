@@ -39,8 +39,20 @@ public class EventsTests
         /// <summary>Reads until <paramref name="count"/> named events have arrived (":" heartbeat comments are skipped).</summary>
         public async Task<List<(string Event, string Data)>> ReadEventsAsync(int count, CancellationToken ct)
         {
-            var events = new List<(string, string)>();
+            List<(string Event, string Data, long Id)> frames = await ReadFramesAsync(count, ct);
+            return [.. frames.Select(f => (f.Event, f.Data))];
+        }
+
+        /// <summary>
+        /// J0 — the same read, keeping each frame's SSE <c>id:</c>. That id is the log position
+        /// the recovery contract is written in terms of, so a test can compare what a
+        /// subscriber saw against the <c>logPosition</c> <c>GET /active</c> reports.
+        /// </summary>
+        public async Task<List<(string Event, string Data, long Id)>> ReadFramesAsync(int count, CancellationToken ct)
+        {
+            var events = new List<(string, string, long)>();
             string? currentEvent = null;
+            long currentId = 0;
             var dataLines = new List<string>();
 
             while (events.Count < count)
@@ -57,15 +69,20 @@ public class EventsTests
                     // events, and hello is not one — it is the connection's first frame.
                     if (currentEvent is not null && currentEvent != "hello")
                     {
-                        events.Add((currentEvent, string.Join("\n", dataLines)));
+                        events.Add((currentEvent, string.Join("\n", dataLines), currentId));
                     }
 
                     currentEvent = null;
+                    currentId = 0;
                     dataLines.Clear();
                     continue;
                 }
 
-                if (line.StartsWith("event:", StringComparison.Ordinal))
+                if (line.StartsWith("id:", StringComparison.Ordinal))
+                {
+                    currentId = long.Parse(line["id:".Length..].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+                }
+                else if (line.StartsWith("event:", StringComparison.Ordinal))
                 {
                     currentEvent = line["event:".Length..].Trim();
                 }
@@ -254,32 +271,41 @@ public class EventsTests
             $"id: must immediately precede event: within a frame; lines:\n{string.Join("\n", lines)}");
     }
 
-    // R11/F2 — GET /vessel/api/active is the server-authoritative lifecycle source the
-    // client reconciles against. A completed proxied request must leave the active set and
-    // advance the completed-seq boundary, so a client can tell a finished request from a
-    // running one without inspecting paginated history at all.
+    // R11/F2/J1 — GET /vessel/api/active is the recovery snapshot the client adopts wholesale:
+    // the in-flight set, and the log position that set is true as of. A completed proxied
+    // request must leave the active set, and the reported position must cover that request's
+    // own `completed` frame — the client's whole discard rule ("everything I hold at or below
+    // this position is already accounted for here") depends on that pairing being honest.
     [Fact]
-    public async Task Active_CompletedRequestLeavesActiveSet_AndAdvancesBoundary()
+    public async Task Active_CompletedRequestLeavesActiveSet_AtOrAboveItsOwnCompletedFrame()
     {
         await using TestVessel vessel = await TestVessel.StartAsync();
         using var client = new HttpClient();
 
+        // A subscriber must exist for frames to be published at all (zero-subscriber
+        // publishing is skipped by design), and it is what makes the position observable.
+        using SseReader sse = await SseReader.OpenAsync(client, $"{vessel.BaseUrl}/vessel/api/events", CT);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
+        Task<List<(string Event, string Data, long Id)>> framesTask = sse.ReadFramesAsync(2, cts.Token);
+
         using HttpResponseMessage r = await client.GetAsync($"{vessel.BaseUrl}/echo?active", CT);
         Assert.Equal(HttpStatusCode.OK, r.StatusCode);
 
-        // The completion is emitted by the writer after insert, so poll until the boundary
-        // has advanced. Once it has for our single request, the active set must be empty.
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
-        cts.CancelAfter(TimeSpan.FromSeconds(10));
-        long newestCompleted = 0;
+        List<(string Event, string Data, long Id)> frames = await framesTask;
+        (string Event, string Data, long Id) completed = frames.Single(f => f.Event == "completed");
+
+        // The completion is emitted by the writer after insert, so poll until the position has
+        // reached that frame. Once it has for our single request, nothing remains active.
+        long logPosition = 0;
         int activeCount = -1;
         while (!cts.IsCancellationRequested)
         {
             using HttpResponseMessage active = await client.GetAsync($"{vessel.BaseUrl}/vessel/api/active", cts.Token);
             using JsonDocument doc = JsonDocument.Parse(await active.Content.ReadAsStringAsync(cts.Token));
-            newestCompleted = doc.RootElement.GetProperty("newestCompletedSeq").GetInt64();
+            logPosition = doc.RootElement.GetProperty("logPosition").GetInt64();
             activeCount = doc.RootElement.GetProperty("activeSeqs").GetArrayLength();
-            if (newestCompleted >= 1)
+            if (logPosition >= completed.Id)
             {
                 break;
             }
@@ -287,7 +313,7 @@ public class EventsTests
             await Task.Delay(25, cts.Token);
         }
 
-        Assert.True(newestCompleted >= 1, "a completed request must advance newestCompletedSeq");
+        Assert.True(logPosition >= completed.Id, $"logPosition {logPosition} must cover the completed frame {completed.Id}");
         Assert.Equal(0, activeCount); // no traffic is in flight, so nothing remains active
     }
 
@@ -343,69 +369,81 @@ public class EventsTests
         Assert.Equal(helloRunId, statusDoc.RootElement.GetProperty("serverRunId").GetString());
     }
 
-    // R23/I0a — a clear is versioned, recoverable state, not just a frame. `GET /active` must
-    // report the latest clear's version and the predicate the server actually deleted by, with
-    // *no subscriber attached* — that is precisely the client whose `cleared` frame was dropped
-    // (or who was reconnecting) and must recover the same deletion state from recovery alone.
+    // R23/J0 — a clear is a *position*, not retained state. The frame stays as the fast path
+    // (it tells a connected client "history was deleted here, at this id"), but it carries no
+    // predicate, no version and no boundary, and the server remembers nothing about it: a
+    // client that missed it recovers by snapshot, and the refetch that recovery schedules
+    // reads a database which already reflects every clear that ever ran. This test pins both
+    // halves — the frame's shape, and the absence of clear state on /active — because the
+    // retired I0a model failed exactly where remembered predicates were re-applied client-side
+    // (round-five review §2.2 B and C).
     [Fact]
-    public async Task Active_ReportsLatestClearVersionAndPredicate_WithoutAnySubscriber()
+    public async Task Cleared_IsAPositionInTheLog_NotRetainedServerState()
     {
         await using TestVessel vessel = await TestVessel.StartAsync();
         using var client = new HttpClient();
 
-        using JsonDocument before = JsonDocument.Parse(
-            await (await client.GetAsync($"{vessel.BaseUrl}/vessel/api/active", CT)).Content.ReadAsStringAsync(CT));
-        Assert.Equal(JsonValueKind.Null, before.RootElement.GetProperty("clear").ValueKind);
+        using SseReader sse = await SseReader.OpenAsync(client, $"{vessel.BaseUrl}/vessel/api/events", CT);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
 
-        for (int i = 1; i <= 2; i++)
+        // started + completed for the row, then the clear's own frame.
+        Task<List<(string Event, string Data, long Id)>> framesTask = sse.ReadFramesAsync(3, cts.Token);
+
+        using (HttpResponseMessage r = await client.GetAsync($"{vessel.BaseUrl}/echo?clearme", CT))
         {
-            using HttpResponseMessage r = await client.GetAsync($"{vessel.BaseUrl}/echo?clearme{i}", CT);
             Assert.Equal(HttpStatusCode.OK, r.StatusCode);
         }
 
-        await CaptureDb.WaitUntil(vessel.DbPath, rows => rows.Count, count => count >= 2);
+        await CaptureDb.WaitUntil(vessel.DbPath, rows => rows.Count, count => count >= 1);
 
         using (HttpResponseMessage cleared = await client.DeleteAsync($"{vessel.BaseUrl}/vessel/api/requests?scope=all", CT))
         {
             Assert.Equal(HttpStatusCode.OK, cleared.StatusCode);
         }
 
-        using JsonDocument afterAll = JsonDocument.Parse(
-            await (await client.GetAsync($"{vessel.BaseUrl}/vessel/api/active", CT)).Content.ReadAsStringAsync(CT));
-        JsonElement clearAll = afterAll.RootElement.GetProperty("clear");
-        Assert.Equal(1, clearAll.GetProperty("version").GetInt64());
-        Assert.Equal("all", clearAll.GetProperty("scope").GetString());
-        Assert.Equal(JsonValueKind.Null, clearAll.GetProperty("beforeTs").ValueKind);
-        // Every row the clear deleted is at or below this id — the two above were ids 1 and 2.
-        Assert.Equal(2, clearAll.GetProperty("boundaryId").GetInt64());
+        List<(string Event, string Data, long Id)> frames = await framesTask;
+        Assert.Equal(["started", "completed", "cleared"], frames.Select(f => f.Event));
 
-        string cutoff = DateTime.UtcNow.ToString("o");
-        using (HttpResponseMessage clearedBefore = await client.DeleteAsync(
-            $"{vessel.BaseUrl}/vessel/api/requests?before={Uri.EscapeDataString(cutoff)}", CT))
-        {
-            Assert.Equal(HttpStatusCode.OK, clearedBefore.StatusCode);
-        }
+        (string Event, string Data, long Id) clearFrame = frames[2];
+        // Empty payload: the position is the entire content of the frame.
+        Assert.Equal("{}", clearFrame.Data);
+        // H0a's ordering survives J0 — the deleted row's `completed` precedes the clear, so a
+        // client applying frames in id order can never merge a row the clear already removed.
+        Assert.True(clearFrame.Id > frames[1].Id, "the cleared frame must be published after the completions it deletes");
 
-        using JsonDocument afterBefore = JsonDocument.Parse(
+        // And the server retains nothing about it: recovery is a snapshot, not a predicate.
+        using JsonDocument after = JsonDocument.Parse(
             await (await client.GetAsync($"{vessel.BaseUrl}/vessel/api/active", CT)).Content.ReadAsStringAsync(CT));
-        JsonElement clearBefore = afterBefore.RootElement.GetProperty("clear");
-        Assert.Equal(2, clearBefore.GetProperty("version").GetInt64()); // monotonic within the run
-        Assert.Equal("before", clearBefore.GetProperty("scope").GetString());
-        Assert.Equal(cutoff, clearBefore.GetProperty("beforeTs").GetString()); // the DELETE's own predicate
+        Assert.False(after.RootElement.TryGetProperty("clear", out _), "/active must not report clear state");
+        Assert.True(
+            after.RootElement.GetProperty("logPosition").GetInt64() >= clearFrame.Id,
+            "the snapshot's position must cover the clear a client may have missed");
     }
 
-    // R11/H0b(2) — the concurrent-snapshot invariant probe, ported. GetActiveRequests must
-    // return one coherent snapshot: every ODD seq at or below the returned watermark must be
-    // present in the active set. The probe registers an odd seq that never completes, then
-    // registers and completes the following even seq (which advances the watermark past the
-    // odd one). Reading the active keys and the watermark separately (a concurrent dictionary +
-    // an interlocked long) let a snapshot report a watermark covering a still-running odd seq
-    // absent from the keys — the review saw 187/571 snapshots violate this. Under one lock, the
-    // invariant holds with zero violations.
+    // R11/H0b(2)/J0 — the concurrent-snapshot invariant probe, ported to the log position.
+    // GetActiveRequests must return one coherent snapshot: an active set together with the
+    // position it is true as of. J0's client rule is "everything at or below LogPosition is
+    // already reflected in ActiveSeqs", so the invariant to hold under concurrency is: if a
+    // seq's `started` frame has been published at or below the snapshot's position, and that
+    // seq never completes, it must be in the snapshot's active set.
+    //
+    // The probe makes that checkable arithmetically. Each iteration publishes exactly three
+    // frames — started(odd), started(even), completed(even) — so iteration k's odd seq 2k-1
+    // has frame id 3k-2, and "started at or below P" is exactly 3k-2 <= P. Reading the keys
+    // and the position separately (a concurrent dictionary + an interlocked long, as before
+    // H0b(2)) tears them apart — the review saw 187/571 snapshots violate the equivalent
+    // watermark invariant — and recovery would then expire a request that is genuinely running.
     [Fact]
     public async Task Active_SnapshotStaysCoherent_UnderConcurrentRegisterAndComplete()
     {
         var hub = new CaptureEvents();
+
+        // Frames are only published when someone is subscribed, and the position only advances
+        // with them. The subscription is never read: its bounded channel drops oldest, which is
+        // exactly the lossy feed recovery exists for.
+        using CaptureSubscription subscriber = hub.Subscribe();
+
         var violations = new System.Collections.Concurrent.ConcurrentBag<string>();
         using var stop = new CancellationTokenSource();
 
@@ -416,11 +454,12 @@ public class EventsTests
                 {
                     ActiveRequests snap = hub.GetActiveRequests();
                     var active = new HashSet<long>(snap.ActiveSeqs);
-                    for (long odd = 1; odd <= snap.NewestCompletedSeq; odd += 2)
+                    // Every iteration whose odd `started` frame is at or below this position.
+                    for (long k = 1; (3 * k) - 2 <= snap.LogPosition; k++)
                     {
-                        if (!active.Contains(odd))
+                        if (!active.Contains((2 * k) - 1))
                         {
-                            violations.Add($"odd {odd} absent though watermark is {snap.NewestCompletedSeq}");
+                            violations.Add($"odd {(2 * k) - 1} absent though its started frame {(3 * k) - 2} is at or below position {snap.LogPosition}");
                             break;
                         }
                     }
@@ -435,13 +474,15 @@ public class EventsTests
             long even = hub.Register("2026-08-28T00:00:00.0000000Z", 1, "POST", "/even", "stub", []);
             Assert.Equal((2 * k) - 1, odd); // the hub allocates in order, so the parity holds
             Assert.Equal(2 * k, even);
-            hub.Completed(even, null); // advances the watermark past `odd`
+            hub.Completed(even, null); // three frames per iteration: started, started, completed
         }
 
         stop.Cancel();
         await Task.WhenAll(readers);
 
         Assert.Empty(violations);
+        // The arithmetic above is only valid if each iteration really published three frames.
+        Assert.Equal(3 * iterations, hub.GetActiveRequests().LogPosition);
     }
 
     // R25/H0b(3) — once capture admission is closed, every proxied request still forwards, and

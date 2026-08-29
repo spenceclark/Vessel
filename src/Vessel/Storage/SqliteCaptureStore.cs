@@ -362,24 +362,13 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     /// oldest-<c>N</c> limit. <c>incremental_vacuum</c> runs after commit so the file
     /// actually shrinks.
     /// </summary>
-    public ClearResult Clear(string? beforeIso)
+    public int Clear(string? beforeIso)
     {
         SqliteConnection connection = Connected();
         using SqliteTransaction transaction = connection.BeginTransaction();
 
         string filter = beforeIso is null ? "" : "WHERE started_at < $before";
         string matching = $"SELECT id FROM requests {filter}";
-
-        // I0a — for a clear-all, read the id boundary inside the same transaction as the
-        // delete, so it really is "every row that existed when this clear ran".
-        long boundaryId = 0;
-        if (beforeIso is null)
-        {
-            using SqliteCommand max = connection.CreateCommand();
-            max.Transaction = transaction;
-            max.CommandText = "SELECT COALESCE(MAX(id), 0) FROM requests";
-            boundaryId = Convert.ToInt64(max.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
-        }
 
         using (SqliteCommand fts = connection.CreateCommand())
         {
@@ -408,7 +397,7 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
 
         transaction.Commit();
         Execute("PRAGMA incremental_vacuum");
-        return new ClearResult(deleted, boundaryId);
+        return deleted;
     }
 
     private static SqliteParameter AddTo(SqliteCommand command, string name)

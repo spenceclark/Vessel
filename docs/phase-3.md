@@ -99,9 +99,14 @@ All read queries are indexed (`id` cursor, `session_id`); no query may scan bodi
 - ~~**Re-review addition** (Batch F, R23): `DELETE /requests` response gains
   `boundaryId?: number`~~ — **retired by Batch H (H0a)**. An id boundary cannot describe a
   clear-before (ids follow persistence order, not start time), and an ack cannot be ordered
-  against completions at all. `DELETE /requests` now returns only `{ deleted: number }`, for
-  the UX toast; deletion scope travels on the ordered `cleared` SSE event and on
-  `GET /active` (D5 below, Batches H and I).
+  against completions at all. `DELETE /requests` returns only `{ deleted: number }`, for the
+  UX toast.
+  **Fifth-round correction (Batch J, J0):** deletion scope no longer travels to the client in
+  *any* form — not on the ack, not on the frame, not on `/active`. Every predicate model was
+  wrong in some ordering, and the client is not the right place to decide which rows a past
+  deletion removed. A clear reaches the client as a **position** in the event log; the rows
+  that survived it come back from the refetch that position triggers, which reads the
+  post-clear database (D5 below).
 - Errors follow the Phase 0 convention (`X-Vessel-Error` + `{"error":{...}}`).
 
 ### D4 — Sessions: current-session id is stamped at capture time
@@ -133,9 +138,12 @@ so the API can respond with it. No second write connection, no lock dance.
   watermark past the unregistered seq, and a snapshot taken there reported it neither
   active nor unfinished — so reconciliation expired a request that was about to run
   (the review reproduced exactly this with production types). Atomic allocation makes
-  that interleaving unrepresentable, which is what lets the client's rule "absent from
-  the active set **and** at/below the boundary ⇒ finished" be sound: a seq missing from a
-  coherent snapshot was necessarily allocated after it, hence above its boundary.
+  that interleaving unrepresentable — which is what keeps a snapshot honest under Batch J
+  too: a seq that exists is registered, so it cannot be silently missing from one.
+  ~~That is what lets the client's rule "absent from the active set **and** at/below the
+  boundary ⇒ finished" be sound.~~ **Superseded by J0:** the client no longer compares seqs
+  against a boundary at all; it adopts the snapshot's active set wholesale and orders its own
+  pending work against the snapshot's log position.
 - Events (named SSE events, JSON data): `started` `{seq, startedAt, sessionId, method,
   path, backend, tags}` — emitted at handler entry; `first_token` `{seq, ttftMs}` — emitted
   on the first-response-byte mark of streamed responses; `completed` `{seq, row:
@@ -176,18 +184,22 @@ so the API can respond with it. No second write connection, no lock dance.
     gone — removal is keyed directly on `seq`.
   - `started` carries `sessionId` (D05), so the UI scopes in-flight rows to the viewed
     session accurately instead of guessing.
-- **Re-review addition** (Batch F, R11/F2; extended by Batches H and I) —
-  `GET /vessel/api/active` → `{ activeSeqs: number[], newestCompletedSeq: number,
-  serverRunId: string, clear: ClearState|null }` (`clear` is Batch I, below). The
-  server-authoritative in-flight set, sourced from the live `CaptureEvents` hub: a `seq`
-  is added on `started` and removed on `completed`, independent of any SSE subscriber.
-  Deliberately separate from `/status` (which is polled and cached) — this changes on
-  every request and is fetched on demand during reconciliation. `newestCompletedSeq` is
-  the boundary below which an absent `seq` is definitely finished rather than just newly
-  started, so a request that started after the snapshot is never expired. `serverRunId`
-  (Batch H) identifies the process lifetime, so a client can reject a snapshot from a
-  different Vessel run rather than boundary-comparing across processes. All three fields
-  are read under the hub's one lock, so the snapshot is coherent (H0b(2)).
+- **Re-review addition** (Batch F, R11/F2; extended by Batches H and I, **replaced in
+  Batch J**) — `GET /vessel/api/active` → `{ activeSeqs: number[], logPosition: number,
+  serverRunId: string }`. The server-authoritative in-flight set, sourced from the live
+  `CaptureEvents` hub: a `seq` is added on `started` and removed on `completed`, independent
+  of any SSE subscriber. Deliberately separate from `/status` (which is polled and cached) —
+  this changes on every request and is fetched on demand during recovery. `logPosition`
+  (J0) is the newest SSE publish id allocated when the snapshot was taken, so the response is
+  *lifecycle truth as of one stream position*. `serverRunId` (Batch H) identifies the process
+  lifetime — seqs **and** positions restart with the process — so a client discards a snapshot
+  from a different Vessel run outright. All three fields are read under the hub's one lock, so
+  the snapshot is coherent (H0b(2)).
+  ~~`newestCompletedSeq`: the boundary below which an absent `seq` is definitely finished.~~
+  **Removed in Batch J.** A watermark orders a client's *rendered* rows against the snapshot
+  but says nothing about the work it is still holding — the queued frame, the buffered
+  completion, the outstanding fetch — which is where the fifth round's four failures lived. A
+  log position orders all of it by the same arithmetic.
 - **Third-round re-review (Batch H, R11/R23/R25)** — the lifecycle authority gains
   identity, coherence, and a terminal invariant, and clearing becomes an in-band event:
   - **`hello` event (H0b(1)).** Every SSE connection's *first* frame is
@@ -200,13 +212,13 @@ so the API can respond with it. No second write connection, no lock dance.
     started"), so the client discards its whole in-flight map rather than boundary-
     comparing across lifetimes. This replaces the previous reliance on the reconnect
     handler alone, which could not distinguish a restart from an ordinary reconnect.
-  - **Coherent active snapshot (H0b(2)).** The in-flight set, the completed watermark,
-    the publish id, and the fan-out are now all guarded by the *one* hub lock, so
-    `GET /active` returns a single coherent snapshot. Read separately (a concurrent
-    dictionary + an interlocked long, as before) a snapshot could report a watermark
-    already covering a still-running `seq` missing from the returned keys — the review's
-    187/571 torn-snapshot probe — and reconciliation would then wrongly expire a
-    legitimate request.
+  - **Coherent active snapshot (H0b(2)).** The in-flight set, the publish id, and the
+    fan-out are all guarded by the *one* hub lock, so `GET /active` returns a single coherent
+    snapshot. Read separately (a concurrent dictionary + an interlocked long, as before) a
+    snapshot could pair a position with an active set from a different moment — the review's
+    187/571 torn-snapshot probe — and recovery would then wrongly expire a legitimate request.
+    Under J0 this coherence is the contract itself: "every frame at or below `logPosition` is
+    already reflected in `activeSeqs`" is only true if the two are read together.
   - **Terminal invariant (H0b(3), R25).** "Registered → terminal" is owned at the
     registration site. `started` registers the `seq`; the writer normally removes it via
     `completed`. When capture admission is closed (the writer gave up), `ProxyHandler`'s
@@ -214,38 +226,52 @@ so the API can respond with it. No second write connection, no lock dance.
     writer's give-up/drain path completes every capture identity it discards. Forwarding
     stays independent of capture health. Without this, every proxied request after a
     give-up leaked a permanent active-set entry (the review's 32-retained-seqs probe).
-  - **`cleared` event (H0a, R23).** Clearing is now an in-band SSE frame:
-    `event: cleared` / `data: {version, scope, beforeTs, boundaryId}` (`scope` is
-    `"all"`|`"before"`; `beforeTs` is the ISO-8601 cutoff, null for clear-all). The writer
-    publishes it at clear-commit time under the same lock as `completed`, so a row a clear
-    deletes is always seen `completed` *before* `cleared` (it had to be inserted to be
-    deleted). The client purges buffered + listed rows matching the server's own predicate;
-    anything received afterwards is post-clear by construction (covering SQLite id reuse).
-    This **retires** the Batch F3 boundary/generation model — the `DELETE /requests` ack's
-    `boundaryId` is gone (it was unsound: ids follow persistence order, not start time, so
-    a clear-before could not be described by an id boundary), and the ack now carries only
-    the deleted count, for the UX toast.
-- **Fourth-round re-review (Batch I, I0a/R23) — a clear is versioned, recoverable state;
-  the frame is only the fast path.** The frame rides the same deliberately lossy,
-  drop-oldest feed as everything else, and a client that misses it (a full queue, a
-  reconnect, a recovery in progress) must still end up with the same deletion state. So:
-  - The hub keeps the **latest clear** as `{version, scope, beforeTs, boundaryId}` under
-    the publish lock. `version` is monotonic within a run (it resets with the process, so
-    it is only comparable within one `serverRunId`); `boundaryId` is the largest row id
-    that existed when a **clear-all** ran (`SELECT MAX(id)` inside the delete's own
-    transaction; 0 for a clear-before, whose predicate is the timestamp cutoff itself).
-  - `GET /active` reports it as `clear: {version, scope, beforeTs, boundaryId} | null`,
-    identical in shape to the frame — so recovery learns a clear it never saw, and a
-    repeat is recognised by version rather than re-applied.
-  - `boundaryId` is a **necessary, not sufficient** condition: a clear-all empties the
-    table, so SQLite restarts row ids and a *fresh* row can sit below the boundary. The
-    client therefore pairs it with post-clear provenance (a row learned from a completion
-    published after the clear is exempt) — see the client contract in `useLiveHistory`.
-  - Client side, the predicate is applied on arrival, once more when every list fetch that
-    was outstanding at that moment has settled (a pending REST snapshot can be older than
-    the clear: TanStack reuses an unsettled *initial* fetch rather than replacing it on
-    invalidation), and on the completion buffer's drain. It is then retired — every later
-    response necessarily comes from a post-clear database.
+  - **`cleared` event (H0a, R23; payload replaced in Batch J).** Clearing is an in-band SSE
+    frame: `event: cleared` / `data: {}`. The writer publishes it at clear-commit time under
+    the same lock as `completed`, so a row a clear deletes is always seen `completed` *before*
+    `cleared` (it had to be inserted to be deleted) — that ordering is retained and is what
+    lets ordered replay divide the completions a clear removes from the ones it does not.
+    ~~`data: {version, scope, beforeTs, boundaryId}`, which the client purged listed and
+    buffered rows by.~~ **Superseded by J0:** the frame carries no predicate and the server
+    retains none. It **retires** the Batch F3 boundary/generation model (the `DELETE /requests`
+    ack's `boundaryId` was unsound: ids follow persistence order, not start time) and, with
+    J0, the I0a versioned-predicate model that replaced it.
+- ~~**Fourth-round re-review (Batch I, I0a/R23) — a clear is versioned, recoverable state;
+  the frame is only the fast path.**~~ The hub kept the latest clear as
+  `{version, scope, beforeTs, boundaryId}`, reported it on `/active`, and the client re-applied
+  that predicate on arrival, once more when every list fetch outstanding at that moment had
+  settled, and on the completion buffer's drain, exempting rows whose completion was published
+  after the clear. **Retired in Batch J**, having failed the fifth round in three ways at once
+  (review §2.2): a queued completion was misclassified as post-clear merely because it was
+  *applied* after the clear was learned; a valid row was purged for reusing a cleared id when
+  no completion frame survived to exempt it; and a later, narrower clear overwrote the record
+  of an earlier missed one, since the hub retained only the latest. Recorded here because the
+  reasoning matters: a client cannot re-derive which rows a past deletion removed, and every
+  fix that tried made the next ordering worse.
+- **Fifth-round re-review (Batch J, J0) — recovery is a snapshot plus an ordered log.** One
+  mechanism replaces the clear predicates, the completed-seq boundary and the provenance set:
+  - The SSE **event id is the single log position** for every lifecycle change, `cleared`
+    included. It is allocated under the publish lock, so it orders every change against every
+    other, and `GET /active` reports the position its active set is true as of.
+  - **Recovery is wholesale replacement.** On reconnect, gap or run change the client fetches
+    the snapshot, then discards its in-flight map, its **entire** completion buffer and every
+    frame it holds at or below `logPosition`; takes `activeSeqs` as its in-flight set; and
+    refetches list/stats/facets. Discarding is sound by construction: a frame the client
+    received before it issued the request was published before the server took the snapshot,
+    so its id is at or below that position — the snapshot, and the database the refetch reads,
+    already account for it. Frames above the position replay in order on top.
+  - **Between recoveries, ordered replay only.** Frames apply in id order; `cleared` drops the
+    cached rows and the buffer at its position and schedules a refetch. Any detected gap goes
+    to recovery — never to ad-hoc reasoning about what was missed.
+  - **REST reads are authoritative and never client-filtered.** Nothing the client holds
+    deletes a row a fetch returned. A clear or recovery always starts a *new* fetch after
+    itself, and the last-started fetch wins. **Accepted trade, part of the contract:** a stale
+    pre-clear fetch may display briefly until its superseding refetch settles. Settled state
+    always converges, which is what every review case asserts.
+  - **Display limit, recorded:** in-flight rows are rendered only for seqs the client has
+    `started` details for, so a recovery that adopts a seq whose `started` frame the client
+    never received leaves that request invisible until it completes. It was never displayable;
+    no such row is ever shown as running when it is not.
 - **Fourth-round re-review (Batch I, I0b(2)) — `hello` is the only restart signal.** A
   `/active` response whose `serverRunId` differs from the connection's is a *stale
   response*, not evidence that the run we are connected to restarted: it is discarded

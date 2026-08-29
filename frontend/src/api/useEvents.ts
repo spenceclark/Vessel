@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import type {
-  ClearedEvent,
   CompletedEvent,
   FirstTokenEvent,
   HelloEvent,
@@ -20,13 +19,20 @@ export interface InFlightRequest {
   ttftMs?: number
 }
 
+/**
+ * J0 — every lifecycle handler receives its frame's SSE `id:` alongside the payload. That id is
+ * the log position `GET /active` reports itself against, and it is the whole basis of recovery:
+ * without it the consumer cannot tell which of the frames it is holding a snapshot already
+ * accounts for. A frame with no usable id is reported as `Infinity` — "position unknown" — so a
+ * consumer comparing against a position applies it rather than discarding it.
+ */
 export interface EventHandlers {
-  onStarted: (data: StartedEvent) => void
-  onRequestReady: (data: RequestReadyEvent) => void
-  onFirstToken: (data: FirstTokenEvent) => void
-  onCompleted: (data: CompletedEvent) => void
-  /** H0a/R23 — the server cleared history; purge matching buffered + listed rows. */
-  onCleared: (data: ClearedEvent) => void
+  onStarted: (data: StartedEvent, id: number) => void
+  onRequestReady: (data: RequestReadyEvent, id: number) => void
+  onFirstToken: (data: FirstTokenEvent, id: number) => void
+  onCompleted: (data: CompletedEvent, id: number) => void
+  /** H0a/R23/J0 — history was cleared at this position; the frame itself carries no payload. */
+  onCleared: (id: number) => void
   /** H0b — the first frame of every connection: this process's run id (a change means a restart). */
   onHello: (data: HelloEvent) => void
   /** R11 — frames were dropped between the last one and this one; the caller must reconcile. */
@@ -78,41 +84,49 @@ export function useEvents(handlers: EventHandlers) {
 
     source.addEventListener('error', () => setConnected(false))
 
-    /** Decodes one frame, reporting any gap in the publish sequence before dispatching it. */
-    function receive<T>(event: MessageEvent<string>, dispatch: (data: T) => void) {
-      const id = Number(event.lastEventId)
-      if (Number.isFinite(id) && id > 0) {
-        if (lastId !== null && id > lastId + 1) {
-          handlersRef.current.onGap(id - lastId - 1)
+    /**
+     * Decodes one frame, reporting any gap in the publish sequence before dispatching it with
+     * its log position (J0).
+     */
+    function receive<T>(event: MessageEvent<string>, dispatch: (data: T, id: number) => void) {
+      const parsed = Number(event.lastEventId)
+      const usable = Number.isFinite(parsed) && parsed > 0
+      if (usable) {
+        if (lastId !== null && parsed > lastId + 1) {
+          handlersRef.current.onGap(parsed - lastId - 1)
         }
 
         // R22 — only ever advance. The server now publishes ids in order (allocation and
         // fan-out share a lock), but a defensive floor here means a late lower id can never
         // rewind the watermark and manufacture a phantom gap on the *next* frame.
-        if (lastId === null || id > lastId) {
-          lastId = id
+        if (lastId === null || parsed > lastId) {
+          lastId = parsed
         }
       }
 
-      dispatch(JSON.parse(event.data) as T)
+      // No usable id ⇒ no known position. Reported as Infinity so a consumer ordering frames
+      // against a snapshot applies it, rather than dropping a real lifecycle change because a
+      // comparison it cannot take part in went the wrong way.
+      dispatch(JSON.parse(event.data) as T, usable ? parsed : Number.POSITIVE_INFINITY)
     }
 
     source.addEventListener('started', (e: MessageEvent<string>) =>
-      receive<StartedEvent>(e, (data) => handlersRef.current.onStarted(data)),
+      receive<StartedEvent>(e, (data, id) => handlersRef.current.onStarted(data, id)),
     )
     source.addEventListener('request_ready', (e: MessageEvent<string>) =>
-      receive<RequestReadyEvent>(e, (data) => handlersRef.current.onRequestReady(data)),
+      receive<RequestReadyEvent>(e, (data, id) => handlersRef.current.onRequestReady(data, id)),
     )
     source.addEventListener('first_token', (e: MessageEvent<string>) =>
-      receive<FirstTokenEvent>(e, (data) => handlersRef.current.onFirstToken(data)),
+      receive<FirstTokenEvent>(e, (data, id) => handlersRef.current.onFirstToken(data, id)),
     )
     source.addEventListener('completed', (e: MessageEvent<string>) =>
-      receive<CompletedEvent>(e, (data) => handlersRef.current.onCompleted(data)),
+      receive<CompletedEvent>(e, (data, id) => handlersRef.current.onCompleted(data, id)),
     )
     // `cleared` is a real published frame (it carries an `id:`), so it flows through `receive`
     // and participates in gap detection — a dropped clear is detectable like any other loss.
+    // Its position is the only thing it carries; the payload is empty (J0).
     source.addEventListener('cleared', (e: MessageEvent<string>) =>
-      receive<ClearedEvent>(e, (data) => handlersRef.current.onCleared(data)),
+      receive<unknown>(e, (_data, id) => handlersRef.current.onCleared(id)),
     )
     // `hello` deliberately carries no `id:` (see the server), so it must NOT go through
     // `receive` — it is server identity, not a lifecycle frame, and must never move the gap

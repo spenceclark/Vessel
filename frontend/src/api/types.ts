@@ -140,38 +140,18 @@ export interface ClearResponse {
 }
 
 /**
- * R11/F2 — the server's authoritative in-flight set. Reconciliation removes any client-side
- * in-flight row whose seq is absent here and at or below `newestCompletedSeq`; the boundary
- * spares a request that started after this snapshot was taken. `serverRunId` (H0b) identifies
- * the process lifetime: a mismatch means these seqs are from a different Vessel run and the
- * client discards its whole in-flight map rather than boundary-comparing across processes.
+ * R11/F2/J0 — the recovery snapshot: lifecycle truth as of one position in the event log.
+ * `activeSeqs` is the server's in-flight set, and `logPosition` is the SSE publish id it is
+ * true as of, both read in one critical section. The client adopts the set wholesale and
+ * discards every event it is holding at or below `logPosition` — those are already reflected
+ * here, and in the database the refetch that follows reads — replaying only what came after.
+ * `serverRunId` (H0b) identifies the process lifetime: seqs *and* positions reset with the
+ * process, so a snapshot from another run is discarded outright rather than compared against.
  */
 export interface ActiveRequestsResponse {
   activeSeqs: number[]
-  newestCompletedSeq: number
+  logPosition: number
   serverRunId: string
-  /** I0a — the latest clear this run performed, or null if none; see {@link ClearState}. */
-  clear: ClearState | null
-}
-
-/**
- * I0a/R23 — one clear as the server describes it: a monotonic version plus the predicate it
- * actually deleted by. The same shape arrives in-band on the `cleared` SSE frame and on
- * `GET /active`, so a client that missed the frame (bounded drop-oldest queue, reconnect)
- * recovers the identical deletion state by comparing versions. Versions are per run: they
- * reset when the process does, so they are only comparable within one `serverRunId`.
- */
-export interface ClearState {
-  version: number
-  scope: 'all' | 'before'
-  /** The clear-before cutoff; null for a clear-all. */
-  beforeTs: string | null
-  /**
-   * The largest row id that existed when a clear-all ran (0 for clear-before): every deleted
-   * row satisfies `id <= boundaryId`. A necessary condition, never a sufficient one — SQLite
-   * reuses ids once a clear-all empties the table, so a fresh row can sit below the boundary.
-   */
-  boundaryId: number
 }
 
 export interface BackendConfigDto {
@@ -241,10 +221,12 @@ export interface HelloEvent {
 }
 
 /**
- * H0a/R23/I0a — the in-band clear notification, ordered on the SSE stream against completions.
- * On receipt the client purges buffered + listed rows matching the server's own predicate; the
- * completions received after it are post-clear by construction. Identical in shape to the
- * {@link ClearState} `GET /active` reports, so the fast path and the recovery path describe one
- * clear the same way and the version tells them apart from a repeat.
+ * H0a/R23/J0 — the in-band clear notification, ordered on the SSE stream against completions:
+ * history was deleted at this frame's position. Its payload is deliberately **empty** and the
+ * server retains nothing about the clear — a client that receives the frame drops the rows and
+ * the completion buffer it holds at that position and refetches; a client that missed it
+ * recovers by snapshot, whose refetch reads a database that already reflects every clear. The
+ * retired I0a payload (`{version, scope, beforeTs, boundaryId}`) asked the client to decide
+ * which rows a past deletion had removed, which no client-side predicate can do correctly
+ * across missed clears and SQLite id reuse (round-five review §2.2).
  */
-export type ClearedEvent = ClearState

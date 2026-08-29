@@ -1058,6 +1058,193 @@ no new lifecycle mechanism invented outside H0.
 **Exit:** all three findings' controlled-delivery tests ported and green; burst gate
 passed with a profile on record; suites green ×3.
 
+---
+
+# Fifth-round remediation (Batch J) — model change, not another patch
+
+> Source: round-five review. R26 + the 10k burst/crash closed (keep I0c's coalescing);
+> R11/R23 partial for the **fifth** time — four repeatable cases, all orderings the
+> client's accreted merge rules miss. The review itself concludes I0a's
+> latest-predicate/provenance model has design gaps and asks for an amended recovery
+> contract agreed before implementation. J0 is that contract. It **replaces** the
+> I0a predicate machinery (settle-purges, `postClearIds`, clear versions/history,
+> `boundaryId` reconciliation) rather than extending it.
+
+## J0 — The amended recovery contract
+
+> **Status: APPROVED, 2026-08-29** — including the stated transient-display trade.
+> This contract supersedes I0a's predicate model; implementing agents treat it as
+> authoritative, and J4's truth pass records it into phase-3.md D3/D5.
+
+**Snapshot + ordered log.** The SSE event id (allocated under the publish lock) is the
+single log position for every lifecycle change. Contract:
+
+1. **Server:** the recovery endpoint returns `{runId, logPosition, activeSeqs}` taken
+   **atomically under the publish lock** — lifecycle truth as-of one stream position.
+   The server stops retaining clear predicates/history; `cleared` frames stay (fast
+   path) but carry no recovery burden.
+2. **Client — recovery is wholesale replacement:** on reconnect, gap, or run change:
+   fetch snapshot → discard the applied map, the **entire** completion buffer (safe:
+   `completed` is emitted post-insert, so the refetch below always contains those
+   rows), all clear knowledge, and every queued event with id ≤ `logPosition` →
+   in-flight := `activeSeqs` → trigger list/stats refetch. Queued events with
+   id > `logPosition` replay in order on top.
+3. **Client — between recoveries, ordered replay only:** events apply strictly in id
+   order (`cleared` purges cache + buffer at its position); any detected gap →
+   rule 2, never ad-hoc reasoning.
+4. **REST reads are authoritative and never client-filtered.** A clear or recovery
+   always schedules a refetch that starts after the trigger; the last-started fetch
+   wins. Accepted trade, stated in the contract: a stale pre-clear fetch may display
+   transiently until its superseding refetch settles — settled state always
+   converges, which is what every review test asserts.
+
+Case coverage (why this is structural): R11's queued start and R23-A's queued
+completion fall to the id ≤ `logPosition` filter by arithmetic; R23-B's reused-id
+survivor cannot be purged because nothing purges REST rows; R23-C needs no clear
+history because the refetch reads a database that already reflects every clear.
+
+## Batch J — Opus: implement J0 (one session)
+
+- [x] **J1 — Server snapshot position.** Recovery response gains `logPosition` under
+  the existing lock (H2 made the reads coherent; this adds the stream position to
+  the same critical section). Clear-history retention removed. Contract recorded in
+  phase-3.md D3/D5.
+- [x] **J2 — Client rewrite of the reconciliation core.** `useLiveHistory`'s merge
+  rules replaced by J0's two operations. Expect net deletion: settle-purge,
+  post-clear exemption, clear-version tracking, and buffer-vs-clear logic all go.
+  Keep: I0c coalescing (the queue becomes the replay log — it now *is* the
+  mechanism, not a hazard), run-id discard rule, terminal invariant (server-side,
+  untouched).
+- [x] **J3 — Test migration.** All four round-five cases + every prior R11/R23
+  controlled-delivery case re-expressed against the new model and green; legitimate
+  long-running requests, post-clear survivors, and ID reuse covered; a
+  property-style test randomizing delivery order/loss across N events asserting
+  settled-state convergence (the model claims order-independence at settlement —
+  test the claim, not examples only).
+- [x] **J4 — Gate + truth pass.** Burst gate re-run (lifecycle core rewritten);
+  round-four closing-table entries for R11/R23 corrected (the review flagged them
+  overstated); phase-3.md's clear-recovery contract rewritten to J0; F/H/I entries
+  annotated as superseded where applicable.
+
+**Exit:** all reviewer cases green under the new model; the property test holds;
+burst gate passes; docs describe J0 and nothing older.
+
+**Batch J landed 2026-08-29 — 271/271 backend green ×3, 76/76 frontend green ×3, `tsc -b` +
+`vite build` clean, lint unchanged at 6 warnings (baseline).** J0 was implemented as approved,
+as a replacement rather than an extension: the diff deletes more reconciliation logic than it
+adds. Notes and deviations:
+
+- **J1 (server).** `GET /active` is now `{activeSeqs, logPosition, serverRunId}`, all read in
+  the one publish-lock critical section; `logPosition` is the hub's `_publishId`. The `cleared`
+  frame keeps its id and its ordering (published under the same lock as `completed`, so a
+  deleted row's completion always precedes it) and loses its payload entirely — it is now
+  `data: {}`. **Deviations worth recording, both deletions the contract implies rather than
+  states:**
+  - `newestCompletedSeq` and the `_newestCompletedSeq` watermark behind it are **removed**, not
+    left unused. J0 enumerates the response as `{runId, logPosition, activeSeqs}`, and nothing
+    reads a boundary any more; keeping a field the client must not use would invite the retired
+    rule back. `Active_CompletedRequestLeavesActiveSet_AndAdvancesBoundary` became
+    `…_AtOrAboveItsOwnCompletedFrame`: it opens a real SSE connection, takes the id of the
+    request's own `completed` frame off the wire, and asserts `/active` reports a position at
+    or above it with an empty active set — the pairing the client's discard rule depends on.
+  - `ClearState`, `_clear`/`_clearVersion`, `/active`'s `clear` field and
+    `ClearResult.BoundaryId` are removed with it, so `ICaptureStore.Clear` returns `int` again
+    and `SqliteCaptureStore` no longer reads `MAX(id)` inside the delete's transaction. Call
+    sites swept: the writer's `RunClear`, both test store fakes, `ApiJsonContext`.
+  - `Active_SnapshotStaysCoherent_UnderConcurrentRegisterAndComplete` is ported to the position
+    rather than dropped. It now subscribes (frames are only published when someone is watching,
+    and the position only advances with them) and each iteration publishes exactly three frames
+    — `started(odd)`, `started(even)`, `completed(even)` — so iteration `k`'s odd seq `2k-1` has
+    frame id `3k-2`, and every reader asserts: if `3k-2 <= logPosition` then `2k-1` is in the
+    active set. That is J0's own invariant, and strictly stronger than the watermark version it
+    replaces. A closing assertion pins `logPosition == 3 × iterations`, so the arithmetic the
+    probe rests on cannot silently stop holding.
+- **J2 (client).** `useLiveHistory`'s merge rules are replaced by recovery + ordered replay.
+  Deleted: `clearedRow`, `purgeCleared`, `learnClear`, `clearRef`, `postClearIdsRef`,
+  `clearPendingSettleRef`, the settle-time re-application, the post-clear provenance exemption
+  and the boundary comparison. Kept: I0c's coalescing window (the queue is now the mechanism,
+  not a hazard), the R10 completion buffer, the I0b run-id rule verbatim, and the terminal
+  invariant (server-side, untouched). `useEvents` now hands every lifecycle handler its frame's
+  SSE `id:` — without it the consumer cannot tell which held frames a snapshot already covers.
+  Three deviations, each found by a test rather than reasoned about in advance:
+  - **Recording, not suspending.** J0 rule 2 reads naturally as "hold the queue until the
+    snapshot lands", and that was the first implementation. It fails the retained
+    obsolete-run case for a good reason: a recovery whose `/active` is slow (or held, as that
+    test holds it) then freezes *all* live rendering for its duration. Instead the flush keeps
+    running and every frame arriving between "request issued" and "response applied" is also
+    recorded; recovery replays the recorded frames above `logPosition` on top of the replaced
+    map. Same arithmetic, same result, no liveness cost. The window is bounded by one HTTP
+    round trip, and the recording is dropped on every exit path.
+  - **The buffer drain moved off `useIsFetching` onto the query cache.** A fetch that starts
+    and settles inside one React batch never renders an intermediate "fetching" value, so an
+    effect keyed on that count sees `0 → 0`, never re-runs, and strands the buffer. That is not
+    hypothetical: with J0 the `cleared` handler starts its own refetch, so a completion
+    arriving in the same window as a clear was buffered and then stranded — caught by `keeps a
+    post-clear completion, even one reusing a cleared id`. The drain now subscribes to the
+    query cache, which notifies on every state change regardless of batching.
+  - **Display limit, recorded rather than fixed.** In-flight rows can only be rendered for seqs
+    the client holds `started` details for, so recovery adopts `activeSeqs ∩ known`. A request
+    whose `started` frame this client never received stays invisible until it completes — it
+    was never displayable, and nothing is shown as running that is not. Rendering it would need
+    the snapshot to carry per-seq metadata, which J0 does not ask for.
+- **J3 (tests).** All four round-five cases are expressed against the new model, alongside
+  every prior R11/R23 controlled-delivery case, the long-running survivor, the clear-before
+  survivor and post-clear ID reuse (twice: with and without a completion frame). The
+  "above the completed boundary" case became `replays a start that arrives while recovery is in
+  flight, above the snapshot position` — the same hazard, stated in positions instead of seq
+  distance. **Fixture note that matters:** `logPosition` is not free. The server takes it after
+  the client's request goes out, so every frame the client already received has an id at or
+  below it; a fixture pairing a low position with frames the client has seen describes a server
+  that cannot exist. The migrated gap case therefore reports the freshly-started seq as active,
+  because a real server could not answer otherwise. The property test drives a simulated server
+  (frame script, database that reflects frames published so far, snapshots at the tightest legal
+  position) through six seeded randomised delivery orders with ~25% frame loss and a mid-run
+  reconnect, then asserts the settled list equals the server's and nothing is shown running that
+  the server does not report running. **Evidence the tests bite:** disabling the position
+  discard (floor, queue prune, replay filter) fails both §2.1 and §2.2 A plus three property
+  seeds; disabling the `cleared` purge fails the buffered-completion case. The four review
+  orderings are the review's own reproductions, which it recorded as failing against the I0a
+  implementation those tests replaced.
+- **J4 (gate + truth pass).** Burst gate re-run against the rewritten lifecycle core on an
+  isolated instance (Release build, port 4560, temp config + DB in the session scratchpad, a
+  local Node stub upstream on 4561 streaming six chunks at 20 ms; the user's daily-driver
+  instance and `vessel.db` were never touched). **10,000 requests, 24 concurrent, 100 tags:
+  10,000 OK / 0 failed in 77.54 s.** Server at settle: 10,000 rows, 0 failed, `activeSeqs` empty,
+  `logPosition` 40,000. The tab was the same document throughout, never reloaded or replaced:
+  no page errors, heap 16–17 MB, worst long task 56 ms, 0 in-flight rows at settle, list
+  rendering the server's newest rows in order, tag picker bounded at 12 chips + "+88 more" (R12).
+  **New wire contract verified live:** `cleared` arrives as `{}` at ids 40005/40006/40007, each
+  *after* the deleted rows' completions (last `completed` at 40004), and `/active` reports no
+  clear field and a position covering them. The live tab converged 10,001 rows → the single
+  clear-before survivor → empty, driven by the frame's purge plus the refetch it schedules —
+  J0 rules 3 and 4 on the real app.
+  - **Environment caveat, and it limits this claim.** The Browser pane could not be *displayed*
+    in this session, so the tab ran hidden and throttled: the in-page probe sampled at ~0.36 Hz
+    instead of 4 Hz, and TanStack's `refetchInterval` pauses on a hidden document, so the stats
+    bar sat at 0 while the list rendered the real rows (the caveat already recorded in Batches
+    B/F/H/I). The heap and long-task numbers above therefore come from a throttled renderer and
+    are **not** comparable with Batch I's visible-tab figures. What this run establishes is that
+    the rewritten core drove 10k requests and three clears through one live tab without crash,
+    error or reload and converged on the server's state; it does **not** re-establish Batch I's
+    visible-tab profile, which stands as its own recorded evidence.
+  - Truth pass: `phase-3.md` D3 records that deletion scope no longer travels to the client in
+    any form; D5's `/active` shape, `cleared` payload, H0b(2) coherence note and I0b(1)
+    allocation note are corrected in place, the I0a block is struck through with the reason it
+    failed, and J0's four rules plus the display limit are written out. In this plan, the
+    fourth-round closing table's entries 1, 2 and 6 are corrected in place (the review's D04
+    finding was right that they claimed more than was shown), and I2's client half and I3 are
+    annotated as superseded. Each round's reasoning is left standing and corrected where it was
+    wrong, not rewritten.
+
+### Fifth-round closing conditions (§7 of code-review-phase-4.md)
+
+| # | Condition | Status | Where |
+| --- | --- | --- | --- |
+| 1 | Reconcile pending lifecycle frames with accepted recovery evidence; retain the R11 restart, stale-response, allocation and long-running controls | Met | J2 — recovery discards held frames at or below `logPosition` and replays only what came after, so a queued start cannot undo it (`does not let a queued start undo a recovery that already accounts for it`). All four retained controls still green |
+| 2 | Resolve all three remaining R23 cases; preserve timestamp survivors and post-clear ID reuse | Met | J0/J2 — clears carry no predicate: queued pre-clear completions fall to the position filter, REST rows are never client-filtered, and multiple missed clears need no history because the refetch reads a database that reflects them all. Survivors come back from that refetch; ID reuse is covered with and without a completion frame |
+| 3 | Add those interleavings to the existing suite and retain all current passing tests | Met | J3 — 76/76 frontend ×3 (was 67), 271/271 backend ×3; four review cases plus a six-seed randomised property test; no existing assertion weakened, and the two backend tests whose feature J0 deletes were ported to the position rather than dropped |
+| 4 | Update the design/closure claims in their owning documents; protocol amendments approved first | Met | J4 — J0 was approved before implementation and is recorded in `phase-3.md` D3/D5; the overstated fourth-round entries are corrected in place and the superseded F/H/I entries annotated |
+
 **Batch I landed 2026-08-29 — 271/271 backend green ×3, 67/67 frontend green ×3, `tsc -b` +
 `vite build` clean, lint unchanged at 6 warnings (baseline).** I0a, I0b and I0c were
 implemented as approved. Every new test was confirmed to *fail* against the pre-fix behaviour
@@ -1087,7 +1274,8 @@ before being kept. Notes and deviations:
   that matters: a snapshot taken between them sees the seq active but no frame yet, never a
   frame without the seq; and `completed` for that seq cannot overtake the frame, because the
   writer publishes it only after the handler has enqueued the record.
-  (2) Client: `reconcile` records the run id its request was issued under and applies the
+  (2) *The client half below is superseded by J0's wholesale replacement, except the run-id
+  rule, which J2 keeps verbatim.* Client: `reconcile` records the run id its request was issued under and applies the
   response only when that *and* the response's own run id still equal the connection's current
   run; otherwise the response is discarded as evidence (the refetches still run, being
   run-agnostic). The old "different run id ⇒ clear the whole in-flight map" branch is gone —
@@ -1096,7 +1284,12 @@ before being kept. Notes and deviations:
   `ignores a recovery response from an obsolete run instead of erasing the new run's requests`
   (the review's order A: expects `[1]`, got `[]` before the fix); the restart,
   long-running-survivor and above-boundary cases unchanged and green.
-- **I3 (R23 / I0a).** The hub keeps `ClearState {version, scope, beforeTs, boundaryId}` under
+- **I3 (R23 / I0a).** *Retired by Batch J (J0). The whole predicate model below — server-side
+  clear state, the `cleared` payload, `/active`'s `clear` field, `ClearResult.BoundaryId`, the
+  client's armed re-application and post-clear provenance set — is deleted, not extended. It is
+  left standing here because the reasoning is the record of what does not work: a client cannot
+  re-derive which rows a past deletion removed, and each fix made the next ordering worse
+  (review §2.2 A/B/C).* The hub keeps `ClearState {version, scope, beforeTs, boundaryId}` under
   the publish lock; `ICaptureStore.Clear` returns `ClearResult(Deleted, BoundaryId)` with
   `MAX(id)` read inside the delete's own transaction for a clear-all; the `cleared` frame and
   `GET /active`'s new `clear` field carry the identical shape. The client records the latest
@@ -1172,12 +1365,12 @@ before being kept. Notes and deviations:
 
 | # | Condition | Status | Where |
 | --- | --- | --- | --- |
-| 1 | Complete R11's response-freshness handling without deleting legitimate live entries | Met | I2 — a recovery response applies only while its own run id and its issuing request's run id both equal the current run; a mismatch is discarded, never read as a restart. Server-side, seq allocation moved inside `Register` under the publish lock, so the boundary rule is sound by construction. Restart / long-running / above-boundary controls unchanged and green |
-| 2 | Complete R23 across pending REST results, dropped clear events and buffer settlement, retaining the survivor/ID-reuse cases | Met | I3 — versioned clear state on the hub, reported by the `cleared` frame *and* `GET /active`; purged on arrival, re-applied at fetch settlement and buffer drain, learned from `/active` when the frame is lost. Both review orderings pinned; the three H3 orderings plus a new reused-id-across-refetch case still pass |
+| 1 | Complete R11's response-freshness handling without deleting legitimate live entries | **Overstated when written; met in Batch J** — the round-five review found a fourth R11 case I2 did not cover (a start queued in I0c's event window, applied *after* an authoritative recovery that already accounted for it: §2.1). The mechanisms below are real and retained, but "Met" was a claim about R11 as a whole, which it was not. J1/J2 close it: recovery discards held work at or below the snapshot's log position | I2 — a recovery response applies only while its own run id and its issuing request's run id both equal the current run; a mismatch is discarded, never read as a restart. Server-side, seq allocation moved inside `Register` under the publish lock, so the boundary rule is sound by construction. Restart / long-running / above-boundary controls unchanged and green |
+| 2 | Complete R23 across pending REST results, dropped clear events and buffer settlement, retaining the survivor/ID-reuse cases | **Overstated when written; met in Batch J** — three further orderings failed (review §2.2 A/B/C): a queued pre-clear completion classified post-clear because it was *applied* later, a valid reused-id row purged for want of an SSE exemption, and an earlier missed clear erased by a later narrower one. The I0a machinery described below is retired, not extended | I3 — versioned clear state on the hub, reported by the `cleared` frame *and* `GET /active`; purged on arrival, re-applied at fetch settlement and buffer drain, learned from `/active` when the frame is lost. Both review orderings pinned; the three H3 orderings plus a new reused-id-across-refetch case still pass |
 | 3 | Fix R26 so cancellation during preparation cannot bypass lifecycle finalization | Met | I1 — `PrepareRequestBody` inside the guarded span; the raw-socket abort repro asserts an empty active set and a `client_disconnect` row (fails as `Collection: [1]` against the old placement) |
 | 4 | Keep all current tests passing and add these failing interaction cases; retain the round-three controls | Met | 271/271 backend ×3, 67/67 frontend ×3, `tsc -b` + `vite build` clean, lint at baseline (6). Every added case was confirmed red against the pre-fix behaviour; no existing assertion weakened |
 | 5 | Investigate the live-tab crash and demonstrate the 10k/100-tag gate without a reload or replacement tab; record any remaining environment limitation precisely | Met | I4 — cause measured before the fix (one 10.3 s task, heap 76 MB → 3.1 GB of a 4 GB limit, renderer unresponsive), I0c landed against it, gate re-run on the same document with the tab visible and connected: 10,000/10,000 OK, 0 stuck rows, worst task 92 ms, UI 53,000/0 failed matching the store. Pane-hidden throttling/disposal and TanStack's hidden-document `refetchInterval` pause recorded as the environment limits they are |
-| 6 | Correct stale API descriptions and acceptance claims in place | Met | I5 — `phase-3.md` D3 ack entry struck through, D5 given the seq-allocation, versioned-clear and hello-only-restart contracts plus `/active`'s `clear` field, D6 given the coalescing note; F2/F3 and H2/H3 annotated in place. The clean-publish claim is untouched by this batch and stays as Batch H left it — distinct from first-run/restart, which remains unverified |
+| 6 | Correct stale API descriptions and acceptance claims in place | Partially met; corrected in J4 — the D04 documentation finding was right that conditions 1 and 2 above claimed more than was demonstrated. Those entries are corrected in place here, and `phase-3.md`'s clear-recovery contract is rewritten to J0 | I5 — `phase-3.md` D3 ack entry struck through, D5 given the seq-allocation, versioned-clear and hello-only-restart contracts plus `/active`'s `clear` field, D6 given the coalescing note; F2/F3 and H2/H3 annotated in place. The clean-publish claim is untouched by this batch and stays as Batch H left it — distinct from first-run/restart, which remains unverified |
 
 **Batch H landed 2026-08-28 — 269/269 backend green, 62/62 frontend green, `tsc -b` +
 `vite build` clean, lint unchanged at 6 warnings (baseline).** H0a and H0b were implemented

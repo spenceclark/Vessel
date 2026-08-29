@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   EMPTY_FILTERS,
   type ActiveRequestsResponse,
-  type ClearState,
   type RequestListResponse,
   type Summary,
 } from './types'
@@ -14,11 +13,15 @@ import { requestsQueryKey } from './queryKeys'
 import { useLiveHistory } from './useLiveHistory'
 
 /**
- * R10/R11/R22/R23/D05 — the reconciliation model, exercised at the seams where its failures
- * actually happen: a completion racing an unsettled list fetch, lost SSE frames leaving
- * in-flight rows that never clear (now resolved by the server-authoritative active set,
- * F2), and a clear racing a buffered completion (F3). All were invisible to `tsc` and to the
- * backend suite, and reproduced by the review only under real timing.
+ * R10/R11/R22/R23/D05, under the **J0** recovery contract — the reconciliation model exercised
+ * at the seams where its failures actually happen: a completion racing an unsettled list fetch,
+ * lost SSE frames leaving in-flight rows that never clear, and a clear racing queued work,
+ * recovery, and REST snapshots taken either side of it. All were invisible to `tsc` and to the
+ * backend suite, and every one was reproduced by a review only under real timing.
+ *
+ * J0's two operations are what these tests pin: **recovery is wholesale replacement** against a
+ * server snapshot taken at a log position, and **between recoveries frames apply in id order**.
+ * The fixtures must therefore be *physically consistent* — see `serverActive`.
  */
 
 // ---- a controllable EventSource, since jsdom has none ---------------------------------
@@ -115,26 +118,24 @@ function listPage(rows: Summary[]): RequestListResponse {
 }
 
 /**
- * Stub the server's active-request set for the next reconciliation. `serverRunId` and `clear`
- * default to "one run, never cleared", so a test only states what it is about.
+ * Stub the recovery snapshot for the next reconciliation. `serverRunId` defaults to the one run
+ * these tests use, so a test only states what it is about.
+ *
+ * **`logPosition` is not free.** It is the publish id the active set is true as of, and the
+ * server takes it *after* the client's request goes out — so every frame the client received
+ * before that request necessarily has an id at or below it. A fixture pairing a low
+ * `logPosition` with frames the client already saw describes a server that cannot exist, and
+ * would be testing the client against physics rather than against the contract.
  */
-function serverActive(
-  active: Pick<ActiveRequestsResponse, 'activeSeqs' | 'newestCompletedSeq'> &
-    Partial<ActiveRequestsResponse>,
-) {
-  vi.spyOn(api, 'getActiveRequests').mockResolvedValue({ serverRunId: 'run-1', clear: null, ...active })
+function serverActive(active: { activeSeqs: number[]; logPosition: number; serverRunId?: string }) {
+  vi.spyOn(api, 'getActiveRequests').mockResolvedValue({ serverRunId: 'run-1', ...active })
 }
 
-/**
- * I0a — the versioned clear predicate the server publishes, identically on the `cleared` frame
- * and on `GET /active`. `boundaryId` is the largest row id that existed when a clear-all ran.
- */
-function clearAll(version: number, boundaryId: number): ClearState {
-  return { version, scope: 'all', beforeTs: null, boundaryId }
-}
-
-function clearBefore(version: number, beforeTs: string): ClearState {
-  return { version, scope: 'before', beforeTs, boundaryId: 0 }
+/** Past the 100 ms coalescing window and the 150 ms recovery debounce, plus slack. */
+async function settle(ms = 300) {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, ms))
+  })
 }
 
 let originalEventSource: unknown
@@ -182,6 +183,10 @@ function cachedRowIds(queryClient: QueryClient): number[] {
     requestsQueryKey(SESSION, EMPTY_FILTERS),
   )
   return (data?.pages ?? []).flatMap((p) => p.rows).map((r) => r.id)
+}
+
+function inFlightSeqs(rendered: { result: { current: { live: { inFlight: { seq: number }[] } } } }): number[] {
+  return rendered.result.current.live.inFlight.map((i) => i.seq).sort((a, b) => a - b)
 }
 
 describe('useLiveHistory', () => {
@@ -283,10 +288,9 @@ describe('useLiveHistory', () => {
     rendered.unmount()
   })
 
-  // R11/F2 — the review's stuck-rows case, now resolved server-authoritatively. A dropped
-  // `completed` (bounded drop-oldest queues) leaves a row running unless the loss is
-  // *detectable*: the gap in the publish id triggers reconciliation, and the server's active
-  // set — not cached history — says the request is no longer running.
+  // R11/F2 — the review's stuck-rows case. A dropped `completed` (bounded drop-oldest queues)
+  // leaves a row running unless the loss is *detectable*: the gap in the publish id triggers
+  // recovery, and the server's active set — not cached history — is adopted wholesale.
   it('clears an in-flight row whose completion was dropped, via the event-id gap and active set', async () => {
     const { rendered } = setup({ listFetch: async () => listPage([summary(7)]) })
     await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
@@ -298,16 +302,15 @@ describe('useLiveHistory', () => {
     await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(2))
 
     // Seq 1 finished and was stored, but its `completed` frame was dropped: the next frame
-    // jumps the publish id. The server reports only seq 2 still active, with seq 1 below the
-    // completed boundary.
-    serverActive({ activeSeqs: [2], newestCompletedSeq: 1 })
+    // jumps the publish id. Seq 3's `started` was published (id 9) before the client asked for
+    // this snapshot, so the snapshot necessarily covers it and lists it as active — the
+    // fixture says so because the server could not answer any other way.
+    serverActive({ activeSeqs: [2, 3], logPosition: 9 })
     act(() => {
       FakeEventSource.latest().emit('started', startedEvent(3, summary(9)), 9)
     })
 
-    await waitFor(() => {
-      expect(rendered.result.current.live.inFlight.map((i) => i.seq).sort()).toEqual([2, 3])
-    })
+    await waitFor(() => expect(inFlightSeqs(rendered)).toEqual([2, 3]))
 
     rendered.unmount()
   })
@@ -326,9 +329,9 @@ describe('useLiveHistory', () => {
     })
     await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(1))
 
-    serverActive({ activeSeqs: [], newestCompletedSeq: 100 })
+    serverActive({ activeSeqs: [], logPosition: 100 })
     act(() => {
-      FakeEventSource.latest().open() // reconnect forces reconciliation
+      FakeEventSource.latest().open() // reconnect forces recovery
     })
 
     await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(0))
@@ -336,8 +339,8 @@ describe('useLiveHistory', () => {
     rendered.unmount()
   })
 
-  // The other half of R11: a genuinely long-running request must survive reconciliation
-  // because the server still lists it as active — never expired by a timer or seq distance.
+  // The other half of R11: a genuinely long-running request must survive recovery because the
+  // server still lists it as active — never expired by a timer or by seq distance.
   it('keeps a long-running in-flight row the server still reports as active', async () => {
     const { rendered } = setup({ listFetch: async () => listPage([summary(8), summary(9)]) })
     await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
@@ -347,48 +350,55 @@ describe('useLiveHistory', () => {
     })
     await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(1))
 
-    // Many other requests completed (boundary far ahead), but seq 1 is genuinely still
-    // running, so the server keeps it in the active set.
-    serverActive({ activeSeqs: [1], newestCompletedSeq: 500 })
+    // Hundreds of frames later, seq 1 is genuinely still running — so it is in the snapshot,
+    // and wholesale replacement keeps it.
+    serverActive({ activeSeqs: [1, 2], logPosition: 500 })
     act(() => {
       FakeEventSource.latest().emit('started', startedEvent(2, summary(9)), 500)
     })
 
-    await waitFor(() => expect(rendered.result.current.live.inFlight.map((i) => i.seq)).toContain(1))
-    // Let the debounced reconciliation (150 ms) actually run; the long-running row must remain.
-    await new Promise((r) => setTimeout(r, 300))
-    expect(rendered.result.current.live.inFlight.map((i) => i.seq)).toContain(1)
+    await settle()
+    expect(inFlightSeqs(rendered)).toEqual([1, 2])
 
     rendered.unmount()
   })
 
-  // R11/F2 — a request that started *after* the server snapshot must not be expired: its
-  // seq is above the completed boundary, so absence from the active set means "too new",
-  // not "finished".
-  it('does not expire a freshly-started row above the completed boundary', async () => {
+  // J0 rule 2, second half — "queued events with id > logPosition replay in order on top".
+  // A request that starts *while the recovery is in flight* is above the snapshot's position,
+  // so the snapshot is not evidence about it: it is held (the flush is suspended for exactly
+  // this reason) and replayed after the recovered state lands. This replaces the retired
+  // "above the completed boundary" rule, which asked the client to reason about seq numbers.
+  it('replays a start that arrives while recovery is in flight, above the snapshot position', async () => {
+    const resolvers: ((value: ActiveRequestsResponse) => void)[] = []
+    vi.spyOn(api, 'getActiveRequests').mockImplementation(
+      () => new Promise<ActiveRequestsResponse>((resolve) => resolvers.push(resolve)),
+    )
+
     const { rendered } = setup({ listFetch: async () => listPage([]) })
     await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
 
     act(() => {
       FakeEventSource.latest().open() // initial connect
-      FakeEventSource.latest().emit('started', startedEvent(10, summary(1)), 1)
+      FakeEventSource.latest().open() // reconnect → recovery
     })
-    await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(1))
+    await waitFor(() => expect(resolvers).toHaveLength(1))
 
-    // Snapshot predates seq 10: it isn't in the active set, but it's above newestCompletedSeq.
-    serverActive({ activeSeqs: [], newestCompletedSeq: 5 })
+    // The snapshot request is out; this start is published after it and cannot be in it.
     act(() => {
-      FakeEventSource.latest().open() // reconnect
+      FakeEventSource.latest().emit('started', startedEvent(10, summary(1)), 9)
     })
 
-    // Past the 150 ms debounce: reconciliation ran, and must not have expired the fresh row.
-    await new Promise((r) => setTimeout(r, 300))
-    expect(rendered.result.current.live.inFlight.map((i) => i.seq)).toEqual([10])
+    await act(async () => {
+      resolvers[0]({ activeSeqs: [], logPosition: 5, serverRunId: 'run-1' })
+      await new Promise((r) => setTimeout(r, 250))
+    })
+
+    expect(inFlightSeqs(rendered)).toEqual([10])
 
     rendered.unmount()
   })
 
-  // R11 — reconnect misses everything during the gap, so it reconciles unconditionally.
+  // R11 — reconnect misses everything during the gap, so it recovers unconditionally.
   it('reconciles after an EventSource reconnect', async () => {
     const { rendered } = setup({ listFetch: async () => listPage([summary(7)]) })
 
@@ -399,7 +409,7 @@ describe('useLiveHistory', () => {
     })
     await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(1))
 
-    serverActive({ activeSeqs: [], newestCompletedSeq: 1 })
+    serverActive({ activeSeqs: [], logPosition: 2 })
     act(() => {
       FakeEventSource.latest().open() // reconnect
     })
@@ -409,12 +419,12 @@ describe('useLiveHistory', () => {
     rendered.unmount()
   })
 
-  // R22/F1 — a burst of gaps must coalesce into a single reconciliation, not one per gap
-  // (the storm the review warned about). The debounce + single-flight guard collapse them.
+  // R22/F1 — a burst of gaps must coalesce into a single recovery, not one per gap (the storm
+  // the review warned about). The debounce + single-flight guard collapse them.
   it('coalesces a burst of gaps into one reconciliation', async () => {
     const active = vi
       .spyOn(api, 'getActiveRequests')
-      .mockResolvedValue({ activeSeqs: [1, 2, 3, 4], newestCompletedSeq: 0, serverRunId: 'run-1', clear: null })
+      .mockResolvedValue({ activeSeqs: [1, 2, 3, 4], logPosition: 60, serverRunId: 'run-1' })
     const { rendered } = setup({ listFetch: async () => listPage([]) })
     await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
 
@@ -426,147 +436,141 @@ describe('useLiveHistory', () => {
       FakeEventSource.latest().emit('started', startedEvent(4, summary(4)), 60)
     })
 
-    // Wait well past the debounce; despite four gaps, reconciliation runs exactly once.
-    await new Promise((r) => setTimeout(r, 300))
+    // Wait well past the debounce; despite four gaps, recovery runs exactly once.
+    await settle()
     expect(active).toHaveBeenCalledTimes(1)
 
     rendered.unmount()
   })
 
-  // R23/H0a — the review's repro: a completion buffered during a pending fetch must not
-  // restore a row a clear-all deleted before the buffer drained. Cache must be [], not [1].
-  // The clear is now an ordered SSE frame after the completion (on the wire a deleted row's
-  // `completed` always precedes `cleared`), so the buffered row is purged, not the merge
-  // suppressed by a generation counter.
+  // R23/J0 rule 3 — a completion buffered during a pending fetch must not restore a row a
+  // clear-all deleted before the buffer drained. The clear is an ordered frame, and at its
+  // position everything the client is holding goes: cache, buffer, and rows completed earlier
+  // in the same window. Nothing is inspected — no predicate, no boundary.
   it('discards a buffered completion after a clear-all (initial fetch)', async () => {
     let resolveFetch: ((value: RequestListResponse) => void) | undefined
-    const listFetch = () =>
-      new Promise<RequestListResponse>((resolve) => {
-        resolveFetch = resolve
-      })
+    let fetches = 0
+    const listFetch = () => {
+      fetches++
+      return fetches === 1
+        ? new Promise<RequestListResponse>((resolve) => {
+            resolveFetch = resolve
+          })
+        : Promise.resolve(listPage([]))
+    }
 
     const { queryClient, rendered } = setup({ listFetch })
     await waitFor(() => expect(resolveFetch).toBeDefined())
     await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
 
     // Completion for row 1 arrives while the initial fetch is still pending → buffered.
-    // Then the clear-all frame arrives (next publish id) → purges the buffered row.
+    // Then the clear-all frame arrives (next publish id) → drops the buffered row.
     act(() => {
       FakeEventSource.latest().emit('completed', { seq: 1, row: summary(1) }, 1)
-      FakeEventSource.latest().emit('cleared', clearAll(1, 1), 2)
+      FakeEventSource.latest().emit('cleared', {}, 2)
     })
 
-    // The (post-clear) fetch resolves empty; draining must not resurrect row 1.
+    // The (pre-clear) held response resolves; nothing may resurrect row 1.
     await act(async () => {
       resolveFetch!(listPage([]))
     })
 
-    // Past the I0c coalescing window, so the completion has really been applied (and purged),
-    // rather than the cache merely being empty because nothing has landed yet.
-    await new Promise((r) => setTimeout(r, 250))
+    await settle()
     expect(cachedRowIds(queryClient)).toEqual([])
 
     rendered.unmount()
   })
 
-  // R23/H0a — the review's third ordering: a newer fast request is persisted as id 1 (a
-  // *later* startedAt); an older slow one as id 2 (an *earlier* startedAt). A clear-before by
-  // timestamp deletes only the older row — even though its id is higher. The retired max-id
-  // boundary would have dropped both (both ids ≤ 2); the startedAt predicate keeps id 1.
-  it('keeps a clear-before survivor whose id is above the deleted one (inverted id/start order)', async () => {
-    let resolveFetch: ((value: RequestListResponse) => void) | undefined
-    const listFetch = () =>
-      new Promise<RequestListResponse>((resolve) => {
-        resolveFetch = resolve
-      })
+  // R23/J0 rule 4 — a clear-before deletes some rows and leaves others. The client does not
+  // decide which: it drops what it holds and lets the refetch, which reads the post-clear
+  // database, say what survived. The retired predicate model got this "right" by re-deriving
+  // the server's WHERE clause client-side; this gets it right by not deciding at all.
+  it('restores clear-before survivors from the refetch instead of filtering them client-side', async () => {
+    const survivor = summary(1, { startedAt: '2026-08-28T00:00:09.000Z' })
+    const deleted = summary(2, { startedAt: '2026-08-28T00:00:02.000Z' })
+
+    let fetches = 0
+    const listFetch = () => {
+      fetches++
+      // The first fetch reads a pre-clear database; every later one is post-clear.
+      return Promise.resolve(listPage(fetches === 1 ? [survivor, deleted] : [survivor]))
+    }
 
     const { queryClient, rendered } = setup({ listFetch })
-    await waitFor(() => expect(resolveFetch).toBeDefined())
+    await waitFor(() => expect(cachedRowIds(queryClient)).toEqual([1, 2]))
     await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
 
-    const newerFast = summary(1, { startedAt: '2026-08-28T00:00:09.000Z' }) // survives
-    const olderSlow = summary(2, { startedAt: '2026-08-28T00:00:02.000Z' }) // deleted
-
     act(() => {
-      FakeEventSource.latest().emit('completed', { seq: 1, row: newerFast }, 1)
-      FakeEventSource.latest().emit('completed', { seq: 2, row: olderSlow }, 2)
-      FakeEventSource.latest().emit('cleared', clearBefore(1, '2026-08-28T00:00:05.000Z'), 3)
-    })
-
-    await act(async () => {
-      resolveFetch!(listPage([]))
+      FakeEventSource.latest().emit('cleared', {}, 1)
     })
 
     await waitFor(() => expect(cachedRowIds(queryClient)).toEqual([1]))
-    expect(cachedRowIds(queryClient)).not.toContain(2)
+    await settle()
+    // Still exactly the survivor: no client-side rule ever removes a row a fetch returned.
+    expect(cachedRowIds(queryClient)).toEqual([1])
 
     rendered.unmount()
   })
 
-  // R23/H0a — a completion that arrives *after* the clear frame is post-clear by construction
-  // (the wire order guarantees it), so it merges normally — including when SQLite reuses the
-  // id of a row the clear just deleted.
+  // R23 — a completion that arrives *after* the clear frame is post-clear by wire order, so it
+  // merges normally, including when SQLite reuses the id of a row the clear just deleted.
   it('keeps a post-clear completion, even one reusing a cleared id', async () => {
-    let resolveFetch: ((value: RequestListResponse) => void) | undefined
-    const listFetch = () =>
-      new Promise<RequestListResponse>((resolve) => {
-        resolveFetch = resolve
-      })
+    const reused = summary(1, { path: '/api/chat?reused' })
+    let fetches = 0
+    const listFetch = () => {
+      fetches++
+      return Promise.resolve(listPage(fetches === 1 ? [summary(1)] : []))
+    }
 
     const { queryClient, rendered } = setup({ listFetch })
-    await waitFor(() => expect(resolveFetch).toBeDefined())
+    await waitFor(() => expect(cachedRowIds(queryClient)).toEqual([1]))
     await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
 
     act(() => {
-      // A pre-clear row 1, then the clear-all, then a *new* row that reuses id 1 (SQLite id
-      // reuse, R14b). The pre-clear row is purged; the post-clear one must survive.
-      FakeEventSource.latest().emit('completed', { seq: 1, row: summary(1) }, 1)
-      FakeEventSource.latest().emit('cleared', clearAll(1, 1), 2)
-      FakeEventSource.latest().emit('completed', { seq: 2, row: summary(1, { path: '/api/chat?reused' }) }, 3)
-    })
-
-    await act(async () => {
-      resolveFetch!(listPage([]))
+      // The clear-all, then a *new* row that reuses id 1 (SQLite id reuse, R14b).
+      FakeEventSource.latest().emit('cleared', {}, 1)
+      FakeEventSource.latest().emit('completed', { seq: 2, row: reused }, 2)
     })
 
     await waitFor(() => expect(cachedRowIds(queryClient)).toEqual([1]))
+    await settle()
+
     // It is the *post-clear* row, not the purged original.
     const rows = queryClient.getQueryData<{ pages: RequestListResponse[] }>(
       requestsQueryKey(SESSION, EMPTY_FILTERS),
     )
-    expect(rows?.pages[0].rows[0].path).toBe('/api/chat?reused')
+    expect(rows?.pages.flatMap((p) => p.rows).map((r) => r.path)).toEqual(['/api/chat?reused'])
 
     rendered.unmount()
   })
 
-  // R23/H0a — the review's first ordering: a clear commits and the list settles empty, and a
-  // delayed completion for the deleted row then arrives. On the wire that completion still
-  // precedes `cleared` (the row had to exist to be deleted), so the purge removes it and the
-  // list stays empty rather than resurrecting the row.
+  // R23 — the review's first ordering: a clear commits and the list settles empty, and a
+  // delayed completion for the deleted row arrives first. On the wire that completion still
+  // precedes `cleared` (the row had to exist to be deleted), so applying frames in id order
+  // merges it and then drops it again, leaving the list empty rather than resurrecting it.
   it('stays empty when a delayed completion for a cleared row arrives before the clear frame', async () => {
     const { queryClient, rendered } = setup({ listFetch: async () => listPage([]) })
     await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
 
-    // The list is settled and empty; the completion merges (row reappears), then the clear
-    // frame purges it back out.
     act(() => {
       FakeEventSource.latest().emit('completed', { seq: 1, row: summary(1) }, 1)
     })
     await waitFor(() => expect(cachedRowIds(queryClient)).toEqual([1]))
 
     act(() => {
-      FakeEventSource.latest().emit('cleared', clearAll(1, 1), 2)
+      FakeEventSource.latest().emit('cleared', {}, 2)
     })
     await waitFor(() => expect(cachedRowIds(queryClient)).toEqual([]))
+    await settle()
+    expect(cachedRowIds(queryClient)).toEqual([])
 
     rendered.unmount()
   })
 
   // R11/H0b — restart repro (the review's Reproduction A). A `started(seq=100)` on one run;
-  // then the connection reconnects onto a *restarted* Vessel whose active set is empty and
-  // whose completed boundary is 0. A boundary comparison keeps seq 100 (100 > 0) forever; the
-  // run-id change in the `hello` frame is what tells the client to discard the dead process's
-  // seqs — with no further traffic.
+  // then the connection reconnects onto a *restarted* Vessel whose active set is empty. Seqs
+  // and log positions both restart with the process, so nothing from the old run can be
+  // compared against the new one: the run-id change in the `hello` frame discards all of it.
   it('discards in-flight rows from a prior run after a restart (run-id change)', async () => {
     const { rendered } = setup({ listFetch: async () => listPage([]) })
     await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
@@ -578,8 +582,8 @@ describe('useLiveHistory', () => {
     })
     await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(1))
 
-    // Reconnect lands on a restarted process: fresh run id, empty active set, boundary 0.
-    serverActive({ activeSeqs: [], newestCompletedSeq: 0, serverRunId: 'run-B' })
+    // Reconnect lands on a restarted process: fresh run id, empty active set, position 0.
+    serverActive({ activeSeqs: [], logPosition: 0, serverRunId: 'run-B' })
     act(() => {
       FakeEventSource.latest().open() // reconnect
       FakeEventSource.latest().emit('hello', { serverRunId: 'run-B' })
@@ -636,9 +640,8 @@ describe('useLiveHistory', () => {
   // still pending when Vessel restarts: the hello for run B correctly discards A's entries,
   // and B's first request starts and is displayed. Then A's response resolves. Its run id
   // differs from the connection's, which used to be read as "the server restarted" and clear
-  // the *whole current map* — erasing run B's live request, which no later snapshot restores
-  // (reconciliation only removes). An obsolete response is evidence about nothing: it must be
-  // discarded. Only the hello signals a run change.
+  // the *whole current map* — erasing run B's live request, which no later snapshot restores.
+  // An obsolete response is evidence about nothing: it must be discarded.
   it('ignores a recovery response from an obsolete run instead of erasing the new run’s requests', async () => {
     const resolvers: ((value: ActiveRequestsResponse) => void)[] = []
     vi.spyOn(api, 'getActiveRequests').mockImplementation(
@@ -668,32 +671,161 @@ describe('useLiveHistory', () => {
       FakeEventSource.latest().emit('hello', { serverRunId: 'run-B' })
       FakeEventSource.latest().emit('started', startedEvent(1, summary(3)), 1)
     })
-    await waitFor(() => expect(rendered.result.current.live.inFlight.map((i) => i.seq)).toEqual([1]))
+    await waitFor(() => expect(inFlightSeqs(rendered)).toEqual([1]))
 
-    // Run A's snapshot finally resolves: empty, with a far-ahead boundary in *A's* seq space.
+    // Run A's snapshot finally resolves: empty, at a far-ahead position in *A's* log.
     await act(async () => {
-      resolvers[0]({ activeSeqs: [], newestCompletedSeq: 500, serverRunId: 'run-A', clear: null })
-      await new Promise((r) => setTimeout(r, 20))
+      resolvers[0]({ activeSeqs: [], logPosition: 500, serverRunId: 'run-A' })
+      await new Promise((r) => setTimeout(r, 250))
     })
 
     // Run B's request is still live: [1], not [].
-    expect(rendered.result.current.live.inFlight.map((i) => i.seq)).toEqual([1])
+    expect(inFlightSeqs(rendered)).toEqual([1])
 
     rendered.unmount()
   })
 
-  // R23/I0a — the review's delivery order A. A pre-clear database snapshot is held in an
-  // unsettled *initial* list fetch, so there is nothing in the cache for the `cleared` frame to
-  // purge. The DELETE ack's invalidation cannot save it either: TanStack reuses an in-flight
-  // initial request rather than replacing it. When it finally resolves, its stale row lands in
-  // the cache. Re-applying the clear predicate once list fetching settles is what removes it.
-  it('purges a pre-clear list snapshot that settles after the clear', async () => {
+  // ---- the round-five review's four remaining cases (§2.1, §2.2 A/B/C) -------------------
+
+  // §2.1 (R11) — a queued start must not undo an authoritative recovery. The start waits in
+  // the coalescing window; the server finishes the request and its `completed` is lost; the
+  // pending snapshot comes back with an empty active set at a position *above* that start.
+  // Under I0c+I0b the batch landed after the recovery and reinserted seq 1 as running for
+  // ever (review: actual [1], expected []). Under J0 the arithmetic decides it: the start is
+  // at or below the snapshot position, so the snapshot already accounts for it.
+  it('does not let a queued start undo a recovery that already accounts for it', async () => {
+    const resolvers: ((value: ActiveRequestsResponse) => void)[] = []
+    vi.spyOn(api, 'getActiveRequests').mockImplementation(
+      () => new Promise<ActiveRequestsResponse>((resolve) => resolvers.push(resolve)),
+    )
+
+    const { rendered } = setup({ listFetch: async () => listPage([summary(1)]) })
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+
+    act(() => {
+      FakeEventSource.latest().open()
+      FakeEventSource.latest().open() // reconnect → recovery pending
+    })
+    await waitFor(() => expect(resolvers).toHaveLength(1))
+
+    // started(seq=1) reaches the client and waits in the 100 ms window.
+    act(() => {
+      FakeEventSource.latest().emit('started', startedEvent(1, summary(1)), 3)
+    })
+
+    // The server finished seq 1 (its `completed`, id 4, was lost) before taking this snapshot.
+    await act(async () => {
+      resolvers[0]({ activeSeqs: [], logPosition: 5, serverRunId: 'run-1' })
+      await new Promise((r) => setTimeout(r, 250))
+    })
+
+    expect(inFlightSeqs(rendered)).toEqual([])
+
+    rendered.unmount()
+  })
+
+  // §2.2 A — recovery overtakes a queued pre-clear completion. The completion is queued, the
+  // clear that deleted its row is *lost*, and the pending snapshot returns from after both.
+  // Under I0a the queued completion was classified post-clear merely because it was *applied*
+  // later, and was merged back after the authoritative empty refetch (review: actual [1],
+  // expected []). Under J0 it is below the snapshot position, so it is discarded with the
+  // rest of the pre-snapshot work; the refetch is the only thing that decides the list.
+  it('discards a queued pre-clear completion that a recovery already accounts for', async () => {
+    const resolvers: ((value: ActiveRequestsResponse) => void)[] = []
+    vi.spyOn(api, 'getActiveRequests').mockImplementation(
+      () => new Promise<ActiveRequestsResponse>((resolve) => resolvers.push(resolve)),
+    )
+
+    let fetches = 0
+    const listFetch = () => {
+      fetches++
+      // The first read predates the clear; everything later reads the cleared database.
+      return Promise.resolve(listPage(fetches === 1 ? [] : []))
+    }
+
+    const { queryClient, rendered } = setup({ listFetch })
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+
+    // Establish the id watermark, then a gap → recovery, whose response is held.
+    act(() => {
+      FakeEventSource.latest().emit('started', startedEvent(2, summary(2)), 1)
+      FakeEventSource.latest().emit('started', startedEvent(3, summary(3)), 3)
+    })
+    await waitFor(() => expect(resolvers).toHaveLength(1))
+
+    // The completion arrives while the recovery is in flight but was published before the
+    // snapshot; the `cleared` frame that deleted its row (id 5) never arrives at all.
+    act(() => {
+      FakeEventSource.latest().emit('completed', { seq: 1, row: summary(1) }, 4)
+    })
+
+    await act(async () => {
+      resolvers[0]({ activeSeqs: [3], logPosition: 6, serverRunId: 'run-1' })
+      await new Promise((r) => setTimeout(r, 250))
+    })
+
+    expect(cachedRowIds(queryClient)).toEqual([])
+    expect(inFlightSeqs(rendered)).toEqual([3])
+
+    rendered.unmount()
+  })
+
+  // §2.2 B — a valid post-clear REST row whose `completed` frame was lost. A list request is
+  // outstanding when clear-all deletes row 1; a new row then reuses id 1, and the outstanding
+  // request's database snapshot is taken after that insert, so it returns the new row.
+  // Under I0a the armed re-application purged it (`id <= boundaryId`) because no SSE
+  // completion was there to exempt it (review: actual [], expected [1]). Under J0 nothing the
+  // client holds can delete a row a fetch returned — rule 4, with no exceptions to arrange.
+  it('keeps a valid post-clear row that reuses a cleared id and has no completion frame', async () => {
+    const reused = summary(1, { path: '/api/chat?reused' })
     let resolveFetch: ((value: RequestListResponse) => void) | undefined
     let fetches = 0
     const listFetch = () => {
       fetches++
-      // The first (held) fetch carries the pre-clear snapshot; anything issued afterwards
-      // reads a post-clear database and is legitimately empty.
+      return fetches === 1
+        ? new Promise<RequestListResponse>((resolve) => {
+            resolveFetch = resolve
+          })
+        : Promise.resolve(listPage([reused]))
+    }
+
+    const { queryClient, rendered } = setup({ listFetch })
+    await waitFor(() => expect(resolveFetch).toBeDefined())
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+
+    // The clear commits while that fetch is outstanding.
+    act(() => {
+      FakeEventSource.latest().emit('cleared', {}, 1)
+    })
+
+    // The outstanding request took its snapshot after the new row was inserted, so it returns
+    // the reused id — and its `completed` frame never arrives.
+    await act(async () => {
+      resolveFetch!(listPage([reused]))
+      await new Promise((r) => setTimeout(r, 250))
+    })
+
+    expect(cachedRowIds(queryClient)).toEqual([1])
+    const rows = queryClient.getQueryData<{ pages: RequestListResponse[] }>(
+      requestsQueryKey(SESSION, EMPTY_FILTERS),
+    )
+    expect(rows?.pages.flatMap((p) => p.rows).map((r) => r.path)).toEqual(['/api/chat?reused'])
+
+    rendered.unmount()
+  })
+
+  // §2.2 C — two clears, the first one missed. Clear-all v1 deletes the buffered row but its
+  // frame is lost; a later clear-before v2 (an earlier cutoff, deleting nothing) is the one
+  // the client sees. Under I0a the server retained only the latest clear, and neither v2's
+  // predicate nor its version described v1's deletion, so the buffer restored the row
+  // (review: actual [1], expected []). Under J0 there is no predicate to be wrong: the clear
+  // is a position, everything held at it is dropped, and the refetch reads a database that
+  // reflects *both* clears.
+  it('forgets a row deleted by a clear it never saw, when a later clear arrives', async () => {
+    let resolveFetch: ((value: RequestListResponse) => void) | undefined
+    let fetches = 0
+    const listFetch = () => {
+      fetches++
       return fetches === 1
         ? new Promise<RequestListResponse>((resolve) => {
             resolveFetch = resolve
@@ -705,18 +837,61 @@ describe('useLiveHistory', () => {
     await waitFor(() => expect(resolveFetch).toBeDefined())
     await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
 
-    // The clear commits and its frame arrives while that fetch is still unsettled.
+    // Row 1 completes while the list fetch is unsettled → buffered.
     act(() => {
-      FakeEventSource.latest().emit('cleared', clearAll(1, 1), 1)
+      FakeEventSource.latest().emit('completed', { seq: 1, row: summary(1) }, 1)
     })
 
-    // DataPanel's ack path invalidates the list while the initial request is pending (not
-    // awaited: it resolves only when that request does).
+    // Clear-all v1 (id 2) deletes it, and that frame is lost. Clear-before v2 (id 3) arrives.
+    serverActive({ activeSeqs: [], logPosition: 3 })
+    act(() => {
+      FakeEventSource.latest().emit('cleared', {}, 3)
+    })
+
+    await act(async () => {
+      resolveFetch!(listPage([]))
+      await new Promise((r) => setTimeout(r, 300))
+    })
+
+    expect(cachedRowIds(queryClient)).toEqual([])
+
+    rendered.unmount()
+  })
+
+  // ---- earlier controlled-delivery cases, re-expressed against J0 ------------------------
+
+  // R23 (I0a's review order A, retained) — a pre-clear database snapshot is held in an
+  // unsettled *initial* list fetch, so there is nothing in the cache for the `cleared` frame
+  // to purge, and TanStack reuses an in-flight initial request rather than replacing it. J0
+  // resolves it by ordering rather than by re-application: the clear starts a fetch after
+  // itself, and the last-started fetch is the one that wins.
+  it('converges on the post-clear list when a pre-clear snapshot settles after the clear', async () => {
+    let resolveFetch: ((value: RequestListResponse) => void) | undefined
+    let fetches = 0
+    const listFetch = () => {
+      fetches++
+      return fetches === 1
+        ? new Promise<RequestListResponse>((resolve) => {
+            resolveFetch = resolve
+          })
+        : Promise.resolve(listPage([]))
+    }
+
+    const { queryClient, rendered } = setup({ listFetch })
+    await waitFor(() => expect(resolveFetch).toBeDefined())
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+
+    act(() => {
+      FakeEventSource.latest().emit('cleared', {}, 1)
+    })
+
+    // DataPanel's ack path also invalidates the list while the initial request is pending.
     void queryClient.invalidateQueries({ queryKey: ['requests'] })
 
     // The held response resolves with the row the clear deleted.
     await act(async () => {
       resolveFetch!(listPage([summary(1)]))
+      await new Promise((r) => setTimeout(r, 300))
     })
 
     await waitFor(() => expect(cachedRowIds(queryClient)).toEqual([]))
@@ -724,12 +899,11 @@ describe('useLiveHistory', () => {
     rendered.unmount()
   })
 
-  // R23/I0a — the review's delivery order B. The `cleared` frame is dropped by the bounded
+  // R23 (I0a's review order B, retained) — the `cleared` frame is dropped by the bounded
   // drop-oldest queue, so the client never sees it; the loss shows up only as an id gap.
-  // Recovery must therefore carry the deletion state: `GET /active` reports the same versioned
-  // predicate, which purges the completion buffer before it drains into the authoritative
-  // empty page. Correctness cannot depend on that frame surviving a deliberately lossy feed.
-  it('applies a clear it never saw, from the version on /active, to the completion buffer', async () => {
+  // Recovery must not depend on that frame: it discards the completion buffer wholesale and
+  // refetches, and the refetch reads the post-clear database.
+  it('applies a clear it never saw, from the recovery snapshot, to the completion buffer', async () => {
     let resolveFetch: ((value: RequestListResponse) => void) | undefined
     let fetches = 0
     const listFetch = () => {
@@ -751,22 +925,19 @@ describe('useLiveHistory', () => {
       FakeEventSource.latest().emit('completed', { seq: 1, row: summary(1) }, 1)
     })
 
-    serverActive({ activeSeqs: [], newestCompletedSeq: 1, clear: clearAll(1, 1) })
+    serverActive({ activeSeqs: [], logPosition: 4 })
 
     // A later frame reveals the gap and triggers recovery.
     act(() => {
       FakeEventSource.latest().emit('started', startedEvent(2, summary(2)), 5)
     })
 
-    // Past the 150 ms debounce, so /active has been read and its clear applied to the buffer.
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 250))
-    })
+    await settle()
 
     // History resolves authoritatively empty; the buffer must not remerge the deleted row.
     await act(async () => {
       resolveFetch!(listPage([]))
-      await new Promise((r) => setTimeout(r, 20))
+      await new Promise((r) => setTimeout(r, 50))
     })
 
     expect(cachedRowIds(queryClient)).toEqual([])
@@ -774,47 +945,155 @@ describe('useLiveHistory', () => {
     rendered.unmount()
   })
 
-  // R23/I0a — the other half of re-application: it must be idempotent for live rows. A
-  // post-clear completion whose row reuses a cleared id (SQLite restarts ids once a clear-all
-  // empties the table, so it sits *below* the boundary) survives the purge at settlement, and
-  // survives a later refetch settling too — the predicate is retired once every fetch that
-  // could predate the clear has landed.
-  it('keeps a post-clear row reusing a cleared id across refetch settlement', async () => {
-    let resolveFetch: ((value: RequestListResponse) => void) | undefined
-    let fetches = 0
-    const reused = summary(1, { path: '/api/chat?reused' })
-    const listFetch = () => {
-      fetches++
-      return fetches === 1
-        ? new Promise<RequestListResponse>((resolve) => {
-            resolveFetch = resolve
-          })
-        : Promise.resolve(listPage([reused]))
+  // ---- the model's claim, tested as a property -------------------------------------------
+
+  /**
+   * J0 claims *order-independence at settlement*: whatever order frames arrive in, and
+   * whichever are lost, once loss is detected and recovery has settled the client's state
+   * equals the server's. This drives a small simulated server — a frame script with a real log
+   * position, a database that reflects the frames published so far, and snapshots taken at the
+   * tightest legal position — through randomised delivery orders and losses, then asserts
+   * exactly that. Examples pin the four review orderings; this pins the claim they came from.
+   *
+   * Deterministic PRNG: a failure has to be reproducible from its seed.
+   */
+  function prng(seed: number) {
+    let state = seed >>> 0
+    return () => {
+      state = (state * 1664525 + 1013904223) >>> 0
+      return state / 0x100000000
+    }
+  }
+
+  type Frame =
+    | { id: number; kind: 'started'; seq: number; row: Summary }
+    | { id: number; kind: 'completed'; seq: number; row: Summary }
+    | { id: number; kind: 'cleared' }
+
+  /** Build one scenario: N requests, some left running, with a clear somewhere in the middle. */
+  function scenario(rand: () => number) {
+    const frames: Frame[] = []
+    const stillRunning = new Set<number>()
+    let id = 0
+    let seq = 0
+    let rowId = 0
+
+    const requests = 4 + Math.floor(rand() * 4)
+    const clearAfter = Math.floor(rand() * requests)
+
+    for (let i = 0; i < requests; i++) {
+      seq++
+      const runs = rand() < 0.25
+      const row = summary(Math.min(9, ++rowId), { path: `/api/chat?seq=${seq}` })
+      frames.push({ id: ++id, kind: 'started', seq, row })
+      if (runs) {
+        stillRunning.add(seq)
+      } else {
+        frames.push({ id: ++id, kind: 'completed', seq, row })
+      }
+
+      if (i === clearAfter) {
+        frames.push({ id: ++id, kind: 'cleared' })
+        rowId = 0 // a clear-all empties the table, so SQLite restarts row ids (R14b)
+      }
     }
 
-    const { queryClient, rendered } = setup({ listFetch })
-    await waitFor(() => expect(resolveFetch).toBeDefined())
-    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+    /** The server's in-flight set as of `position` — started, not yet completed. */
+    const activeAt = (position: number) => {
+      const active = new Set<number>()
+      for (const f of frames) {
+        if (f.id > position) break
+        if (f.kind === 'started') active.add(f.seq)
+        if (f.kind === 'completed') active.delete(f.seq)
+      }
 
-    act(() => {
-      FakeEventSource.latest().emit('completed', { seq: 1, row: summary(1) }, 1)
-      FakeEventSource.latest().emit('cleared', clearAll(1, 1), 2)
-      FakeEventSource.latest().emit('completed', { seq: 2, row: reused }, 3)
+      return [...active]
+    }
+
+    /** The rows a list read would return at `position`: inserted since the last clear. */
+    const rowsAt = (position: number) => {
+      let rows: Summary[] = []
+      for (const f of frames) {
+        if (f.id > position) break
+        if (f.kind === 'cleared') rows = []
+        // `completed` is published after the insert, so its row is in the database by then.
+        if (f.kind === 'completed') rows = [f.row, ...rows]
+      }
+
+      return rows
+    }
+
+    return { frames, stillRunning, lastId: id, activeAt, rowsAt }
+  }
+
+  for (const seed of [1, 7, 13, 21, 42, 99]) {
+    it(`converges on the server's settled state under randomised delivery (seed ${seed})`, async () => {
+      const rand = prng(seed)
+      const world = scenario(rand)
+
+      // The database the client can read is whatever the server has published so far.
+      let position = 0
+      const listFetch = () => Promise.resolve(listPage(world.rowsAt(position)))
+      // Snapshots are taken at the tightest position the server could honestly report: at
+      // least everything the client has already been sent.
+      vi.spyOn(api, 'getActiveRequests').mockImplementation(async () => ({
+        activeSeqs: world.activeAt(position),
+        logPosition: position,
+        serverRunId: 'run-1',
+      }))
+
+      const { queryClient, rendered } = setup({ listFetch })
+      await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+      act(() => {
+        FakeEventSource.latest().open()
+        FakeEventSource.latest().emit('hello', { serverRunId: 'run-1' })
+      })
+
+      // Deliver in a shuffled order, dropping some frames outright — a bounded drop-oldest
+      // queue loses whatever it loses, and the client is only promised detection, not order.
+      const delivery = [...world.frames]
+      for (let i = delivery.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1))
+        ;[delivery[i], delivery[j]] = [delivery[j], delivery[i]]
+      }
+
+      const half = Math.ceil(delivery.length / 2)
+      for (let i = 0; i < delivery.length; i++) {
+        const frame = delivery[i]
+        if (rand() < 0.25) {
+          // Dropped by the subscriber's bounded queue; the server still published it.
+          position = Math.max(position, frame.id)
+          continue
+        }
+
+        act(() => {
+          const source = FakeEventSource.latest()
+          position = Math.max(position, frame.id)
+          if (frame.kind === 'started') source.emit('started', startedEvent(frame.seq, frame.row), frame.id)
+          else if (frame.kind === 'completed') source.emit('completed', { seq: frame.seq, row: frame.row }, frame.id)
+          else source.emit('cleared', {}, frame.id)
+        })
+
+        // A reconnect in the middle: recovery has to compose with frames still arriving.
+        if (i === half) {
+          await settle(120)
+          act(() => FakeEventSource.latest().open())
+        }
+      }
+
+      // Everything is published; the run ends with a reconnect, which is what makes undetected
+      // loss detectable at all. Settled state must then equal the server's.
+      position = world.lastId
+      act(() => FakeEventSource.latest().open())
+      await settle(500)
+
+      expect(cachedRowIds(queryClient)).toEqual(world.rowsAt(world.lastId).map((r) => r.id))
+      // Nothing is shown as running that the server does not report as running.
+      for (const seq of inFlightSeqs(rendered)) {
+        expect(world.stillRunning.has(seq)).toBe(true)
+      }
+
+      rendered.unmount()
     })
-
-    await act(async () => {
-      resolveFetch!(listPage([]))
-    })
-    await waitFor(() => expect(cachedRowIds(queryClient)).toEqual([1]))
-
-    // A second, post-clear fetch settles carrying the same row. Nothing may purge it.
-    await act(async () => {
-      await queryClient.refetchQueries({ queryKey: ['requests'] })
-      await new Promise((r) => setTimeout(r, 20))
-    })
-
-    expect(cachedRowIds(queryClient)).toEqual([1])
-
-    rendered.unmount()
-  })
+  }
 })
