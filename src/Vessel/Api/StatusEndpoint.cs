@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Vessel.Capture;
+using Vessel.Config;
 using Vessel.Proxy;
 
 namespace Vessel.Api;
@@ -20,6 +21,7 @@ public static class StatusEndpoint
         var captureChannel = context.RequestServices.GetRequiredService<CaptureChannel>();
         var captureEvents = context.RequestServices.GetRequiredService<CaptureEvents>();
         var backendHealthTracker = context.RequestServices.GetRequiredService<BackendHealthTracker>();
+        var configStore = context.RequestServices.GetRequiredService<ConfigStore>();
         var server = context.RequestServices.GetRequiredService<IServer>();
         string listen = server.Features.Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault() ?? "";
 
@@ -37,6 +39,7 @@ public static class StatusEndpoint
                     b.Name, b.BaseUrl, b.Type, b.IsDefault, b.AuthEnv, backendHealthTracker.Get(b.Name)))
                 .ToArray(),
             new CaptureHealth(!captureChannel.IsStopped, captureChannel.StoppedReason),
+            new McpStatus(configStore.Current.Mcp.Enabled),
             captureEvents.RunId);
 
         context.Response.ContentType = "application/json; charset=utf-8";

@@ -322,6 +322,79 @@ public sealed class SqliteReadStore(string dbPath)
         return RequestDetail.From(summary, requestHeaders, responseHeaders, requestBody, responseBody, responseRaw);
     }
 
+    /// <summary>
+    /// MCP D3 — reads a capture's stored bodies without consulting the contentless FTS
+    /// index, then recreates its flattened prompt/response text at read time. The writer
+    /// deliberately owns FTS population, but contentless FTS cannot return its columns;
+    /// this helper therefore remains strictly on the read side and is never used by the
+    /// proxy or capture writer.
+    /// </summary>
+    public McpRequestData? GetMcpRequest(long id)
+    {
+        using SqliteConnection connection = Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            $"""
+            SELECT {SummaryColumns},
+                   request_headers, response_headers, request_body, response_body, response_raw
+            FROM requests WHERE id = $id
+            """;
+        command.Parameters.AddWithValue("$id", id);
+
+        using SqliteDataReader reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        Summary summary = ReadSummary(reader);
+        JsonNode? requestHeaders = JsonNode.Parse(reader.GetString(SummaryColumnCount));
+        JsonNode? responseHeaders = reader.IsDBNull(SummaryColumnCount + 1)
+            ? null
+            : JsonNode.Parse(reader.GetString(SummaryColumnCount + 1));
+
+        McpBodyData? requestBody = ToMcpBodyData(
+            reader, SummaryColumnCount + 2, ContentEncodingOf(requestHeaders));
+        McpBodyData? responseBody = ToMcpBodyData(
+            reader, summary.Streamed ? SummaryColumnCount + 4 : SummaryColumnCount + 3,
+            ContentEncodingOf(responseHeaders));
+
+        // Flatten against the reassembled response body, not the wire chunk stream. This
+        // is exactly the normal representation the writer's adapters receive for a
+        // streamed row, and makes the same text visible without reading FTS columns.
+        McpBodyData? flattenedResponseBody = ToMcpBodyData(
+            reader, SummaryColumnCount + 3, ContentEncodingOf(responseHeaders));
+        string? promptText = FlattenPrompt(summary.Format, requestBody?.Text);
+        string? responseText = FlattenResponse(summary.Format, flattenedResponseBody?.Text);
+
+        return new McpRequestData(summary, requestBody, responseBody, promptText, responseText);
+    }
+
+    /// <summary>
+    /// MCP search preview — flattens only the prompt from the stored request body, reading
+    /// neither the response body nor FTS. <c>search_requests</c> renders one short preview
+    /// per row, so this deliberately avoids the full request/response decode that
+    /// <see cref="GetMcpRequest"/> performs. Returns the full flattened prompt; the caller
+    /// truncates it to the preview budget.
+    /// </summary>
+    public string? GetMcpPromptText(long id, string format)
+    {
+        using SqliteConnection connection = Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT request_headers, request_body FROM requests WHERE id = $id";
+        command.Parameters.AddWithValue("$id", id);
+
+        using SqliteDataReader reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        JsonNode? requestHeaders = JsonNode.Parse(reader.GetString(0));
+        McpBodyData? requestBody = ToMcpBodyData(reader, 1, ContentEncodingOf(requestHeaders));
+        return FlattenPrompt(format, requestBody?.Text);
+    }
+
     /// <summary>Replay children of one original, newest first, for the Compare entry points.</summary>
     public Summary[] ListReplays(long replayOf)
     {
@@ -485,6 +558,54 @@ public sealed class SqliteReadStore(string dbPath)
             : new BodyPayload(null, Convert.ToBase64String(raw), truncated, failed);
     }
 
+    private static McpBodyData? ToMcpBodyData(SqliteDataReader reader, int ordinal, string? contentEncoding)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            return null;
+        }
+
+        byte[] stored = BodyCompression.Decompress((byte[])reader.GetValue(ordinal));
+        // Captures are already bounded by capture.maxBodyMb. This read-side helper needs
+        // the complete decoded body to report an accurate character count; it never runs
+        // on the proxy or writer paths.
+        BodyDecoder.Result decoded = BodyDecoder.Decode(stored, contentEncoding, long.MaxValue);
+        byte[] bytes = decoded.Bytes ?? stored;
+
+        try
+        {
+            string text = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(bytes);
+            return new McpBodyData(text, null, bytes.LongLength);
+        }
+        catch (DecoderFallbackException)
+        {
+            return new McpBodyData(null, true, bytes.LongLength);
+        }
+    }
+
+    private static string? FlattenPrompt(string format, string? body) => body is null
+        ? null
+        : format switch
+        {
+            FormatNames.OpenAiChat or FormatNames.OllamaChat => TextFlattener.ChatMessages(JsonUtil.Parse(body)),
+            FormatNames.OpenAiResponses => TextFlattener.ResponsesInput(JsonUtil.Parse(body)),
+            FormatNames.AnthropicMessages => TextFlattener.AnthropicPrompt(JsonUtil.Parse(body)),
+            FormatNames.OllamaGenerate => TextFlattener.OllamaGeneratePrompt(JsonUtil.Parse(body)),
+            _ => null,
+        };
+
+    private static string? FlattenResponse(string format, string? body) => body is null
+        ? null
+        : format switch
+        {
+            FormatNames.OpenAiChat => TextFlattener.OpenAiResponse(JsonUtil.Parse(body)),
+            FormatNames.OpenAiResponses => TextFlattener.ResponsesOutput(JsonUtil.Parse(body)),
+            FormatNames.AnthropicMessages => TextFlattener.AnthropicResponse(JsonUtil.Parse(body)),
+            FormatNames.OllamaChat => TextFlattener.OllamaChatResponse(JsonUtil.Parse(body)),
+            FormatNames.OllamaGenerate => TextFlattener.OllamaGenerateResponse(JsonUtil.Parse(body)),
+            _ => null,
+        };
+
     /// <summary>The <c>Content-Encoding</c> value from an already-parsed header object, or null.</summary>
     private static string? ContentEncodingOf(JsonNode? headers)
     {
@@ -523,3 +644,14 @@ public sealed class SqliteReadStore(string dbPath)
 
 /// <summary>Startup seed for the last captured proxy outcome of one backend.</summary>
 public sealed record BackendHealthSeed(string Backend, string StartedAt, string? Error);
+
+/// <summary>Read-only MCP projection of a decoded capture body; binary bytes are never encoded to text.</summary>
+public sealed record McpBodyData(string? Text, bool? Binary, long Bytes);
+
+/// <summary>MCP D3's one read-side record, including text recreated from stored JSON bodies.</summary>
+public sealed record McpRequestData(
+    Summary Summary,
+    McpBodyData? RequestBody,
+    McpBodyData? ResponseBody,
+    string? PromptText,
+    string? ResponseText);

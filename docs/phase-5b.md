@@ -144,3 +144,51 @@ tests/Vessel.Tests/McpTests.cs   # in-proc SDK client against the real host
 
 Suites green; publish smoke incl. MCP; manual gate item 1 demonstrated end-to-end
 with a real MCP client on real captured traffic.
+
+## 6. Implementation record
+
+- Implemented the official `ModelContextProtocol.AspNetCore` SDK as a stateless
+  Streamable HTTP server at `/vessel/mcp`, with exactly the four D2 read-only tools.
+  The host guard applies before the endpoint, and `mcp.enabled` is a default-on,
+  live `ConfigStore` setting. Disabled MCP returns the normal Vessel `404 not_found`
+  response with `X-Vessel-Error`; `/vessel/api/status` reports `mcp.enabled`.
+- `get_request` recreates flattened text from decoded stored request/reassembled response
+  bodies in `SqliteReadStore`. It does not read from contentless FTS and does not involve
+  the writer or proxy paths. Search previews use this same read-side path; binary bodies
+  are represented only by `{ binary: true, bytes: N }`.
+- Automated M1–M6 coverage is in `McpTests.cs`, using the official in-proc SDK HTTP
+  client against the real Kestrel host. The publish smoke now sends a Streamable HTTP
+  `initialize` request to the published executable (M7).
+- **Trim-compatibility finding (Phase 6 blocker):** ordinary self-contained single-file
+  publish passes the MCP smoke. A `win-x64` publish with `PublishTrimmed=true` starts and
+  serves `/vessel/api/status`, but `/vessel/mcp` returns 404. The SDK endpoint/tool
+  registration is therefore not trim-safe in the current configuration. This was checked
+  now, as required; it must be resolved before Phase 6 enables trimming. The untrimmed
+  shipping publish smoke remains green.
+- Manual gate item 1 remains deliberately unticked: a human must run
+  `claude mcp add --transport http vessel http://127.0.0.1:4550/vessel/mcp` against live
+  captured traffic and confirm the useful `search_requests` → `get_request` flow.
+
+## 7. Post-sign-off follow-up (COMPLETED)
+
+- ✅ **OAuth discovery probes no longer pollute capture.** MCP clients connecting to
+  `/vessel/mcp` probed the origin root for auth metadata per the MCP auth spec:
+  `/.well-known/oauth-authorization-server*`, `/.well-known/oauth-protected-resource*`,
+  `/.well-known/openid-configuration*`. These now are reserved as **control plane**
+  (same rationale as `/vessel/*` — the requests are addressed to Vessel's MCP surface,
+  not the backend): answered directly with `404 not_found` + `X-Vessel-Error` marking
+  convention, never proxied, never captured. A backend that genuinely serves these
+  paths remains reachable via `/b/{backend}/...` (known edge, documented in
+  architecture.md §3.2). NOT method-based filtering — capture-everything stands
+  (only these exact path prefixes are reserved).
+  - **Favicon.ico served as control-plane.** `/favicon.ico` is now served
+    (the embedded Vessel SVG mark) as control-plane, with cache headers
+    (`Cache-Control: public, max-age=31536000`). Never proxied, never captured.
+  - **Implementation:** `WellKnownEndpoints.cs` middleware in `VesselApp.Build`
+    (before the proxy catch-all) intercepts and answers both paths.
+  - **Tests:** in-proc MCP client connect cycle leaves zero captured rows
+    and zero failed stats; well-known probes return `404 not_found +
+    X-Vessel-Error`; paths under `/b/{backend}/.well-known/...` still
+    proxy normally; favicon serves with correct content-type and cache headers.
+  - **Documentation:** routing section of architecture.md (§3.2) updated
+    with reserved prefixes list.

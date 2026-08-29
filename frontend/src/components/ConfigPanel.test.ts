@@ -24,6 +24,7 @@ function renderConfigPanel(theme: 'light' | 'dark') {
       retention: { maxRequests: 10_000, maxDbSizeMb: 500 },
       capture: { maxBodyMb: 32 },
       warnings: { slowTtftMs: 1000 },
+      mcp: { enabled: true },
     },
     restartRequired: [],
   }
@@ -45,5 +46,12 @@ describe('ConfigPanel backend type explainer (R12)', () => {
     expect(document.documentElement.dataset.theme).toBe(theme)
     expect(explainer.classList.contains('text-xs')).toBe(true)
     expect(explainer.classList.contains('text-text-muted')).toBe(true)
+  })
+
+  it('states the MCP prompt-read boundary beside its toggle', async () => {
+    renderConfigPanel('dark')
+
+    expect(await screen.findByText('An MCP client you connect can read captured prompts.')).toBeTruthy()
+    expect(screen.getByLabelText('Enable MCP server')).toBeTruthy()
   })
 })

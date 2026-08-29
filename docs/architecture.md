@@ -82,7 +82,15 @@ editable in the UI (see §9).
 
 ### 3.2 Routing
 
-Requests are routed in this precedence order:
+**Control-plane reserves (never proxied, never captured):**
+- `/vessel/*` — Vessel's own API and UI (D7).
+- `/.well-known/oauth-authorization-server*`, `/.well-known/oauth-protected-resource*`,
+  `/.well-known/openid-configuration*` — OAuth discovery probe paths per the MCP auth spec.
+  Answered with `404 not_found` + `X-Vessel-Error` marking (D5). A backend that genuinely
+  serves these paths remains reachable via `/b/{backend}/.well-known/…` (known edge).
+- `/favicon.ico` — the embedded Vessel favicon in SVG format.
+
+**Proxied traffic routing** (everything else):
 
 1. **Path prefix**: `/b/{backend}/…` — e.g. `http://localhost:4550/b/openai/v1/chat/completions`.
    The prefix is stripped before forwarding. Works with clients that can only set a base URL.
