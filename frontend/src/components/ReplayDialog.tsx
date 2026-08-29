@@ -25,6 +25,7 @@ export function ReplayDialog({
 
   useEffect(() => {
     if (!open) return
+    // oxlint-disable-next-line react/set-state-in-effect -- opening a different replay target must reset the transient form fields.
     setBackend(allowed.find((item) => item.name === detail.backend)?.name ?? allowed[0]?.name ?? '')
     setModel(detail.model ?? '')
     setError(null)

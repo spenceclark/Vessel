@@ -101,6 +101,7 @@ export interface StatusPayload {
   backends: StatusBackend[]
   capture: CaptureHealth
   mcp: { enabled: boolean }
+  listenSecurity: { isNonLoopback: boolean; isContainer: boolean }
   /** H0b — this Vessel process's run id (a restart changes it). */
   serverRunId: string
 }

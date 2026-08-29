@@ -63,6 +63,7 @@ export function DetailPane({ id, onCompare }: { id: number | null; onCompare?: (
   const responseRendered = useMemo(() => (query.data ? renderResponse(query.data) : null), [query.data])
 
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- changing the selected request must reset per-request display controls.
     setResponseView('reassembled')
     setRequestDisplay('rendered')
     setResponseDisplay('rendered')

@@ -37,6 +37,37 @@ public class ConfigLoaderTests : IDisposable
     }
 
     [Fact]
+    public void ConfigPathResolver_UsesExplicitAndPortablePathsBeforePlatformDirectory()
+    {
+        string explicitPath = PathFor("explicit.json");
+        ResolvedPaths explicitPaths = ConfigPathResolver.Resolve(explicitPath);
+        Assert.Equal(Path.GetFullPath(explicitPath), explicitPaths.ConfigPath);
+        Assert.Equal(Path.Combine(_dir, "vessel.db"), explicitPaths.DatabasePath);
+        Assert.False(explicitPaths.IsPortable);
+
+        string portablePath = Path.Combine(AppContext.BaseDirectory, "vessel.json");
+        string? original = File.Exists(portablePath) ? File.ReadAllText(portablePath) : null;
+        try
+        {
+            File.WriteAllText(portablePath, "{}");
+            ResolvedPaths portablePaths = ConfigPathResolver.Resolve(null);
+            Assert.Equal(portablePath, portablePaths.ConfigPath);
+            Assert.True(portablePaths.IsPortable);
+        }
+        finally
+        {
+            if (original is null)
+            {
+                File.Delete(portablePath);
+            }
+            else
+            {
+                File.WriteAllText(portablePath, original);
+            }
+        }
+    }
+
+    [Fact]
     public void UnknownProperties_SurviveLoadSaveRoundTrip()
     {
         // A phase-0 binary must not destroy settings written by a later version.

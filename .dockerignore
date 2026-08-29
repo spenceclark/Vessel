@@ -1,0 +1,6 @@
+**/bin
+**/obj
+frontend/node_modules
+frontend/dist
+TestResults
+.vscode

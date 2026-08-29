@@ -17,6 +17,7 @@
   <ItemGroup>
     <!-- Golden fixtures (D12): recorded/wire-true bytes read at test time. -->
     <Content Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\README.md" Link="README.md" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

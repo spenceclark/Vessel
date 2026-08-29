@@ -15,6 +15,7 @@ namespace Vessel.Api;
 [JsonSerializable(typeof(ErrorPayload))]
 [JsonSerializable(typeof(StatusPayload))]
 [JsonSerializable(typeof(McpStatus))]
+[JsonSerializable(typeof(ListenSecurity))]
 [JsonSerializable(typeof(BackendHealth))]
 [JsonSerializable(typeof(ActiveRequestsPayload))]
 [JsonSerializable(typeof(RequestListResponse))]

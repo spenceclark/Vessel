@@ -8,6 +8,7 @@ describe('Dialog', () => {
 
   it('ignores backdrop clicks but closes from its close button and Escape', () => {
     const onClose = vi.fn()
+    // oxlint-disable-next-line react/no-children-prop -- this .ts test intentionally uses createElement rather than JSX.
     render(createElement(Dialog, { open: true, title: 'Settings', onClose, children: 'Contents' }))
 
     fireEvent.click(screen.getByRole('presentation'))

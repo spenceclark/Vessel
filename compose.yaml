@@ -1,0 +1,24 @@
+# Default: Ollama runs on the host. `host-gateway` makes the container-aware first-run
+# default (http://host.docker.internal:11434) reachable on Linux as well as Docker Desktop.
+services:
+  vessel:
+    image: ${VESSEL_IMAGE:-ghcr.io/spenceclark/vessel:latest}
+    ports:
+      - "4550:4550"
+    volumes:
+      - vessel-data:/data
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # To run Ollama in the same compose stack, uncomment this service and change Vessel's
+  # backend baseUrl in /data/vessel.json to http://ollama:11434 after its first start.
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   volumes:
+  #     - ollama-data:/root/.ollama
+  #   restart: unless-stopped
+
+volumes:
+  vessel-data:
+  # ollama-data:

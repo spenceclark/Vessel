@@ -61,6 +61,7 @@ public static class ConfigLoader
 
         try
         {
+            Directory.CreateDirectory(directory);
             File.WriteAllText(tempPath, json + Environment.NewLine);
 
             if (File.Exists(path))
@@ -96,14 +97,22 @@ public static class ConfigLoader
 
     public static VesselConfig CreateDefault() => new()
     {
-        Listen = "127.0.0.1:4550",
+        Listen = IsRunningInContainer ? "0.0.0.0:4550" : "127.0.0.1:4550",
         DefaultBackend = "ollama",
         Backends = new Dictionary<string, BackendConfig>
         {
-            ["ollama"] = new() { BaseUrl = "http://localhost:11434", Type = "ollama" },
+            ["ollama"] = new()
+            {
+                BaseUrl = IsRunningInContainer ? "http://host.docker.internal:11434" : "http://localhost:11434",
+                Type = "ollama",
+            },
         },
         Timeouts = new TimeoutConfig(),
     };
+
+    public static bool IsRunningInContainer =>
+        string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "1", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// D7 — public so <c>ConfigStore.Apply</c> (the <c>PUT /vessel/api/config</c> path) can

@@ -51,3 +51,11 @@ Thumbs.db
 
 
 *.jsonl
+
+# Vessel runtime state and frontend build output
+vessel.json
+vessel.db
+vessel.db-shm
+vessel.db-wal
+frontend/dist/
+frontend/node_modules/
