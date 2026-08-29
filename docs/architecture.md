@@ -3,7 +3,9 @@
 > A lightweight, local-first observability reverse proxy for LLM traffic.
 > Single binary. Point a `base_url` at it, get full request/response capture, metrics, and a UI.
 
-Status: **draft, pre-implementation** — companion to [brief.md](brief.md) and [plan.md](plan.md).
+Status: **implementation truth through Phase 5b** (proxy, capture, adapters, UI,
+replay/compare, MCP) — companion to [brief.md](brief.md) and [plan.md](plan.md),
+corrected in place as phases land. Phase 6 (ship) packages it without changing it.
 
 ---
 
@@ -371,6 +373,8 @@ Everything Vessel-owned lives under `/vessel/` (impossible to collide with `/v1/
 | `GET /vessel/api/active` | recovery snapshot `{ active, logPosition, serverRunId }` — the in-flight requests as displayable descriptors, and the log position that set is true as of (§4.4, Batch F/H/I/J/K) |
 | `GET/PUT /vessel/api/config` | backends, retention, ports, redaction — persisted to `vessel.json` |
 | `GET /vessel/api/ollama/ps` | (Ollama backends) proxied `ollama ps` — loaded models, memory |
+| `GET /vessel/api/status` | server status: version, effective listen address, per-backend passive health, `mcp.enabled` |
+| `POST /vessel/mcp` | read-only MCP server (official SDK, Streamable HTTP): `search_requests`, `get_request`, `get_stats`, `list_sessions` over the capture store; `mcp.enabled` kill-switch, live-applied (phase-5b) |
 
 Replay is an internal request to Vessel's own `/b/{backend}/…` route, so it follows the
 normal proxy/capture pipeline. It sends only Content-Type, optional Accept, Vessel control
@@ -415,6 +419,11 @@ same environment-variable placeholders. There is deliberately no server-side cur
   - This is explicitly **not** UI authentication and **not** the Phase 6 non-loopback
     bind-address banner (still open, tracked separately) — it only closes the specific
     browser-reachable gap the review identified.
+- **MCP shares this boundary — stated plainly (phase-5b D5).** `/vessel/mcp` sits
+  behind the same loopback bind + Host guard with no additional auth, which means
+  **any MCP client you connect can read your captured prompts**. `mcp.enabled`
+  (default on, live-applied) is the kill-switch; the README and the non-loopback
+  bind banner (phase-6 D6) carry the user-facing statement.
 
 ---
 
@@ -438,9 +447,12 @@ editable in the UI:
     "anthropic": { "baseUrl": "https://api.anthropic.com", "type": "anthropic", "authEnv": "ANTHROPIC_API_KEY" },
     "gemini":    { "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "type": "openai", "authEnv": "GEMINI_API_KEY" }
   },
+  "timeouts":  { "activitySeconds": 1800 },
   "retention": { "maxRequests": 10000, "maxDbSizeMb": 500 },
   "capture":   { "maxBodyMb": 32 },
-  "pricing":   {}   // optional per-model {in, out} $/Mtok overrides for cost estimates
+  "warnings":  { "slowTtftMs": 5000 },
+  "mcp":       { "enabled": true },
+  "pricing":   {}   // reserved for Phase 7 cost estimates; not read by this binary yet (unknown fields are preserved on save)
 }
 ```
 

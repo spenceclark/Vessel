@@ -182,7 +182,8 @@ observe-and-compare, and everything in Phases 7–8 gets better with real users'
 (and makes good headline releases for an open-source project's cadence).*
 
 - [ ] Self-contained single-file publish for win-x64, linux-x64, osx-arm64, osx-x64;
-      trimming warnings resolved (§11).
+      trimming on per phase-6 D1, with the MCP SDK's trim-safety (the Phase 5b
+      blocker) resolved first — all-RIDs-untrimmed is the recorded fallback.
 - [ ] First-run experience: no config → creates the Ollama-only default (reconfirmed by
       Phase 5 PD1), then prints the two-line "point your client here" instructions.
 - [ ] README: what/why, 30-second quickstart per client (Ollama CLI, OpenAI SDK, Aider,
@@ -190,6 +191,11 @@ observe-and-compare, and everything in Phases 7–8 gets better with real users'
       replay-auth env-var conventions.
 - [ ] MIT license, CI (backend tests already run on `ubuntu-latest` + `windows-latest`
       per Phase 5 PD4; add build + publish artifacts per RID), versioned releases.
+- [ ] Landing page (phase-6 D9): one static page in `site/` on `vesselproxy.app`,
+      design system verbatim, deployed via Cloudflare Pages (no build step).
+- [ ] Container image on GHCR (phase-6 D10): linux amd64 (arm64 if the cross-publish
+      is clean), `/data` volume convention + container-aware first-run, shipped
+      `compose.yaml`, container smoke in `release.yml`.
 - [ ] Pre-release pass: bind-address banner (§8), error messages, empty states.
 
 Spec: [phase-6.md](phase-6.md).

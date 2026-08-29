@@ -67,6 +67,13 @@ proxy; clients speak plain HTTP to localhost.
   backend/model; plus copy-as-curl. **Diff** any two requests side by side.
 - **Ollama extras** — loaded models / memory (`ollama ps`), server.log viewer.
 
+## MCP (read-only)
+
+A built-in Model Context Protocol server (`/vessel/mcp`, off-switchable) lets your
+own AI tools interrogate captured traffic directly — search, read windowed text,
+stats, sessions — no browser needed. Read-only by design; mutating tools (replay,
+clear) are a separate future decision.
+
 ## Storage
 
 SQLite, single file, written off the request path. Persistent, with easy clear-down and
@@ -78,5 +85,6 @@ contains your prompts.
 
 .NET + YARP on Kestrel, SQLite (WAL + FTS5), embedded React + Vite + Tailwind +
 shadcn/ui SPA, SSE live feed. Shipped as a self-contained single-file executable per
-platform — no runtime install, no Docker required. Rationale and alternatives
+platform — no runtime install; an official container image exists for compose
+stacks, but Docker is not required. Rationale and alternatives
 considered: architecture.md §12.

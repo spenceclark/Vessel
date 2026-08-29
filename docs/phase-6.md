@@ -13,18 +13,24 @@ finally taken (D1); CI + tag-driven releases (D3); first-run and failure-mode po
 (D4); README + licensing + repo hygiene (D5, D7); the bind-address banner (D6);
 versioning (D8); the pre-release verification gate (§4).
 
-**Out:** any new product features (Phases 7–8); package managers (winget/homebrew/
-docker — post-launch, demand-driven); code signing/notarization (documented as a
-known first-run friction on macOS/Windows instead — see D2); auto-update.
+**Out:** any new product features (Phases 7–8); package managers (winget/homebrew —
+post-launch, demand-driven); code signing/notarization (documented as a known
+first-run friction on macOS/Windows instead — see D2); auto-update. (Docker moved
+IN — see D10.)
 
-**Depends on:** Phase 5 accepted (done). Phase 5b (MCP) is independent — if it lands
-before the first release, the README's MCP section (D5) activates and the D6 banner
-mentions MCP exposure; if not, both are dropped from v0.1 docs rather than promising
-futures.
+**Depends on:** Phase 5 accepted (done). Phase 5b (MCP) has landed, so the README's
+MCP section (D5) is active and the D6 banner mentions MCP exposure; 5b's one open
+manual gate item (real-client verification) is discharged at the §4 gate (item 6).
 
 ---
 
-## 1. Decisions requiring sign-off (S-table)
+## 1. Decisions (S-table)
+
+> **Status: S1–S4 ALL APPROVED as recommended, 2026-08-29.** Product name vessel,
+> v0.1.0, docs ship as-is, landing page on `vesselproxy.app` (domain purchased,
+> Cloudflare registrar + Pages hosting per D9). The recommendation column is
+> authoritative for implementing agents; human steps (S1 name check, domain DNS,
+> repo-public flip, tag push) are the author's and tracked in §4 item 7.
 
 | # | Decision | Recommendation |
 |---|---|---|
@@ -35,17 +41,31 @@ futures.
 
 ## 2. Key implementation decisions
 
-### D1 — Trimming: ship trimmed, gated per-RID by the smoke
+### D1 — Trimming: ship trimmed, MCP trim-safety fixed first (updated post-5b)
 
-The data has been gathered since Phase 0: `PublishTrimmed=true` has stayed
-zero-warning and smoke-clean at every checkpoint (~21 MB vs ~102 MB — a 5× download
-difference that matters for a "just download one file" pitch). Decision: **trimmed
-on, in the csproj, now** — with the per-RID publish smoke as the gate. If any RID's
-smoke fails trimmed, that RID ships untrimmed (a per-RID msbuild property, recorded
-in this file) rather than blocking the release. Native AOT stays explicitly out —
-the marginal size win doesn't justify a new compatibility frontier at launch. If
-Phase 5b's MCP SDK lands, its trim-cleanliness is part of that phase's gate (already
-specced there), not re-litigated here.
+> **Updated 2026-08-29 (pre-implementation review).** The original premise —
+> "`PublishTrimmed=true` has stayed zero-warning and smoke-clean at every
+> checkpoint" — predates Phase 5b and is false as written: phase-5b.md §6 records
+> that a trimmed `win-x64` publish starts and serves `/vessel/api/status`, but
+> `/vessel/mcp` 404s. The official MCP SDK's endpoint/tool registration is not
+> trim-safe unaided. That failure lives in the managed IL, so it is
+> RID-independent — the original per-RID fallback ("a RID that fails trimmed ships
+> untrimmed") would have silently resolved to **all four RIDs untrimmed** (~102 MB),
+> voiding the size rationale below.
+
+The decision itself stands: **trimmed on, in the csproj** (~21 MB vs ~102 MB — a 5×
+download difference that matters for a "just download one file" pitch). The recorded
+Phase 6 blocker is resolved first, by making the SDK trim-safe: trimmer roots for
+the `ModelContextProtocol*` assemblies (a `TrimmerRootDescriptor`/ILLink XML in the
+csproj is the first thing to try; if SDK annotations alone suffice, that's smaller),
+verified by `verify/publish-smoke.ps1 -Trimmed` — whose Phase 5b M7 MCP-initialize
+probe is exactly the check that catches this. The cross-platform smoke port (D3)
+keeps that probe on every RID for the same reason.
+
+Fallback, recorded: if trim-safety cannot be made clean before release, **all RIDs
+ship untrimmed** for v0.1 and trimming becomes a fast-follow release — one property
+flip, not a per-RID split. Native AOT stays explicitly out — the marginal size win
+doesn't justify a new compatibility frontier at launch.
 
 ### D2 — Release artifacts
 
@@ -72,18 +92,26 @@ specced there), not re-litigated here.
   cross-RID-capable; frontend builds once, embedded per-RID), then **smoke each
   artifact on its native runner**: win-x64 on `windows-latest`, linux-x64 on
   `ubuntu-latest`, osx-arm64 on `macos-latest` (Apple Silicon), osx-x64 on
-  `macos-13` (Intel). The existing `publish-smoke` logic is ported to a
-  cross-platform script (the PowerShell version remains for local Windows use);
-  ephemeral ports + temp config throughout, per the hardened G4 behavior. Smoke
-  green → draft GitHub Release with the four archives + checksums file; release
-  notes from `CHANGELOG.md`.
-- No secrets required by CI (no live-API tests in the pipeline; `verify.ps1`'s
-  live-key checks remain a local, opt-in tool).
+  `macos-13` (Intel). `macos-13` is GitHub's last free Intel runner and is
+  deprecating — if it retires before release, osx-x64 is still built on any runner
+  and smoked under Rosetta 2 on an arm64 macOS runner, or that RID consciously
+  ships build-only (recorded here). The existing `publish-smoke` logic is ported
+  to a cross-platform script (the PowerShell version remains for local Windows
+  use); ephemeral ports + temp config throughout, per the hardened G4 behavior —
+  and the Phase 5b MCP-initialize probe retained on every RID (it is the check
+  that catches the D1 trim failure). Smoke green → draft GitHub Release with the
+  four archives + checksums file; release notes from `CHANGELOG.md`.
+- No *user* secrets required by CI (no live-API tests in the pipeline;
+  `verify.ps1`'s live-key checks remain a local, opt-in tool). D10's GHCR push
+  authenticates with the workflow's built-in `GITHUB_TOKEN` (`packages: write`) —
+  not a stored secret.
 
 ### D4 — First-run and failure-mode polish
 
-The happy path already exists (config creation + the two-line banner). This phase
-adds honest *unhappy* paths, each currently a raw exception or confusing log:
+The happy path already exists (config creation + the two-line banner — whose
+Program.cs text still prints a stale dev-era `(phase 3)` suffix from phase-0 D6's
+example; the polished two-liner lands here and phase-0.md is corrected in place).
+This phase adds honest *unhappy* paths, each currently a raw exception or confusing log:
 
 - **Port in use** (observed during the review saga): clean one-line exit —
   `listen address 127.0.0.1:4550 is already in use — is Vessel already running?
@@ -92,8 +120,27 @@ adds honest *unhappy* paths, each currently a raw exception or confusing log:
   causes (second instance, permissions), no stack trace.
 - **Malformed config**: already handled (error + exit); verify message quality in
   the gate.
-- `--help` output: usage, `--config`, `--version`, config-file location rules, UI
-  URL. Kept to one screen.
+- **Config/data location — three-level resolution** (replaces Phase 0 D6's
+  beside-the-exe-only rule for shipped builds; phase-0.md updated in place when
+  this lands):
+  1. `--config <path>` — explicit, always wins (containers: `/data/vessel.json`).
+  2. `vessel.json` **beside the exe, if it already exists** — "portable mode":
+     a deliberate self-contained folder (and every existing setup, incl. the
+     author's) keeps working unchanged; placing a config next to the exe is the
+     opt-in.
+  3. Otherwise — **platform config dir, created on first run**:
+     `%LOCALAPPDATA%\vessel-proxy\` (Windows), `~/.config/vessel-proxy/` (Linux,
+     XDG-respecting), `~/Library/Application Support/vessel-proxy/` (macOS).
+     `vessel-proxy`, not `vessel` — collision-safe against the crowded name, same
+     reasoning as the S4 domain. `vessel.db` lives beside whichever config wins,
+     as always.
+  This fixes the three fresh-download failure modes: data landing in `~/Downloads`,
+  read-only install locations (Program Files) breaking first-run, and macOS
+  quarantine's read-only execution path. The startup banner and `--help` **print
+  the resolved config + data paths**, and the README privacy section names them —
+  "where is my data" must never require reading source.
+- `--help` output: usage, `--config`, `--version`, config-file location rules
+  (the three levels above), resolved paths, UI URL. Kept to one screen.
 - **First-run browser open**: when the config file was *just created* (first run
   only — never on routine restarts), open the system browser at `/vessel/` after
   the listener is up. `--no-open` suppresses it (scripts, headless). This is the
@@ -133,9 +180,14 @@ Structure, in order — optimized for the two-minute stranger:
 
 When the effective listen address is non-loopback: a persistent, non-dismissable
 warning banner in the UI header region ("Vessel is listening on 0.0.0.0 — anyone on
-your network can read captured prompts{ and query MCP}") plus a startup log Warning.
-Banner styling per ui-spec (`--warn` tinted fill, full-width strip above the header
-panel — ui-spec gains the pattern in the same change). Loopback binds: nothing.
+your network can read captured prompts" plus ", and MCP clients can reach
+/vessel/mcp" when `mcp.enabled`) plus a startup log Warning. The condition keys off
+the address Kestrel **actually bound** — `ConfigStore.RecordBoundListen`, the fixed
+point the R16 review introduced — never the configured `listen` string, which may
+name port `0` or something the OS didn't grant. Banner styling per ui-spec (`--warn`
+tinted fill, full-width strip above the header panel — ui-spec gains the pattern in
+the same change). Loopback binds: nothing; in-container `0.0.0.0` is softened to an
+info note per D10.
 
 ### D7 — Repo hygiene & polish pass
 
@@ -153,10 +205,16 @@ panel — ui-spec gains the pattern in the same change). Loopback binds: nothing
 
 ### D8 — Versioning
 
-SemVer from `v0.1.0` (S2). Tag drives everything (csproj `Version` from the tag in
-release builds; dev builds show `0.0.0-dev+{sha}`). `CHANGELOG.md` maintained by
-hand per release — the repo's phase reports are the raw material, the changelog is
-the user-facing distillation.
+SemVer from `v0.1.0` (S2). Tag drives everything. Mechanism (named so it isn't
+rediscovered at implementation): **MinVer** — a build-time NuGet package that
+derives `Version` from git tags, so a publish from the `v0.1.0` checkout stamps
+itself exactly, untagged dev builds get its pre-release default (e.g.
+`0.0.1-alpha.0.7+{sha}` — superseding the earlier `0.0.0-dev+{sha}` sketch), and
+neither CI nor the developer passes `-p:Version` by hand. (`--version`, `/status`,
+and the settings dialog already read the informational version via
+`StatusEndpoint.Version`, so nothing downstream changes.) `CHANGELOG.md` maintained
+by hand per release — the repo's phase reports are the raw material, the changelog
+is the user-facing distillation.
 
 ### D9 — Landing page (S4): one static page, same design system, zero drift
 
@@ -184,10 +242,55 @@ it lives in the repo, versioned like everything else.
 
 ---
 
+### D10 — Container image on GHCR
+
+The compose crowd (Ollama + Open WebUI stacks) is a first-class slice of the
+audience, and for them `ghcr.io/{owner}/vessel` is the native install. Scope kept
+tight:
+
+- **Image**: `mcr.microsoft.com/dotnet/runtime-deps:10.0` base + the self-contained
+  linux binary; multi-arch `linux/amd64` + `linux/arm64` if the cross-publish is
+  clean, amd64-only otherwise (recorded either way). Tags: `{version}` + `latest`,
+  pushed by `release.yml` on the same tag that cuts the binaries.
+- **State convention**: `VOLUME /data`; entrypoint defaults to `--config
+  /data/vessel.json` — config and `vessel.db` live on the volume, never in the
+  ephemeral layer.
+- **Container-aware first-run** (via `DOTNET_RUNNING_IN_CONTAINER`): default listen
+  `0.0.0.0:4550` (the published port is the boundary; loopback is useless in a
+  container), browser-open suppressed, and the D6 bind banner softened to an info
+  note in-container (0.0.0.0 is the normal state there — the banner keeps its full
+  severity everywhere else). **And the default backend URL**: a fresh in-container
+  config writes `http://host.docker.internal:11434`, not `localhost` — inside the
+  container `localhost` is the container itself, so the stock default would point
+  at nothing and the compose story below would capture its first request never.
+  `extra_hosts` only makes the name resolvable; it cannot redirect `localhost`.
+- **README**: a compose example as the canonical container doc — `open-webui →
+  vessel → ollama` with the one-line `OLLAMA_BASE_URL` change — plus the
+  bare-docker `host.docker.internal` note. The default backend URL is wrong inside
+  a container by construction; the docs say so instead of the image guessing.
+- **A shipped `compose.yaml`** (repo root, embedded verbatim in the README): the
+  one-line `docker compose up -d` experience — vessel service on the GHCR image,
+  `4550:4550`, named volume `vessel-data:/data`, `restart: unless-stopped`, and
+  `extra_hosts: host.docker.internal:host-gateway` so the **default assumption is
+  Ollama on the host** (the most common real setup — which only holds because of
+  the container first-run backend default above; `host-gateway` alone merely makes
+  the name resolvable). A commented-out `ollama`
+  service block turns it into the full in-compose stack (backend URL switching to
+  `http://ollama:11434` noted inline in the comments). One file, both stories; the
+  comments are the documentation.
+- Container smoke in `release.yml`: run the pushed image, hit status + proxy a stub,
+  verify `/data` persistence across a container restart — and `docker compose up`
+  with the shipped file as part of the smoke, so the artifact users copy is itself
+  tested. amd64 runs natively on the runner; the arm64 variant runs under QEMU
+  (`setup-qemu-action`) or, if too slow for the gate, is build-verified only —
+  whichever ships is recorded here.
+
 ## 3. New/changed layout
 
 ```
 LICENSE  CHANGELOG.md  CONTRIBUTING.md  THIRD-PARTY-NOTICES.md  README.md
+site/                              # D9 landing page (pure static; Cloudflare Pages)
+compose.yaml                       # D10 shipped compose example (repo root)
 .github/workflows/{ci.yml,release.yml}
 .github/ISSUE_TEMPLATE/bug.md
 verify/publish-smoke.sh            # cross-platform port of the smoke (ps1 remains)
@@ -200,7 +303,7 @@ frontend/src/components/...        # D6 banner strip
 
 1. CI green on both OS runners; lint zero-warning.
 2. `release.yml` dry-run (workflow_dispatch) produces all four artifacts; **all four
-   native smokes green** (or a RID consciously flipped untrimmed per D1, recorded).
+   native smokes green** (or D1's recorded fallback taken: all RIDs untrimmed).
 3. **The literal two-minute test, performed fresh**: on a machine/VM with only
    Ollama, download the artifact, follow only the README quickstart, first captured
    request visible in the UI. Timed. Under two minutes or the README gets fixed.
@@ -208,11 +311,17 @@ frontend/src/components/...        # D6 banner strip
    its D4 message, no stack traces.
 5. Bind `0.0.0.0` → banner + log warning; loopback → neither.
 6. Live-key verification finally run: `verify.ps1 -OpenAI -Anthropic` (the item
-   pending since Phase 0), plus one replay against each live API.
+   pending since Phase 0), plus one replay against each live API — and Phase 5b's
+   one open manual gate item (a real MCP client against live traffic) discharged
+   here, since the README's MCP section (D5) publishes the `claude mcp add`
+   two-liner that gate exists to verify.
 7. Human items: the Compare GIF + screenshots recorded; S1 name check done; repo
    made public; tag `v0.1.0` pushed; release published from the draft.
 
 ## 5. Acceptance
 
-Gate items 1–6 automated/agent-verifiable and done; item 7's human steps checklist
-handed to the author. plan.md Phase 6 ticked; deviations recorded here.
+Gate items 1, 2, 4, and 5 automated/agent-verifiable and done. Items 3 and 6 are
+human-assisted by nature (item 3 needs a fresh machine with Ollama and a real
+download; item 6 needs the author's live keys) — performed by or with the author
+and recorded. Item 7's human steps checklist handed to the author. plan.md Phase 6
+ticked; deviations recorded here.
