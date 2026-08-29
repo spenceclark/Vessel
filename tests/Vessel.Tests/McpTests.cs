@@ -94,6 +94,59 @@ public sealed class McpTests
         Assert.All(second.Rows, row => Assert.True(row.Id < first.Rows[0].Id));
     }
 
+    // phase-5-mcp.md §7: search_requests must read promptPreview from the stored column,
+    // never decode a row's body. Proven with a corruption canary — rows whose request_body
+    // is garbage (not valid zstd) would make BodyCompression.Decompress throw the instant
+    // anything tried to decode it, so a search across 100+ such rows succeeding at all,
+    // returning the exact stored previews, is only possible via a column select.
+    [Fact]
+    public async Task M2b_SearchRequests_ReadsPreviewColumn_NeverDecodesBody()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        long[] ids = new long[105];
+        for (int i = 0; i < ids.Length; i++)
+        {
+            ids[i] = SeedWithPoisonedBodyAndPreview(vessel.DbPath, $"preview-{i}", $"response-{i}");
+        }
+
+        await using McpClient client = await Connect(vessel.BaseUrl);
+        McpSearchPayload page = await Search(client, new Dictionary<string, object?> { ["limit"] = 100 });
+        Assert.Equal(100, page.Rows.Length);
+        Assert.All(page.Rows, row => Assert.NotNull(row.PromptPreview));
+        Assert.Equal($"preview-{ids.Length - 1}", page.Rows[0].PromptPreview);
+
+        // A row with a NULL preview (pre-migration shape) simply omits the field.
+        long nullPreviewId = SeedWithPoisonedBodyAndPreview(vessel.DbPath, null, null);
+        McpSearchPayload afterNull = await Search(client, new Dictionary<string, object?> { ["limit"] = 1, ["before"] = nullPreviewId + 1 });
+        Assert.Equal(nullPreviewId, afterNull.Rows[0].Id);
+        Assert.Null(afterNull.Rows[0].PromptPreview);
+    }
+
+    private static long SeedWithPoisonedBodyAndPreview(string dbPath, string? promptPreview, string? responsePreview)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO requests (started_at, backend, method, path, format, status_code, streamed,
+                                  duration_ms, request_headers, request_body, response_body,
+                                  prompt_preview, response_preview)
+            VALUES ($started, 'poison', 'POST', '/v1/chat/completions', 'openai-chat', 200, 0,
+                    10, '{}', $body, $body, $prompt, $response)
+            RETURNING id
+            """;
+        command.Parameters.AddWithValue("$started", DateTime.UtcNow.ToString("O"));
+        command.Parameters.AddWithValue("$body", new byte[] { 0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01 });
+        command.Parameters.AddWithValue("$prompt", (object?)promptPreview ?? DBNull.Value);
+        command.Parameters.AddWithValue("$response", (object?)responsePreview ?? DBNull.Value);
+        return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     [Fact]
     public async Task M3_GetRequest_WindowsFlattenedText_AndNeverInlinesBinary()
     {
@@ -443,7 +496,7 @@ public sealed class McpTests
     }
 
     private sealed record McpSearchPayload(McpSearchRowPayload[] Rows, long? NextBefore);
-    private sealed record McpSearchRowPayload(long Id);
+    private sealed record McpSearchRowPayload(long Id, string? PromptPreview);
     private sealed record McpRequestPayload(McpBodyPayload? Prompt, McpBodyPayload? Response);
     private sealed record McpBodyPayload(string? Text, long TotalChars, bool Truncated, string? Note, bool Binary, long? Bytes);
 }

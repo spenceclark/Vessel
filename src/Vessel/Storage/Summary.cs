@@ -33,7 +33,8 @@ public sealed record Summary(
     bool TokensEstimated,
     string? StopReason,
     string[] Warnings,
-    bool Truncated);
+    bool Truncated,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PromptPreview = null);
 
 /// <summary>D3 — <c>GET /requests</c> response: a page of rows plus the next cursor.</summary>
 public sealed record RequestListResponse(Summary[] Rows, long? NextBefore);

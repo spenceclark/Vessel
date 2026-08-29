@@ -70,7 +70,7 @@ public sealed class SqliteReadStore(string dbPath)
     public RequestListResponse ListRequests(
         int limit, long? before, long? sessionId,
         string? q = null, string? backend = null, string? model = null, string? format = null,
-        string? tag = null, string? status = null, bool warned = false)
+        string? tag = null, string? status = null, bool warned = false, bool includePreview = false)
     {
         using SqliteConnection connection = Open();
         using SqliteCommand command = connection.CreateCommand();
@@ -131,7 +131,8 @@ public sealed class SqliteReadStore(string dbPath)
             ? "FROM requests JOIN requests_fts ON requests_fts.rowid = requests.id"
             : "FROM requests";
         string whereClause = where.Count == 0 ? "" : "WHERE " + string.Join(" AND ", where);
-        command.CommandText = $"SELECT {SummaryColumns} {fromClause} {whereClause} ORDER BY requests.id DESC LIMIT $limit";
+        string columns = includePreview ? SummaryColumns + ", requests.prompt_preview" : SummaryColumns;
+        command.CommandText = $"SELECT {columns} {fromClause} {whereClause} ORDER BY requests.id DESC LIMIT $limit";
 
         if (before is long beforeVal)
         {
@@ -176,7 +177,7 @@ public sealed class SqliteReadStore(string dbPath)
         {
             while (reader.Read())
             {
-                rows.Add(ReadSummary(reader));
+                rows.Add(ReadSummary(reader, includePreview));
             }
         }
 
@@ -370,31 +371,6 @@ public sealed class SqliteReadStore(string dbPath)
         return new McpRequestData(summary, requestBody, responseBody, promptText, responseText);
     }
 
-    /// <summary>
-    /// MCP search preview — flattens only the prompt from the stored request body, reading
-    /// neither the response body nor FTS. <c>search_requests</c> renders one short preview
-    /// per row, so this deliberately avoids the full request/response decode that
-    /// <see cref="GetMcpRequest"/> performs. Returns the full flattened prompt; the caller
-    /// truncates it to the preview budget.
-    /// </summary>
-    public string? GetMcpPromptText(long id, string format)
-    {
-        using SqliteConnection connection = Open();
-        using SqliteCommand command = connection.CreateCommand();
-        command.CommandText = "SELECT request_headers, request_body FROM requests WHERE id = $id";
-        command.Parameters.AddWithValue("$id", id);
-
-        using SqliteDataReader reader = command.ExecuteReader();
-        if (!reader.Read())
-        {
-            return null;
-        }
-
-        JsonNode? requestHeaders = JsonNode.Parse(reader.GetString(0));
-        McpBodyData? requestBody = ToMcpBodyData(reader, 1, ContentEncodingOf(requestHeaders));
-        return FlattenPrompt(format, requestBody?.Text);
-    }
-
     /// <summary>Replay children of one original, newest first, for the Compare entry points.</summary>
     public Summary[] ListReplays(long replayOf)
     {
@@ -491,7 +467,7 @@ public sealed class SqliteReadStore(string dbPath)
         return sessions.ToArray();
     }
 
-    private static Summary ReadSummary(SqliteDataReader reader) => new(
+    private static Summary ReadSummary(SqliteDataReader reader, bool includePreview = false) => new(
         Id: reader.GetInt64(0),
         StartedAt: reader.GetString(1),
         SessionId: reader.IsDBNull(2) ? null : reader.GetInt64(2),
@@ -516,7 +492,8 @@ public sealed class SqliteReadStore(string dbPath)
         TokensEstimated: reader.GetInt64(21) != 0,
         StopReason: reader.IsDBNull(22) ? null : reader.GetString(22),
         Warnings: ParseStringArray(reader, 23),
-        Truncated: reader.GetInt64(24) != 0);
+        Truncated: reader.GetInt64(24) != 0,
+        PromptPreview: includePreview && !reader.IsDBNull(SummaryColumnCount) ? reader.GetString(SummaryColumnCount) : null);
 
     private static string[] ParseStringArray(SqliteDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal)

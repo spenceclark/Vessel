@@ -15,7 +15,6 @@ public sealed class McpTools
     private const int MaxSearchLimit = 100;
     private const int DefaultMaxChars = 4_000;
     private const int MaxChars = 20_000;
-    private const int PreviewChars = 200;
 
     [McpServerTool(Name = "search_requests", ReadOnly = true)]
     [Description("Search captured requests using the same full-text and filter semantics as Vessel history. Returns 20 compact, body-free rows by default (maximum 100); use nextBefore as before to page older rows. promptPreview is only a short preview—call get_request for windowed text.")]
@@ -34,13 +33,14 @@ public sealed class McpTools
     {
         int boundedLimit = Math.Clamp(limit, 1, MaxSearchLimit);
         RequestListResponse page = store.ListRequests(
-            boundedLimit, before, sessionId, query, backend, model, format, tag, status, warnedOnly);
+            boundedLimit, before, sessionId, query, backend, model, format, tag, status, warnedOnly,
+            includePreview: true);
 
         McpSearchRow[] rows = page.Rows.Select(summary => new McpSearchRow(
             summary.Id, summary.StartedAt, summary.Method, summary.Path, summary.Backend, summary.Model,
             summary.Tags, summary.StatusCode, summary.Error, summary.DurationMs, summary.TtftMs,
             summary.TokPerSec, summary.TokensIn, summary.TokensOut, summary.StopReason, summary.Warnings,
-            Preview(store.GetMcpPromptText(summary.Id, summary.Format)))).ToArray();
+            summary.PromptPreview)).ToArray();
 
         return Json(new McpSearchResponse(rows, page.NextBefore), McpJsonContext.Default.McpSearchResponse);
     }
@@ -143,16 +143,6 @@ public sealed class McpTools
         }
 
         return WindowText(body.Text, offset, maxChars);
-    }
-
-    private static string? Preview(string? text)
-    {
-        if (text is null || text.Length <= PreviewChars)
-        {
-            return text;
-        }
-
-        return text[..PreviewChars] + "… (preview; call get_request for full text)";
     }
 
     private static CallToolResult Json<T>(T payload, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo) => new()
