@@ -27,9 +27,21 @@ Vessel is a **foreground process**: its terminal is Vessel, so closing the termi
 stops capture. For always-on use, use your OS’s normal mechanism (Task Scheduler,
 systemd, or launchd).
 
-Unsigned first-run note: macOS may require right-click → Open or
-`xattr -d com.apple.quarantine vessel`; Windows may show SmartScreen, where **More info**
-then **Run anyway** is needed. Signing/notarization is intentionally deferred.
+Unsigned first-run note: macOS 15+ (Sequoia) removed right-click → Open as a Gatekeeper
+bypass, so first unblock the binary from Terminal:
+
+```
+xattr -d com.apple.quarantine ./vessel
+```
+
+If that doesn't work, `xattr -c ./vessel` clears all extended attributes. Alternatively,
+use the GUI path: run `./vessel`, let it be blocked, then go to **System Settings →
+Privacy & Security** and click **Open Anyway**, then run it again and click **Open**. On
+Apple Silicon, if you still see `Killed: 9` after un-quarantining, ad-hoc-sign the binary
+with `codesign -s - --force ./vessel`.
+
+Windows may show SmartScreen, where **More info** then **Run anyway** is needed.
+Signing/notarization is intentionally deferred.
 
 ## Features
 
