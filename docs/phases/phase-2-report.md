@@ -2,7 +2,7 @@
 
 > Status: **complete** (automated gate). The daily-drive soak and live OpenAI/Anthropic
 > recordings remain human-at-the-keyboard items.
-> Spec: [phase-2.md](phase-2.md) · Plan: [plan.md](plan.md) · Design authority: [architecture.md](architecture.md)
+> Spec: [phase-2.md](phase-2.md) · Plan: [plan.md](../plan.md) · Design authority: [architecture.md](../architecture.md)
 
 ## What was built
 

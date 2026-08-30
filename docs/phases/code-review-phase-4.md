@@ -55,7 +55,7 @@ Locations: [server lifecycle hub](E:/Code/Vessel/src/Vessel/Capture/CaptureEvent
 [client reconciliation](E:/Code/Vessel/frontend/src/api/useLiveHistory.ts),
 [server regressions](E:/Code/Vessel/tests/Vessel.Tests/EventsTests.cs),
 [client regressions](E:/Code/Vessel/frontend/src/api/useLiveHistory.test.ts),
-[Phase 3 contract](E:/Code/Vessel/docs/phase-3.md).
+[Phase 3 contract](../phase-3.md).
 
 The active registry now stores nullable `TtftMs`. `FirstToken` always updates the active
 descriptor, including when there are no SSE subscribers, and does so while holding

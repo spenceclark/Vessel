@@ -1,7 +1,7 @@
 # Phase 1 — Implementation Report
 
 > Status: **complete**.
-> Spec: [phase-1.md](phase-1.md) · Plan: [plan.md](plan.md) · Design authority: [architecture.md](architecture.md)
+> Spec: [phase-1.md](phase-1.md) · Plan: [plan.md](../plan.md) · Design authority: [architecture.md](../architecture.md)
 
 ## What was built
 

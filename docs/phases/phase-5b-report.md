@@ -4,7 +4,7 @@
 > below have since been resolved in this PR. It is retained as a point-in-time record.
 
 Reviewer pass over the uncommitted working tree against [phase-5b.md](phase-5b.md),
-[plan.md](plan.md), and the project rules in [AGENTS.md](../AGENTS.md). Build is clean
+[plan.md](../plan.md), and the project rules in [AGENTS.md](../../AGENTS.md). Build is clean
 (0 warnings). Test suite is green (all findings below are resolved).
 
 ## Summary of verdict

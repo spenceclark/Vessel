@@ -1,6 +1,6 @@
 # Phase 0 — Transparent Proxy Skeleton: Implementation Spec
 
-> Expands Phase 0 of [plan.md](plan.md). Design authority is [architecture.md](architecture.md);
+> Expands Phase 0 of [plan.md](../plan.md). Design authority is [architecture.md](../architecture.md);
 > this spec makes the concrete decisions that document deliberately left open.
 >
 > **Goal:** Vessel can sit in front of Ollama (and remote OpenAI/Anthropic) all day

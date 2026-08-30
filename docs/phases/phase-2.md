@@ -1,6 +1,6 @@
 # Phase 2 — Format Adapters: Implementation Spec
 
-> Expands Phase 2 of [plan.md](plan.md). Design authority is [architecture.md](architecture.md);
+> Expands Phase 2 of [plan.md](../plan.md). Design authority is [architecture.md](../architecture.md);
 > this spec makes the concrete decisions that document deliberately left open.
 >
 > **Goal:** rows have model, token counts, tok/s, stop reason, reassembled responses,

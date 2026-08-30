@@ -1,6 +1,6 @@
 # Phase 4 — Search, Filters, Rendering, Config: Implementation Spec
 
-> Expands Phase 4 of [plan.md](plan.md). Design authority is [architecture.md](architecture.md);
+> Expands Phase 4 of [plan.md](../plan.md). Design authority is [architecture.md](../architecture.md);
 > this spec makes the concrete decisions that document deliberately left open.
 >
 > **Goal:** findability and readability at 10k requests. "Find that request from this

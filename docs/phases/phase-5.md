@@ -1,7 +1,7 @@
 # Phase 5 — Replay & Compare: Implementation Spec
 
-> Expands Phase 5 of [plan.md](plan.md). Design authority: [architecture.md](architecture.md)
-> (backend) and [ui-spec.md](ui-spec.md) (frontend).
+> Expands Phase 5 of [plan.md](../plan.md). Design authority: [architecture.md](../architecture.md)
+> (backend) and [ui-spec.md](../ui-spec.md) (frontend).
 >
 > **Goal:** "would qwen handle what opus handled?" answered without touching client
 > code — replay any captured request against a compatible backend/model, compare the

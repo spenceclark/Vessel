@@ -5,7 +5,7 @@
 
 This is the **what and why**. The **how** lives in [architecture.md](architecture.md)
 (design authority) and [plan.md](plan.md) (phased delivery); per-phase specs
-(e.g. [phase-0.md](phase-0.md)) are written as each phase begins. If this document ever
+(e.g. [phases/phase-0.md](phases/phase-0.md)) are written as each phase begins. If this document ever
 conflicts with architecture.md, architecture.md wins.
 
 ## What it is

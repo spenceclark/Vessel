@@ -1,6 +1,6 @@
 # Phase 5b — MCP Server (read-only v1): Implementation Spec
 
-> Expands Phase 5b of [plan.md](plan.md). Design authority: [architecture.md](architecture.md).
+> Expands Phase 5b of [plan.md](../plan.md). Design authority: [architecture.md](../architecture.md).
 >
 > **Goal:** the user's own AI tools (Claude Code, Cursor, anything speaking MCP)
 > interrogate captured traffic — "why did my planner agent stall this afternoon?"
