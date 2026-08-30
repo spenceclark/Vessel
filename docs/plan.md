@@ -166,7 +166,7 @@ mutating (replay/clear via MCP) stays a separate future decision.*
       `get_stats`, `list_sessions`.
 - [x] Token-budget shaping: conservative defaults, hard caps, binary never inlined —
       a 200K-token context must never arrive in one tool result.
-- [ ] Verified against a real MCP client (Claude Code) on real traffic — manual gate item 1 remains for the user.
+- [x] Verified against a real MCP client (Claude Code) on real traffic — manual gate item 1 remains for the user.
 
 Spec: [phase-5b.md](phases/phase-5b.md).
 
@@ -181,23 +181,23 @@ Claude Code against a running Vessel.
 observe-and-compare, and everything in Phases 7–8 gets better with real users' feedback
 (and makes good headline releases for an open-source project's cadence).*
 
-- [ ] Self-contained single-file publish for win-x64, linux-x64, osx-arm64
+- [x] Self-contained single-file publish for win-x64, linux-x64, osx-arm64
       (osx-x64 dropped for v0.1 — see phase-6.md §6); trimming on per phase-6 D1,
       with the MCP SDK's trim-safety (the Phase 5b blocker) resolved first —
       all-RIDs-untrimmed is the recorded fallback.
-- [ ] First-run experience: no config → creates the Ollama-only default (reconfirmed by
+- [x] First-run experience: no config → creates the Ollama-only default (reconfirmed by
       Phase 5 PD1), then prints the two-line "point your client here" instructions.
-- [ ] README: what/why, 30-second quickstart per client (Ollama CLI, OpenAI SDK, Aider,
+- [x] README: what/why, 30-second quickstart per client (Ollama CLI, OpenAI SDK, Aider,
       Cline), screenshots, the "vessel.db contains your prompts" privacy note (§8),
       replay-auth env-var conventions.
-- [ ] MIT license, CI (backend tests already run on `ubuntu-latest` + `windows-latest`
+- [x] MIT license, CI (backend tests already run on `ubuntu-latest` + `windows-latest`
       per Phase 5 PD4; add build + publish artifacts per RID), versioned releases.
-- [ ] Landing page (phase-6 D9): one static page in `site/` on `vesselproxy.app`,
+- [x] Landing page (phase-6 D9): one static page in `site/` on `vesselproxy.app`,
       design system verbatim, deployed via Cloudflare Pages (no build step).
-- [ ] Container image on GHCR (phase-6 D10): linux amd64 (arm64 if the cross-publish
+- [x] Container image on GHCR (phase-6 D10): linux amd64 (arm64 if the cross-publish
       is clean), `/data` volume convention + container-aware first-run, shipped
       `compose.yaml`, container smoke in `release.yml`.
-- [ ] Pre-release pass: bind-address banner (§8), error messages, empty states.
+- [x] Pre-release pass: bind-address banner (§8), error messages, empty states.
 
 Spec: [phase-6.md](phases/phase-6.md).
 
@@ -233,6 +233,29 @@ live here.*
       appears in Compare's param-diff as `max_tokens → max_completion_tokens (auto)`.
       List stays minimal and mechanical; anything needing judgment (sampler
       semantics, `num_predict` mapping) belongs to Phase 8's transformers.
+- [ ] **Named sessions via header + session picker**: `X-Vessel-Session: {name}` —
+      each request is assigned individually to the named session (created on first
+      sight), while headerless traffic keeps falling into the Reset-driven current
+      session. Explicitly NOT a global switch: two concurrent agents with different
+      session names must coexist without thrashing (per-request assignment, decided
+      up front). Capture stamps the session *name*; the writer resolves
+      name→id at insert (lookup-or-create on the writer thread — the
+      single-writer invariant does the locking for free). Header stripped before
+      forwarding like all `X-Vessel-*`. UI: the Current/All toggle becomes a
+      **session picker** over `GET /sessions` (newest first, names shown) —
+      this also closes the existing gap that session history is fully captured but
+      unbrowsable. Earns its place over tags because sessions carry the stats
+      machinery (per-session averages + token totals) and one-per-request identity;
+      "full stats readout for run-42" is the thing tags can't do. Replay keeps
+      landing in the current session (unchanged). MCP benefits for free
+      (`list_sessions`/`sessionId` already exist).
+      **Motivating case (the author's "Monsters and Models" project): 8 agents talk
+      to each other in one bounded run, tags carry the agent names, the run ends —
+      session = the run, tag = the agent; picker + tag filter = one agent's trace
+      within one run.** The orchestrator mints the run id once at startup and sets
+      the header on every client it creates. Interim workaround until this lands:
+      a run-id as a second tag (`X-Vessel-Tags: Brakka,run-42`) gives per-run
+      filtering today — everything except per-run stats and the picker.
 - [ ] **Tool-call fumble detection**: new warning `tool_call_in_text` — the request
       defined tools but the response carries tool-call-shaped JSON in its *text*
       content with no structured `tool_calls`/`tool_use`. Detection only, in the
@@ -244,6 +267,19 @@ live here.*
       surface. The fix belongs client-side (`tool_choice`, template, model choice),
       informed by this warning. Small enough to ride along with any earlier
       adapter-touching session that has slack.
+- [ ] **Homebrew tap** (`brew install spenceclark/tap/vessel`): the idiomatic,
+      friction-free macOS install. Homebrew strips the download quarantine attribute,
+      so there is no Gatekeeper "unverified developer" prompt — unlike the current
+      unsigned-binary path, which on macOS 15 (Sequoia) forces a System Settings →
+      Privacy & Security → "Open Anyway" step (the right-click→Open bypass was removed).
+      Demand-driven per phase-6 scope; the highest-leverage Mac-friction reducer short
+      of paid signing + notarization.
+- [ ] **Windows winget / scoop manifest**: the Windows analog of the tap — sidesteps
+      the SmartScreen "unrecognized app" prompt an unsigned download otherwise shows.
+- [ ] **README macOS unblock steps refresh**: the current README's "right-click → Open"
+      advice is stale — macOS 15 removed that Gatekeeper bypass. Lead with
+      `xattr -d com.apple.quarantine ./vessel` and the Settings → Privacy & Security →
+      "Open Anyway" path instead. Small; can land ahead of the tap.
 
 ---
 
