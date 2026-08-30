@@ -11,9 +11,11 @@ public static class WellKnownEndpoints
     /// <summary>
     /// OAuth discovery probes per MCP spec: /.well-known/oauth-authorization-server*,
     /// /.well-known/oauth-protected-resource*, /.well-known/openid-configuration*.
-    /// Returns 404 with X-Vessel-Error marking so the client knows this is a Vessel
-    /// response, not a proxied backend response. These paths are never proxied and
-    /// never captured, so they don't pollute capture stats.
+    /// Also covers /.well-known/appspecific/* (e.g. Chrome DevTools' own
+    /// com.chrome.devtools.json probe against the UI origin). Returns 404 with
+    /// X-Vessel-Error marking so the client knows this is a Vessel response, not a
+    /// proxied backend response. These paths are never proxied and never captured, so
+    /// they don't pollute capture stats.
     /// </summary>
     public static Task HandleWellKnown(HttpContext context)
     {
