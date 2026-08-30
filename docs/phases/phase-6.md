@@ -1,7 +1,7 @@
 # Phase 6 — Ship / Open-Source: Implementation Spec
 
-> Expands Phase 6 of [plan.md](plan.md). Design authority: [architecture.md](architecture.md);
-> UI items per [ui-spec.md](ui-spec.md).
+> Expands Phase 6 of [plan.md](../plan.md). Design authority: [architecture.md](../architecture.md);
+> UI items per [ui-spec.md](../ui-spec.md).
 >
 > **Goal:** a stranger with Ollama installed goes from download to seeing their first
 > captured request in under two minutes, without reading more than the quickstart.

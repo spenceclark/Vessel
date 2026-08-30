@@ -1,6 +1,6 @@
 # Phase 1 — Capture and Persistence: Implementation Spec
 
-> Expands Phase 1 of [plan.md](plan.md). Design authority is [architecture.md](architecture.md);
+> Expands Phase 1 of [plan.md](../plan.md). Design authority is [architecture.md](../architecture.md);
 > this spec makes the concrete decisions that document deliberately left open.
 >
 > **Goal:** everything that passes through the proxy is recorded, cheaply. A day of real

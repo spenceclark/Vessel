@@ -2,8 +2,8 @@
 
 > Status: **accepted — implementation and the manual gate are complete; §6 remediation
 > resolved the review findings and completed the spec's §3 coverage table.**
-> Spec: [phase-5.md](phase-5.md) · Plan: [plan.md](plan.md) · Design authority:
-> [architecture.md](architecture.md) (backend) and [ui-spec.md](ui-spec.md) (frontend)
+> Spec: [phase-5.md](phase-5.md) · Plan: [plan.md](../plan.md) · Design authority:
+> [architecture.md](../architecture.md) (backend) and [ui-spec.md](../ui-spec.md) (frontend)
 
 ## What was built
 

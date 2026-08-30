@@ -10,7 +10,7 @@
 > [code-review-phase-4-plan.md](code-review-phase-4-plan.md), whose batches have since
 > landed. This report is left as the historical implementation record of the original
 > Phase 4 work — it is not the current acceptance status of the tree.
-> Spec: [phase-4.md](phase-4.md) · Plan: [plan.md](plan.md) · Design authority: [architecture.md](architecture.md)
+> Spec: [phase-4.md](phase-4.md) · Plan: [plan.md](../plan.md) · Design authority: [architecture.md](../architecture.md)
 
 ## What was built
 

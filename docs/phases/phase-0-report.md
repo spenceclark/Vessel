@@ -1,7 +1,7 @@
 # Phase 0 — Implementation Report
 
 > Status: **complete** (pending the manual live-key / agent-tool checklist items below).
-> Spec: [phase-0.md](phase-0.md) · Plan: [plan.md](plan.md) · Design authority: [architecture.md](architecture.md)
+> Spec: [phase-0.md](phase-0.md) · Plan: [plan.md](../plan.md) · Design authority: [architecture.md](../architecture.md)
 
 ## What was built
 

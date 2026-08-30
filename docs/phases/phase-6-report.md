@@ -1,8 +1,8 @@
 # Phase 6 — Review Report
 
 Reviewer pass over the uncommitted working tree against [phase-6.md](phase-6.md),
-[plan.md](plan.md), [architecture.md](architecture.md), and the project rules in
-[AGENTS.md](../AGENTS.md). Reviewed at working-tree state on 2026-08-29 (branch `main`,
+[plan.md](../plan.md), [architecture.md](../architecture.md), and the project rules in
+[AGENTS.md](../../AGENTS.md). Reviewed at working-tree state on 2026-08-29 (branch `main`,
 atop `bb867f7`).
 
 ## Summary of verdict

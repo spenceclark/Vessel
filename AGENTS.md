@@ -3,7 +3,8 @@
 docs/brief.md - Overview of the project
 docs/architecture - Technical architecture to use
 docs/plan.md - The overall build out plan
-docs/phase-x.md - The specific spec for each phase
+docs/ui-spec.md - UI Specification & Design System
+docs/phases/phase-x.md - The specific spec for each phase
 
 If you asked to implement a phase - only concern with that phase spec, not anything in future phases.
 
@@ -14,7 +15,6 @@ See .editorconfig for house nameing styles. Specifically private class level var
 Violating any of these is either a security incident or unrecoverable. If a task appears to require it, **stop and ask**.
 
 - Never delete, skip, or weaken a failing test to make a build pass. Fix the code or the fixture.
-- Never commit. Leave the working tree for review.
 
 ## How to work
 

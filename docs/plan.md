@@ -145,7 +145,7 @@ happens behind a tight, demoable story rather than after a long feature tail.*
       (Phase 2 D6) and the configurable `warnings.slowTtftMs` threshold both landed;
       badges render per ui-spec. Absorbed, no remaining work.
 
-Spec: [phase-5.md](phase-5.md).
+Spec: [phase-5.md](phases/phase-5.md).
 
 **Done when:** replay + Compare let you answer "would qwen handle what opus handled?"
 without touching client code.
@@ -168,7 +168,7 @@ mutating (replay/clear via MCP) stays a separate future decision.*
       a 200K-token context must never arrive in one tool result.
 - [ ] Verified against a real MCP client (Claude Code) on real traffic — manual gate item 1 remains for the user.
 
-Spec: [phase-5b.md](phase-5b.md).
+Spec: [phase-5b.md](phases/phase-5b.md).
 
 **Done when:** "find my truncated requests from today and tell me why" works from
 Claude Code against a running Vessel.
@@ -199,7 +199,7 @@ observe-and-compare, and everything in Phases 7–8 gets better with real users'
       `compose.yaml`, container smoke in `release.yml`.
 - [ ] Pre-release pass: bind-address banner (§8), error messages, empty states.
 
-Spec: [phase-6.md](phase-6.md).
+Spec: [phase-6.md](phases/phase-6.md).
 
 **Done when:** a stranger with Ollama installed goes from download to seeing their first
 captured request in under two minutes, without reading more than the quickstart.

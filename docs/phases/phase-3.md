@@ -1,6 +1,6 @@
 # Phase 3 — Minimal UI: Implementation Spec
 
-> Expands Phase 3 of [plan.md](plan.md). Design authority is [architecture.md](architecture.md);
+> Expands Phase 3 of [plan.md](../plan.md). Design authority is [architecture.md](../architecture.md);
 > this spec makes the concrete decisions that document deliberately left open.
 >
 > **Goal:** stop using the SQLite browser. A browser tab on `/vessel/` shows live

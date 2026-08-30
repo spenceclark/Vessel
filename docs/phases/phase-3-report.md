@@ -2,7 +2,7 @@
 
 > Status: **complete**. The plan's "genuinely useful" soak (leaving a tab open through a
 > real working session) is the remaining human-at-the-keyboard item, as in prior phases.
-> Spec: [phase-3.md](phase-3.md) · Plan: [plan.md](plan.md) · Design authority: [architecture.md](architecture.md)
+> Spec: [phase-3.md](phase-3.md) · Plan: [plan.md](../plan.md) · Design authority: [architecture.md](../architecture.md)
 
 ## What was built
 
