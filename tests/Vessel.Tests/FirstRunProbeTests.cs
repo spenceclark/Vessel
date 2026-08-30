@@ -37,6 +37,18 @@ public sealed class FirstRunProbeTests
         Assert.False(await BackendProbe.IsReachableAsync(baseUrl, TimeSpan.FromSeconds(5), CT));
     }
 
+    // PR review — the probe runs inside a hosted service's StartAsync, so anything it lets
+    // escape fails host startup: a cosmetic signpost would stop Vessel proxying at all.
+    // Every failure mode answers this method's only question the same way — nothing answered.
+    [Theory]
+    [InlineData("http://nonexistent.invalid:11434")]  // RFC 6761: never resolves
+    [InlineData("http://127.0.0.1:1")]                // refused
+    [InlineData("http://[::1]:1")]                    // refused, or no usable address family
+    [InlineData("http://:11434")]                     // no host at all
+    [InlineData("nonsense")]                          // not a URL
+    public async Task IsReachableAsync_AnswersFalseRatherThanThrowing(string baseUrl) =>
+        Assert.False(await BackendProbe.IsReachableAsync(baseUrl, TimeSpan.FromMilliseconds(500), CT));
+
     // The probe must never be able to reach something that could bill for it, so it reuses
     // config validation's own definition of "can't leave this machine or its LAN" (#5).
     [Theory]

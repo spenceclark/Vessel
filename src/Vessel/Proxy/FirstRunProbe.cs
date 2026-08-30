@@ -72,10 +72,17 @@ public static class BackendProbe
             await socket.ConnectAsync(uri.Host, uri.Port, cts.Token);
             return socket.Connected;
         }
-        catch (Exception ex) when (ex is SocketException or OperationCanceledException or ArgumentException)
+        catch (Exception)
         {
             // Refused, filtered, unresolvable, or slower than the cap — all "not there yet"
-            // as far as the first-run signpost is concerned.
+            // as far as the first-run signpost is concerned. The catch is deliberately
+            // total, not a list of expected socket failures: this runs inside a hosted
+            // service's StartAsync, where an escaping exception takes down the host, and
+            // nothing about a cosmetic first-run signpost is worth Vessel failing to start
+            // and stopping the user proxying at all. Platform-specific surprises
+            // (a NotSupportedException from a machine with no usable address family, say)
+            // are exactly the failures nobody would predict here, and every one of them
+            // means the same thing to this method's only question: nothing answered.
             return false;
         }
     }
