@@ -213,73 +213,17 @@ community feedback should shape. (MCP moved to Phase 5b, pre-launch.) Candidates
 a future MCP v2 — mutating tools (replay via MCP), pending its own approval — also
 live here.*
 
-- [ ] **Export to CSV/JSONL**: a filtered/date range of requests exported with or
-      without bodies, for offline analysis by user/AI. Pairs with MCP (interactive
-      vs. bulk data-out).
-- [ ] **Context-growth chart**: `tokens_in` over time per session/tag — makes agent
-      context bloat visible at a glance. First chart: add chart tokens to ui-spec §2
-      first (per §2.2's rule).
-- [ ] **Additional reporting**: tokens by agent/tag, tokens by model, etc. — likely a
-      small library of canned queries + visualisations on the same chart foundation.
-- [ ] **Cost estimates**: static pricing table + `pricing` config overrides, `~$0.0042`
-      on Overview and session totals; clearly labeled estimate (§9). (Only matters to
-      live-API users — let post-launch demand prioritize it.)
-- [ ] **Replay dialect fix-ups**: a tiny, documented table of known *intra*-format
-      param renames applied when composing a replay for a target that requires them —
-      canonical entry: `max_tokens → max_completion_tokens` for openai-type targets
-      (reasoning-era models reject the old name; observed live). Principled because
-      forward-as-is does not bind replay — replay is a request Vessel composes (it
-      already rewrites `model`). **Transparency required:** every applied fix-up
-      appears in Compare's param-diff as `max_tokens → max_completion_tokens (auto)`.
-      List stays minimal and mechanical; anything needing judgment (sampler
-      semantics, `num_predict` mapping) belongs to Phase 8's transformers.
-- [ ] **Named sessions via header + session picker**: `X-Vessel-Session: {name}` —
-      each request is assigned individually to the named session (created on first
-      sight), while headerless traffic keeps falling into the Reset-driven current
-      session. Explicitly NOT a global switch: two concurrent agents with different
-      session names must coexist without thrashing (per-request assignment, decided
-      up front). Capture stamps the session *name*; the writer resolves
-      name→id at insert (lookup-or-create on the writer thread — the
-      single-writer invariant does the locking for free). Header stripped before
-      forwarding like all `X-Vessel-*`. UI: the Current/All toggle becomes a
-      **session picker** over `GET /sessions` (newest first, names shown) —
-      this also closes the existing gap that session history is fully captured but
-      unbrowsable. Earns its place over tags because sessions carry the stats
-      machinery (per-session averages + token totals) and one-per-request identity;
-      "full stats readout for run-42" is the thing tags can't do. Replay keeps
-      landing in the current session (unchanged). MCP benefits for free
-      (`list_sessions`/`sessionId` already exist).
-      **Motivating case (the author's "Monsters and Models" project): 8 agents talk
-      to each other in one bounded run, tags carry the agent names, the run ends —
-      session = the run, tag = the agent; picker + tag filter = one agent's trace
-      within one run.** The orchestrator mints the run id once at startup and sets
-      the header on every client it creates. Interim workaround until this lands:
-      a run-id as a second tag (`X-Vessel-Tags: Brakka,run-42`) gives per-run
-      filtering today — everything except per-run stats and the picker.
-- [ ] **Tool-call fumble detection**: new warning `tool_call_in_text` — the request
-      defined tools but the response carries tool-call-shaped JSON in its *text*
-      content with no structured `tool_calls`/`tool_use`. Detection only, in the
-      enricher (writer-side; adapters already parse both sides) — badge on the row,
-      filterable via warnings, and per-model fumble rates once reporting lands.
-      **Explicitly decided: no auto-repair, ever** — rewriting response bodies
-      breaks forward-as-is (the product's trust foundation), is near-impossible for
-      streams without buffering, and hides exactly the failure Vessel exists to
-      surface. The fix belongs client-side (`tool_choice`, template, model choice),
-      informed by this warning. Small enough to ride along with any earlier
-      adapter-touching session that has slack.
-- [ ] **Homebrew tap** (`brew install spenceclark/tap/vessel`): the idiomatic,
-      friction-free macOS install. Homebrew strips the download quarantine attribute,
-      so there is no Gatekeeper "unverified developer" prompt — unlike the current
-      unsigned-binary path, which on macOS 15 (Sequoia) forces a System Settings →
-      Privacy & Security → "Open Anyway" step (the right-click→Open bypass was removed).
-      Demand-driven per phase-6 scope; the highest-leverage Mac-friction reducer short
-      of paid signing + notarization.
-- [ ] **Windows winget / scoop manifest**: the Windows analog of the tap — sidesteps
-      the SmartScreen "unrecognized app" prompt an unsigned download otherwise shows.
-- [ ] **README macOS unblock steps refresh**: the current README's "right-click → Open"
-      advice is stale — macOS 15 removed that Gatekeeper bypass. Lead with
-      `xattr -d com.apple.quarantine ./vessel` and the Settings → Privacy & Security →
-      "Open Anyway" path instead. Small; can land ahead of the tap.
+Tracked as GitHub issues (label
+[`phase-7`](https://github.com/spenceclark/Vessel/labels/phase-7)) — full scope,
+decisions, and acceptance live there:
+
+- Export to CSV/JSONL · context-growth chart (charts need ui-spec §2 tokens added
+  first) · additional reporting · cost estimates (§9 `pricing`) · replay dialect
+  fix-ups (`max_tokens → max_completion_tokens`, surfaced in Compare) · named sessions
+  (`X-Vessel-Session`, per-request assignment + session picker) · tool-call fumble
+  detection (`tool_call_in_text` — **detect only, never auto-repair**).
+- Distribution / docs: a Homebrew tap, a winget/scoop manifest, and a README
+  macOS-unblock refresh.
 
 ---
 
@@ -288,23 +232,14 @@ live here.*
 *Features that touch the proxy hot path or grow new product surfaces — sequenced last
 deliberately, with the hot-path rules from §4.1 applying in full.*
 
-- [ ] **Live tail**: stream the in-flight response into the UI as it generates — the
-      in-flight detail's state line (ui-spec §9.1) becomes a live token view. Needs
-      its own design pass: chunk broadcast only while a client has that request
-      open, bounded per-request buffers, drop-never-block. The J0 event-log model is
-      the foundation (chunks become high-frequency events on the same ordered feed).
-- [ ] **Cross-provider replay transformers**: ollama-native ⇄ openai-chat ⇄
-      anthropic-messages request translation so replay crosses wire formats, incl.
-      the non-1:1 params (`num_predict` vs `max_tokens`). Pre-agreed as out of
-      replay v1 (Phase 5 note).
-- [ ] **Ollama panel**: `ollama ps` proxied view (loaded models, VRAM); server.log
-      viewer if reachable (§7, §10) — a host-management surface, distinct from
-      traffic observation.
-- [ ] **Tray app**: the polished always-on form of "sits in front of Ollama all
-      day" — system-tray icon (open UI / quit), no console window, per-OS tray
-      APIs and a window-less launch mode. A real product surface; post-launch
-      feedback decides whether it's wanted before it's built. Until then v0.1's
-      answer stands: foreground process, OS schedulers for always-on (phase-6 D5).
+Tracked as GitHub issues (label
+[`phase-8`](https://github.com/spenceclark/Vessel/labels/phase-8)) — higher-risk and
+hot-path-touching, so §4.1's rules apply in full:
+
+- Live tail (stream in-flight tokens into the UI; drop-never-block) · cross-provider
+  replay transformers (ollama ⇄ openai ⇄ anthropic, incl. `num_predict`/`max_tokens`)
+  · Ollama panel (`ollama ps` + server.log) · tray app (gated on demand; the
+  foreground-process answer stands until then).
 
 ---
 
