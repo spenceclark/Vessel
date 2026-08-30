@@ -22,6 +22,7 @@ public static class StatusEndpoint
         var captureEvents = context.RequestServices.GetRequiredService<CaptureEvents>();
         var backendHealthTracker = context.RequestServices.GetRequiredService<BackendHealthTracker>();
         var configStore = context.RequestServices.GetRequiredService<ConfigStore>();
+        var firstRunState = context.RequestServices.GetRequiredService<FirstRunState>();
         var server = context.RequestServices.GetRequiredService<IServer>();
         string listen = server.Features.Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault() ?? "";
 
@@ -45,7 +46,8 @@ public static class StatusEndpoint
             new CaptureHealth(!captureChannel.IsStopped, captureChannel.StoppedReason),
             new McpStatus(configStore.Current.Mcp.Enabled),
             new ListenSecurity(isNonLoopback, ConfigLoader.IsRunningInContainer),
-            captureEvents.RunId);
+            captureEvents.RunId,
+            new SetupStatus(firstRunState.IsFirstRun, firstRunState.DefaultBackendReachable));
 
         context.Response.ContentType = "application/json; charset=utf-8";
         return JsonSerializer.SerializeAsync(

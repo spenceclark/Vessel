@@ -82,7 +82,7 @@ catch (ConfigException ex)
     return 1;
 }
 
-WebApplication app = VesselApp.Build(config, paths.DatabasePath, paths.ConfigPath);
+WebApplication app = VesselApp.Build(config, paths.DatabasePath, paths.ConfigPath, created);
 try
 {
     await app.StartAsync();

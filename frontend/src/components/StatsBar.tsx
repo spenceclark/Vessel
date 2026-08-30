@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Settings } from 'lucide-react'
 import { api } from '@/api/client'
@@ -51,6 +51,23 @@ export function StatsBar({
   })
 
   const stats = statsQuery.data
+
+  // Issue #11 — the default backend stays Ollama, so a machine without Ollama running has
+  // a dead default and no signpost: the first thing that says so today is a client's
+  // `502 upstream_unreachable`. When the first run's one-shot probe found nothing
+  // listening, settings open straight onto Config, whose first control is the
+  // known-backend picker (#9) — a cloud-only user configures OpenAI/Claude immediately
+  // rather than discovering the problem by failure. Ref-guarded so dismissing it is final:
+  // the status query refetches every 5s and must not reopen what the user just closed.
+  const needsBackendSetup =
+    statusQuery.data?.setup.firstRun === true && statusQuery.data.setup.defaultBackendReachable === false
+  const backendSetupPrompted = useRef(false)
+  useEffect(() => {
+    if (!needsBackendSetup || backendSetupPrompted.current) return
+    backendSetupPrompted.current = true
+    setSettingsTab('config')
+    setSettingsOpen(true)
+  }, [needsBackendSetup])
 
   // R04 — stable identities, belt-and-suspenders alongside dialog.tsx's own ref-based
   // fix: a fresh inline arrow every render is exactly what turned the focus-trap effect

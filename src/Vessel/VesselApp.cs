@@ -14,7 +14,13 @@ namespace Vessel;
 /// <summary>Builds the Vessel host from a validated config. Shared by Program and the integration tests.</summary>
 public static class VesselApp
 {
-    public static WebApplication Build(VesselConfig config, string dbPath, string configPath)
+    /// <param name="firstRun">
+    /// #11 — true when this process created <paramref name="configPath"/>. Gates the
+    /// one-shot default-backend probe, and is reported on <c>/vessel/api/status</c> so the
+    /// UI can lead with the backend picker instead of leaving a cloud-only user to discover
+    /// the dead Ollama default through a 502.
+    /// </param>
+    public static WebApplication Build(VesselConfig config, string dbPath, string configPath, bool firstRun = false)
     {
         var builder = WebApplication.CreateSlimBuilder();
 
@@ -56,12 +62,16 @@ public static class VesselApp
         builder.Services.AddSingleton<ICaptureStore>(sp => sp.GetRequiredService<SqliteCaptureStore>());
         builder.Services.AddSingleton(sp => new SqliteReadStore(dbPath));
         builder.Services.AddSingleton<BackendHealthTracker>();
+        builder.Services.AddSingleton(new FirstRunState(firstRun));
         // Registered before Kestrel's own hosted service starts the listener, so the
         // database initializes (fail-fast) before any traffic is accepted.
         builder.Services.AddHostedService<CaptureWriterService>();
         // Same singleton ProxyHandler enqueues into (registered above) — the factory just
         // resolves it, so StartAsync/StopAsync run against that exact instance.
         builder.Services.AddHostedService(sp => sp.GetRequiredService<RequestModelSnifferService>());
+        // No-ops entirely on any run but the first, so this is never a background health
+        // check — BackendHealthTracker stays the only (passive) source of the health dots.
+        builder.Services.AddHostedService<FirstRunProbeService>();
 
         var app = builder.Build();
 

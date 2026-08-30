@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '@/api/client'
 import { filtersActive, type RequestFilters, type SessionScope, type Summary } from '@/api/types'
@@ -49,6 +49,20 @@ export function RequestList({
 }) {
   const queryClient = useQueryClient()
   const parentRef = useRef<HTMLDivElement>(null)
+
+  // Issue #11 — the empty state is exactly where a dead default backend surfaces: no rows
+  // and no explanation, while a client pointed at Vessel is collecting 502s. Shares the
+  // `['status']` query with StatsBar and the banners (same key, same cache — no extra
+  // request, and StatsBar's 5s interval keeps it current), and reads both signals that mean
+  // "the default isn't answering": passive red health from a captured proxy-level failure,
+  // and the first-run one-shot probe, which is the only one available before any traffic.
+  const statusQuery = useQuery({ queryKey: ['status'], queryFn: api.getStatus, staleTime: 5_000 })
+  const status = statusQuery.data
+  const defaultBackend = status?.backends.find((backend) => backend.default)
+  const unreachableDefault =
+    defaultBackend && (defaultBackend.health.state === 'red' || status?.setup.defaultBackendReachable === false)
+      ? defaultBackend
+      : null
 
   const queryKey = requestsQueryKey(scope, filters)
 
@@ -175,7 +189,15 @@ export function RequestList({
       {itemCount === 0 && !query.isLoading && !query.isError && (
         <div className="flex flex-col items-center gap-2 p-8 text-center">
           <Mark size={28} muted />
-          <p className="text-sm text-text-muted">No requests yet — traffic through Vessel will show up here.</p>
+          {unreachableDefault ? (
+            <p role="status" className="text-sm text-danger">
+              <span className="font-mono">{unreachableDefault.name}</span> isn't responding at{' '}
+              <span className="font-mono">{backendAddress(unreachableDefault.baseUrl)}</span> — start it, or add a
+              backend.
+            </p>
+          ) : (
+            <p className="text-sm text-text-muted">No requests yet — traffic through Vessel will show up here.</p>
+          )}
         </div>
       )}
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
@@ -217,4 +239,13 @@ export function RequestList({
       </div>
     </div>
   )
+}
+
+/** `http://localhost:11434` → `localhost:11434` — the address a user would recognize, not the parsed URL. */
+function backendAddress(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host
+  } catch {
+    return baseUrl
+  }
 }

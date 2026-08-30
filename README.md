@@ -9,6 +9,7 @@
 ## Quickstart
 
 1. Download the archive for your OS from [Releases](https://github.com/spenceclark/Vessel/releases), extract it, and run `vessel` (or `vessel.exe`). A first run creates the config and opens `http://127.0.0.1:4550/vessel/`.
+   The default backend is Ollama on `localhost:11434`; if nothing is listening there, that first run opens on the backend picker so you can add OpenAI, Claude, or another backend straight away.
 2. Point a client at Vessel. Your first request appearing in the UI means it worked.
 
 ```bash

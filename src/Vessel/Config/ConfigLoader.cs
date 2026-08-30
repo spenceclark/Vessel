@@ -275,8 +275,12 @@ public static class ConfigLoader
     /// (10/8, 172.16/12, 192.168/16), and the <c>.local</c>/<c>.internal</c> hostname
     /// suffixes used by mDNS and container/LAN setups. Everything else — including any
     /// other public DNS name — is treated as publicly routable.
+    /// <para>
+    /// #11 — public so <c>BackendProbe.IsProbeable</c> can reuse exactly this definition:
+    /// the first-run reachability probe must never reach a host that could be a paid API.
+    /// </para>
     /// </summary>
-    private static bool IsLoopbackOrPrivateHost(string host)
+    public static bool IsLoopbackOrPrivateHost(string host)
     {
         if (host.EndsWith('.'))
             host = host[..^1];

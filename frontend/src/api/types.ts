@@ -93,6 +93,17 @@ export interface CaptureHealth {
   stoppedReason?: string
 }
 
+/**
+ * #11 — first-run setup state. `firstRun` is true only for the process that created
+ * `vessel.json`; `defaultBackendReachable` is that run's one-shot probe of the default
+ * backend and is `null` on every later run (no probe ran). Distinct from `BackendHealth`,
+ * which stays passively observed from captured traffic.
+ */
+export interface SetupStatus {
+  firstRun: boolean
+  defaultBackendReachable: boolean | null
+}
+
 export interface StatusPayload {
   name: string
   version: string
@@ -104,6 +115,7 @@ export interface StatusPayload {
   listenSecurity: { isNonLoopback: boolean; isContainer: boolean }
   /** H0b — this Vessel process's run id (a restart changes it). */
   serverRunId: string
+  setup: SetupStatus
 }
 
 /** The `session` scope this UI is currently viewing: a specific session's id, or "all" history. */

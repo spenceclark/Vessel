@@ -373,7 +373,7 @@ Everything Vessel-owned lives under `/vessel/` (impossible to collide with `/v1/
 | `GET /vessel/api/active` | recovery snapshot `{ active, logPosition, serverRunId }` — the in-flight requests as displayable descriptors, and the log position that set is true as of (§4.4, Batch F/H/I/J/K) |
 | `GET/PUT /vessel/api/config` | backends, retention, ports, redaction — persisted to `vessel.json` |
 | `GET /vessel/api/ollama/ps` | (Ollama backends) proxied `ollama ps` — loaded models, memory |
-| `GET /vessel/api/status` | server status: version, effective listen address, per-backend passive health, `mcp.enabled` |
+| `GET /vessel/api/status` | server status: version, effective listen address, per-backend passive health, `mcp.enabled`, first-run setup state (#11) |
 | `POST /vessel/mcp` | read-only MCP server (official SDK, Streamable HTTP): `search_requests`, `get_request`, `get_stats`, `list_sessions` over the capture store; `mcp.enabled` kill-switch, live-applied (phase-5b) |
 
 Replay is an internal request to Vessel's own `/b/{backend}/…` route, so it follows the
@@ -457,6 +457,7 @@ editable in the UI:
 ```
 
 The block above lists every backend Vessel recognises; a newly created config contains only the Ollama backend, which stays the default (Phase 5 PD1).
+The run that *creates* that config — and no later run — makes a single TCP connect to the default backend's host and port to answer "is anything actually there?", and reports it on `/vessel/api/status` as `setup {firstRun, defaultBackendReachable}` (#11). It sends zero bytes, is skipped for any host that isn't loopback or private (§8's own rule, so it can never reach a paid API), and is kept out of the passive health dots entirely. Reachable is today's silent zero-config drop-in, unchanged; unreachable is what makes the UI lead with the backend picker instead of leaving a cloud-only visitor to discover the dead default through a `502 upstream_unreachable`.
 `type: openai` means OpenAI-compatible wire format, not OpenAI-hosted. Unsloth Desktop requires an API
 key created in its UI, but does not define an environment-variable name for it; configure
 `authEnv` yourself if Vessel should re-attach that key for replay. LM Studio, llama.cpp,
