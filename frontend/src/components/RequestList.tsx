@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '@/api/client'
-import { filtersActive, type RequestFilters, type SessionScope, type Summary } from '@/api/types'
+import { filtersActive, firstRunProbeSaysUnreachable, type RequestFilters, type SessionScope, type Summary } from '@/api/types'
 import { requestsQueryKey } from '@/api/queryKeys'
 import { useNowTick, type InFlightRequest } from '@/api/useEvents'
 import type { Selection } from '@/App'
@@ -55,12 +55,13 @@ export function RequestList({
   // `['status']` query with StatsBar and the banners (same key, same cache — no extra
   // request, and StatsBar's 5s interval keeps it current), and reads both signals that mean
   // "the default isn't answering": passive red health from a captured proxy-level failure,
-  // and the first-run one-shot probe, which is the only one available before any traffic.
+  // and the first-run one-shot probe, which is the only one available before any traffic —
+  // and which a later green observation supersedes (see `firstRunProbeSaysUnreachable`).
   const statusQuery = useQuery({ queryKey: ['status'], queryFn: api.getStatus, staleTime: 5_000 })
   const status = statusQuery.data
   const defaultBackend = status?.backends.find((backend) => backend.default)
   const unreachableDefault =
-    defaultBackend && (defaultBackend.health.state === 'red' || status?.setup.defaultBackendReachable === false)
+    defaultBackend && (defaultBackend.health.state === 'red' || firstRunProbeSaysUnreachable(status))
       ? defaultBackend
       : null
 

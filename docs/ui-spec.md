@@ -621,8 +621,14 @@ than signal. On narrow viewports, response panels stack.
   sentence per §6) whenever the default backend is unreachable by either signal:
   that probe, or passive red health — which is the returning-user case, since a
   restart seeds red from the last captured failure while the new session's list
-  is empty. Backend name and address are read from the running config, never
-  hardcoded, so the sentence stays true after a rename. An on-demand per-backend
+  is empty. The two signals age differently and the newer one wins: passive
+  health is re-derived from every captured outcome, while the probe answers once
+  and is never refreshed, so a `green` observation supersedes it on both
+  surfaces. Without that, `first run with Ollama down → start Ollama → one
+  successful request → Reset session` would leave an empty list insisting a
+  plainly working backend isn't responding. Backend name and address are read
+  from the running config, never hardcoded, so the sentence stays true after a
+  rename. An on-demand per-backend
   "check now" is still a possible later addition — opt-in, one-shot, never
   background.
 - **Config panel: injectStreamUsage needs an explainer (review TODO, not yet

@@ -118,6 +118,20 @@ export interface StatusPayload {
   setup: SetupStatus
 }
 
+/**
+ * #11 — whether the first-run probe's "nothing was listening" still stands. The two signals
+ * on `/status` age differently: passive health is re-derived from every captured outcome and
+ * is always current, while the probe answers once, at startup, and is never refreshed. So one
+ * successful request (`green`) is a newer and better answer and supersedes it — without this,
+ * `first run with Ollama down → start Ollama → request succeeds → Reset session` would leave
+ * an empty list insisting a plainly working backend isn't responding. `red` supersedes
+ * nothing: it agrees with the probe.
+ */
+export function firstRunProbeSaysUnreachable(status: StatusPayload | undefined): boolean {
+  const health = status?.backends.find((backend) => backend.default)?.health.state
+  return status?.setup.defaultBackendReachable === false && health !== 'green'
+}
+
 /** The `session` scope this UI is currently viewing: a specific session's id, or "all" history. */
 export type SessionScope = number | 'all'
 

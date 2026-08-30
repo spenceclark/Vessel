@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Settings } from 'lucide-react'
 import { api } from '@/api/client'
-import type { BackendHealth, SessionScope, StatusBackend } from '@/api/types'
+import { firstRunProbeSaysUnreachable, type BackendHealth, type SessionScope, type StatusBackend } from '@/api/types'
 import { ConfigPanel } from '@/components/ConfigPanel'
 import { DataPanel } from '@/components/DataPanel'
 import { ThemePanel } from '@/components/ThemePanel'
@@ -58,9 +58,12 @@ export function StatsBar({
   // listening, settings open straight onto Config, whose first control is the
   // known-backend picker (#9) — a cloud-only user configures OpenAI/Claude immediately
   // rather than discovering the problem by failure. Ref-guarded so dismissing it is final:
-  // the status query refetches every 5s and must not reopen what the user just closed.
+  // the status query refetches every 5s and must not reopen what the user just closed. The
+  // probe is a startup answer that is never refreshed, so a since-observed green supersedes
+  // it here too (`firstRunProbeSaysUnreachable`) — a reload after the user started Ollama
+  // must not reopen the picker for a backend that is now answering.
   const needsBackendSetup =
-    statusQuery.data?.setup.firstRun === true && statusQuery.data.setup.defaultBackendReachable === false
+    statusQuery.data?.setup.firstRun === true && firstRunProbeSaysUnreachable(statusQuery.data)
   const backendSetupPrompted = useRef(false)
   useEffect(() => {
     if (!needsBackendSetup || backendSetupPrompted.current) return

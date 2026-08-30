@@ -222,6 +222,16 @@ describe('RequestList empty-state backend nudge (issue #11)', () => {
     )
   })
 
+  // PR review — the probe answers once at startup and is never refreshed, so it must not
+  // outlive a newer observation: start Ollama, make one successful request, reset the
+  // session, and the empty list must not insist the backend still isn't responding.
+  it('drops the first-run probe answer once a captured request has proved the backend green', async () => {
+    renderList([], null, vi.fn(), status({ firstRun: true, defaultBackendReachable: false, health: 'green' }))
+
+    expect(await screen.findByText(NO_REQUESTS)).toBeTruthy()
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
   it('keeps the plain empty state when the default backend is reachable', async () => {
     renderList([], null, vi.fn(), status({ health: 'green', firstRun: true, defaultBackendReachable: true }))
 

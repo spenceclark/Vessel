@@ -102,14 +102,29 @@ describe('StatsBar first-run backend setup (issue #11)', () => {
   it('stays silent on a first run whose default backend answered', async () => {
     renderStatsBar(status({ firstRun: true, defaultBackendReachable: true }, 'green'))
 
-    await screen.findByText('Reset session')
+    // The backend indicator renders only once `['status']` has resolved — waiting on
+    // anything rendered earlier would assert "no dialog" before the effect could open one.
+    await screen.findByText('ollama')
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  // PR review — same staleness on this surface: reloading the UI after the user started
+  // Ollama must not reopen the picker for a backend that is now answering.
+  it('stays silent once a captured request has superseded the probe with green health', async () => {
+    renderStatsBar(status({ firstRun: true, defaultBackendReachable: false }, 'green'))
+
+    // The backend indicator renders only once `['status']` has resolved — waiting on
+    // anything rendered earlier would assert "no dialog" before the effect could open one.
+    await screen.findByText('ollama')
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
   it('stays silent on later runs, which never probe — red health alone is the nudge’s job', async () => {
     renderStatsBar(status({ firstRun: false, defaultBackendReachable: null }, 'red'))
 
-    await screen.findByText('Reset session')
+    // The backend indicator renders only once `['status']` has resolved — waiting on
+    // anything rendered earlier would assert "no dialog" before the effect could open one.
+    await screen.findByText('ollama')
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
