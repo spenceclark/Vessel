@@ -339,6 +339,9 @@ public class ConfigLoaderTests : IDisposable
     [InlineData("http://[::1]:11434")]
     [InlineData("http://myserver.local:11434")]
     [InlineData("http://myserver.internal:11434")]
+    [InlineData("http://host.docker.internal:11434")] // container default backend (D10)
+    [InlineData("http://ollama:11434")]               // compose service name (compose.yaml)
+    [InlineData("http://vessel-stub:11434")]           // single-label host used by container-smoke
     public void HttpForLoopbackOrPrivateHost_IsAllowed(string baseUrl)
     {
         string path = PathFor("vessel.json");

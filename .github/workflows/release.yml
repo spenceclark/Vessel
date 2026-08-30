@@ -101,6 +101,7 @@ jobs:
           docker run -d --name vessel-test --network vessel-smoke -p 4550:4550 -v "$PWD/container-state:/data" vessel:test
           echo "assert: vessel serves status"
           for i in {1..60}; do curl --fail --silent http://127.0.0.1:4550/vessel/api/status && break; sleep .25; done
+          curl --fail --silent http://127.0.0.1:4550/vessel/api/status || { echo "vessel-test never became ready — container logs:"; docker logs vessel-test; exit 1; }
           echo "assert: vessel.db persisted to the mounted volume"
           test -f container-state/vessel.db
           # Wait for the stub to become reachable through vessel before asserting — the stub

@@ -272,9 +272,11 @@ public static class ConfigLoader
     /// <summary>
     /// #5 — true for hosts that can only ever be reached from this machine or its LAN:
     /// loopback (<c>localhost</c>, 127.0.0.0/8, ::1), RFC1918 private IPv4 ranges
-    /// (10/8, 172.16/12, 192.168/16), and the <c>.local</c>/<c>.internal</c> hostname
-    /// suffixes used by mDNS and container/LAN setups. Everything else — including any
-    /// other public DNS name — is treated as publicly routable.
+    /// (10/8, 172.16/12, 192.168/16), the <c>.local</c>/<c>.internal</c> hostname
+    /// suffixes used by mDNS and container/LAN setups, and single-label hostnames with no
+    /// dot (Docker/compose service names like <c>ollama</c>, bare LAN hostnames) — a public
+    /// name always carries a TLD. Everything else — any dotted public DNS name or public
+    /// IP — is treated as publicly routable.
     /// <para>
     /// #11 — public so <c>BackendProbe.IsProbeable</c> can reuse exactly this definition:
     /// the first-run reachability probe must never reach a host that could be a paid API.
@@ -307,6 +309,15 @@ public static class ConfigLoader
                 bool is192_168 = bytes[0] == 192 && bytes[1] == 168;
                 return is10 || is172_16 || is192_168;
             }
+        }
+
+        // A single-label host that isn't an IP — a Docker/compose service name (`ollama`,
+        // `vessel-stub`) or a bare LAN hostname — has no public TLD, so it can only be
+        // resolved on the local network; http:// is fine there. Public DNS names carry a
+        // dot and public IPs a dot/colon, so both still require https.
+        if (address is null && !host.Contains('.'))
+        {
+            return true;
         }
 
         return false;
