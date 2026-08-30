@@ -71,7 +71,13 @@ public class CaptureIntegrationTests(VesselFixture fx) : IClassFixture<VesselFix
         CapturedRow row = await CaptureDb.WaitForRow(fx.DbPath, r => r.Path.Contains(marker));
         Assert.True(row.Streamed);
         Assert.NotNull(row.DurationMs);
-        Assert.True(row.DurationMs >= 3 * 150, $"duration {row.DurationMs} ms < stream span");
+        // n=4 chunks 150ms apart ≈ 450ms of stream span. Task.Delay has timer-granularity
+        // slop and can sum a hair under nominal (observed 449.98ms on CI — a 15µs miss), so
+        // allow a small tolerance: the point is that duration reflects a slow multi-chunk
+        // stream, not an exact 450.000ms floor.
+        const double streamSpanMs = 3 * 150;
+        Assert.True(row.DurationMs >= streamSpanMs - 25,
+            $"duration {row.DurationMs} ms below stream span {streamSpanMs} ms (tolerance 25 ms)");
         Assert.NotNull(row.TtftMs);
         Assert.InRange(row.TtftMs.Value, 0, row.DurationMs.Value / 2);
         Assert.NotNull(row.VesselOverheadMs);
