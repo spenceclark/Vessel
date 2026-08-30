@@ -601,10 +601,36 @@ than signal. On narrow viewports, response panels stack.
   updated at capture, seeded from the DB at startup, exposed on `/status` as
   `backends[].health {state, lastSeenAt}`; popover shows the timestamp ("last
   seen 14:32"). The `+N` chip carries the worst state among collapsed backends
-  (red > unknown > green). Active probing is explicitly rejected (auth-costing
-  probes against live APIs, traffic Vessel wasn't asked to make); an on-demand
-  per-backend "check now" for local backends is a possible later addition —
-  opt-in, one-shot, never background.
+  (red > unknown > green). Active probing of live APIs stays rejected
+  (auth-costing probes, traffic Vessel wasn't asked to make).
+
+  **First-run backend UX (issue #11)** takes the one carve-out that rejection
+  always allowed — local, one-shot, never background. The run that *creates*
+  `vessel.json`, and no other, makes a single TCP connect to the default
+  backend's host and port, skipped entirely unless that host is loopback or
+  private (config validation's own rule, #5), so it can never reach something
+  that bills. It sends zero bytes and never feeds the dots: the answer travels
+  separately as `setup {firstRun, defaultBackendReachable}` on `/status`, and
+  health stays passive-observed. Two surfaces read it. **Settings open on
+  Config** — the known-backend picker first — when a first run found nothing
+  listening, so a cloud-only visitor configures OpenAI/Claude immediately rather
+  than meeting the dead default as a `502 upstream_unreachable`; it fires once,
+  and dismissing it is final (the status poll must never reopen it). **The list's
+  empty state** replaces "No requests yet" with `{default} isn't responding at
+  {host:port} — start it, or add a backend.` (`--danger`, the empty state's one
+  sentence per §6) whenever the default backend is unreachable by either signal:
+  that probe, or passive red health — which is the returning-user case, since a
+  restart seeds red from the last captured failure while the new session's list
+  is empty. The two signals age differently and the newer one wins: passive
+  health is re-derived from every captured outcome, while the probe answers once
+  and is never refreshed, so a `green` observation supersedes it on both
+  surfaces. Without that, `first run with Ollama down → start Ollama → one
+  successful request → Reset session` would leave an empty list insisting a
+  plainly working backend isn't responding. Backend name and address are read
+  from the running config, never hardcoded, so the sentence stays true after a
+  rename. An on-demand per-backend
+  "check now" is still a possible later addition — opt-in, one-shot, never
+  background.
 - **Config panel: injectStreamUsage needs an explainer (review TODO, not yet
   implemented)**: the checkbox is bare jargon — the product's own author had to ask
   what it does. Add a one-line `xs --text-muted` explainer under the control:

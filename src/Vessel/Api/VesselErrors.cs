@@ -65,7 +65,8 @@ public sealed record StatusPayload(
     McpStatus Mcp,
     ListenSecurity ListenSecurity,
     // H0b(1) — this process's run id, so a client can distinguish a restart from a reconnect.
-    string ServerRunId);
+    string ServerRunId,
+    SetupStatus Setup);
 
 public sealed record StatusBackend(
     string Name,
@@ -89,3 +90,11 @@ public sealed record McpStatus(bool Enabled);
 
 /// <summary>The actual bound listener's exposure, used for the persistent UI notice.</summary>
 public sealed record ListenSecurity(bool IsNonLoopback, bool IsContainer);
+
+/// <summary>
+/// #11 — first-run setup state. <paramref name="FirstRun"/> is true when this process
+/// created the config file; <paramref name="DefaultBackendReachable"/> carries the
+/// one-shot first-run probe of the default backend, and is null on every later run (no
+/// probe ran) — never confuse it with the passively observed <see cref="BackendHealth"/>.
+/// </summary>
+public sealed record SetupStatus(bool FirstRun, bool? DefaultBackendReachable);

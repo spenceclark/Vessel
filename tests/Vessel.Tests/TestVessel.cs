@@ -23,7 +23,11 @@ public sealed class TestVessel : IAsyncDisposable
     /// <summary>The running app's DI container — for tests that need to reach a singleton directly.</summary>
     public IServiceProvider Services => _app.Services;
 
-    public static async Task<TestVessel> StartAsync(Action<VesselConfig>? mutate = null)
+    /// <param name="firstRun">
+    /// #11 — pretend this process created the config file, which is what arms the one-shot
+    /// default-backend probe.
+    /// </param>
+    public static async Task<TestVessel> StartAsync(Action<VesselConfig>? mutate = null, bool firstRun = false)
     {
         var vessel = new TestVessel
         {
@@ -44,7 +48,7 @@ public sealed class TestVessel : IAsyncDisposable
         };
         mutate?.Invoke(config);
 
-        vessel._app = VesselApp.Build(config, vessel.DbPath, vessel.ConfigPath);
+        vessel._app = VesselApp.Build(config, vessel.DbPath, vessel.ConfigPath, firstRun);
         await vessel._app.StartAsync();
         vessel._app.RecordBoundListen();
         vessel.BaseUrl = vessel._app.ListenAddress();

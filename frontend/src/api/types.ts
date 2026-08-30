@@ -93,6 +93,17 @@ export interface CaptureHealth {
   stoppedReason?: string
 }
 
+/**
+ * #11 — first-run setup state. `firstRun` is true only for the process that created
+ * `vessel.json`; `defaultBackendReachable` is that run's one-shot probe of the default
+ * backend and is `null` on every later run (no probe ran). Distinct from `BackendHealth`,
+ * which stays passively observed from captured traffic.
+ */
+export interface SetupStatus {
+  firstRun: boolean
+  defaultBackendReachable: boolean | null
+}
+
 export interface StatusPayload {
   name: string
   version: string
@@ -104,6 +115,21 @@ export interface StatusPayload {
   listenSecurity: { isNonLoopback: boolean; isContainer: boolean }
   /** H0b — this Vessel process's run id (a restart changes it). */
   serverRunId: string
+  setup: SetupStatus
+}
+
+/**
+ * #11 — whether the first-run probe's "nothing was listening" still stands. The two signals
+ * on `/status` age differently: passive health is re-derived from every captured outcome and
+ * is always current, while the probe answers once, at startup, and is never refreshed. So one
+ * successful request (`green`) is a newer and better answer and supersedes it — without this,
+ * `first run with Ollama down → start Ollama → request succeeds → Reset session` would leave
+ * an empty list insisting a plainly working backend isn't responding. `red` supersedes
+ * nothing: it agrees with the probe.
+ */
+export function firstRunProbeSaysUnreachable(status: StatusPayload | undefined): boolean {
+  const health = status?.backends.find((backend) => backend.default)?.health.state
+  return status?.setup.defaultBackendReachable === false && health !== 'green'
 }
 
 /** The `session` scope this UI is currently viewing: a specific session's id, or "all" history. */
