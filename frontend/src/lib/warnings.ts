@@ -11,6 +11,7 @@ const WARNING_LABELS: Record<string, string> = {
   cold_load: 'Cold model load',
   slow_ttft: 'Slow TTFT',
   usage_injected: 'Usage injected',
+  tool_call_in_text: 'Tool call in text',
 }
 
 export function warningLabel(code: string): string {
