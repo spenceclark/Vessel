@@ -118,6 +118,19 @@ function Wait-ForStatus {
     throw "Vessel did not become ready at $BaseUrl within $TimeoutSec s"
 }
 
+# Remove a directory, retrying while a just-exited process releases its file handles
+# (Windows holds vessel.db/-wal/-shm open until the exe fully tears down). Cleanup must
+# never fail a smoke that already passed, so this only warns after exhausting its retries.
+function Remove-DirWithRetry {
+    param([string]$Path)
+    if ([string]::IsNullOrEmpty($Path) -or -not (Test-Path -LiteralPath $Path)) { return }
+    for ($i = 0; $i -lt 20; $i++) {
+        try { Remove-Item -Recurse -Force -LiteralPath $Path -ErrorAction Stop; return }
+        catch { Start-Sleep -Milliseconds 250 }
+    }
+    Write-Warning "could not clean $Path"
+}
+
 # --- Publish --------------------------------------------------------------------------
 
 $publishArgs = @("publish", $project, "-c", "Release", "-r", $Rid, "--self-contained", "-p:PublishSingleFile=true")
@@ -294,13 +307,15 @@ try {
     $client.Dispose()
 }
 finally {
-    if ($null -ne $vesselProc -and -not $vesselProc.HasExited) { Stop-Process -Id $vesselProc.Id -Force }
-    if ($null -ne $stubListener) { $stubListener.Stop(); $stubListener.Close() }
-    Start-Sleep -Milliseconds 300
-    try { Remove-Item -Recurse -Force $work } catch { Write-Warning "could not clean $work" }
-    if ($null -ne $cleanRoot) {
-        try { Remove-Item -Recurse -Force $cleanRoot } catch { Write-Warning "could not clean $cleanRoot" }
+    if ($null -ne $vesselProc -and -not $vesselProc.HasExited) {
+        Stop-Process -Id $vesselProc.Id -Force -ErrorAction SilentlyContinue
+        # Wait for the process to REALLY exit before deleting its directory, not just for
+        # the kill to be dispatched — otherwise the open db handles fail the removal.
+        $vesselProc.WaitForExit(10000) | Out-Null
     }
+    if ($null -ne $stubListener) { $stubListener.Stop(); $stubListener.Close() }
+    Remove-DirWithRetry $work
+    if ($null -ne $cleanRoot) { Remove-DirWithRetry $cleanRoot }
 }
 
 if ($failures -gt 0) {

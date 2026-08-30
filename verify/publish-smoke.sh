@@ -18,10 +18,39 @@ exe="$artifact_dir/vessel"
 work="$(mktemp -d)"
 vessel_pid=""
 stub_pid=""
+
+# Kill a background child and block until it has ACTUALLY exited (not just until the
+# signal was dispatched) — on Windows the exe holds vessel.db/-wal/-shm open until it
+# fully tears down, so removing the temp dir before then fails with "device busy". A
+# watchdog SIGKILLs a process that ignores SIGTERM so teardown can never hang.
+stop_process() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 0
+  kill "$pid" 2>/dev/null || true
+  ( sleep 10; kill -9 "$pid" 2>/dev/null || true ) &
+  local watchdog=$!
+  wait "$pid" 2>/dev/null || true
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+}
+
+# Remove a directory, retrying while a just-exited process releases its file handles.
+# Cleanup must NEVER fail a smoke that already passed, so the last attempt is best-effort.
+remove_dir() {
+  local dir="$1" i
+  [[ -n "$dir" ]] || return 0
+  for i in $(seq 1 20); do
+    rm -rf "$dir" 2>/dev/null && return 0
+    sleep 0.25
+  done
+  rm -rf "$dir" 2>/dev/null || true
+  return 0
+}
+
 cleanup() {
-  [[ -n "$vessel_pid" ]] && kill "$vessel_pid" 2>/dev/null || true
-  [[ -n "$stub_pid" ]] && kill "$stub_pid" 2>/dev/null || true
-  rm -rf "$work"
+  stop_process "$vessel_pid"
+  stop_process "$stub_pid"
+  remove_dir "$work"
 }
 trap cleanup EXIT
 
