@@ -106,7 +106,7 @@ export function DetailPane({ id, onCompare }: { id: number | null; onCompare?: (
   async function copyCurl() {
     if (!statusQuery.data) return
     try {
-      await navigator.clipboard.writeText(buildCurl(detail, statusQuery.data.listen, backend))
+      await navigator.clipboard.writeText(buildCurl(detail, window.location.origin, backend))
       setCurlCopyError(false)
       setCurlCopied(true)
       window.setTimeout(() => setCurlCopied(false), 1200)

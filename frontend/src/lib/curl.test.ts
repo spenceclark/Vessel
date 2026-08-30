@@ -54,6 +54,42 @@ describe('buildCurl', () => {
     expect(anthropic).not.toContain('Authorization:')
   })
 
+  it('drives the auth scheme off the captured format, not backend.type (#7)', () => {
+    // An Anthropic backend left on the default `type: auto` must still emit x-api-key, not
+    // an OpenAI bearer token — the request format is the source of truth, backend.type a hint.
+    const autoAnthropic = buildCurl(detail({ format: 'anthropic-messages', path: '/v1/messages' }), '127.0.0.1:4550', backend({
+      type: 'auto', baseUrl: 'https://api.anthropic.com',
+    }))
+    expect(autoAnthropic).toContain('x-api-key: $ANTHROPIC_API_KEY')
+    expect(autoAnthropic).toContain("'anthropic-version: 2023-06-01'")
+    expect(autoAnthropic).not.toContain('Authorization:')
+
+    // backend.type still works as a secondary hint when the format itself isn't Anthropic's
+    // (e.g. a raw/passthrough capture against a backend explicitly typed as anthropic).
+    const typedAnthropic = buildCurl(detail({ format: 'raw', path: '/v1/messages' }), '127.0.0.1:4550', backend({
+      type: 'anthropic', baseUrl: 'https://api.anthropic.com',
+    }))
+    expect(typedAnthropic).toContain('x-api-key: $ANTHROPIC_API_KEY')
+
+    // An OpenAI-formatted call against an `auto` backend still gets the OpenAI bearer scheme.
+    const autoOpenAI = buildCurl(detail({ format: 'openai-chat', path: '/v1/chat/completions' }), '127.0.0.1:4550', backend({
+      type: 'auto', baseUrl: 'https://api.openai.com',
+    }))
+    expect(autoOpenAI).toContain('Authorization: Bearer $OPENAI_API_KEY')
+    expect(autoOpenAI).not.toContain('x-api-key:')
+  })
+
+  it('targets the browser origin and falls back to 127.0.0.1 for a wildcard host (#8)', () => {
+    const dockerOrigin = buildCurl(detail(), 'http://localhost:4550')
+    expect(dockerOrigin).toContain("'http://localhost:4550/b/openai/v1/chat/completions'")
+
+    const wildcardV4 = buildCurl(detail(), 'http://0.0.0.0:4550')
+    expect(wildcardV4).toContain("'http://127.0.0.1:4550/b/openai/v1/chat/completions'")
+
+    const wildcardV6 = buildCurl(detail(), 'http://[::]:4550')
+    expect(wildcardV6).toContain("'http://127.0.0.1:4550/b/openai/v1/chat/completions'")
+  })
+
   it('snapshots every supported request format', () => {
     const cases = [
       detail({ format: 'openai-chat', path: '/v1/chat/completions' }),

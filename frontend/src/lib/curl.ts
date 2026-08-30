@@ -3,23 +3,27 @@ import type { RequestDetail, StatusBackend } from '@/api/types'
 /**
  * Phase 5's curl export intentionally targets Vessel so a pasted command is captured just as
  * any other client request would be. Credentials are placeholders, never captured values.
+ *
+ * `origin` should be the browser's own `window.location.origin` — the address it used to reach
+ * Vessel, which is reachable even when the server's bind address (0.0.0.0 in Docker) is not.
+ * If that origin itself resolves to a wildcard host, fall back to 127.0.0.1.
  */
-export function buildCurl(detail: RequestDetail, listen: string, backend?: StatusBackend): string {
-  const base = listen.startsWith('http://') || listen.startsWith('https://') ? listen : `http://${listen}`
+export function buildCurl(detail: RequestDetail, origin: string, backend?: StatusBackend): string {
+  const base = resolveBase(origin)
   const url = `${base}/b/${encodeURIComponent(detail.backend)}${detail.path}`
   const contentType = header(detail.requestHeaders, 'content-type')
   const lines = [`curl -X ${shellQuote(detail.method)} ${shellQuote(url)}`]
   if (contentType) lines.push(`  -H ${shellQuote(`Content-Type: ${contentType}`)}`)
 
   const backendType = backend?.type.toLowerCase()
-  const authEnv = backend?.authEnv
-    ?? (backendType === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY')
+  const isAnthropic = detail.format === 'anthropic-messages' || backendType === 'anthropic'
+  const authEnv = backend?.authEnv ?? (isAnthropic ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY')
   const needsAuth = backend !== undefined && (
     backend.authEnv !== undefined
     || ((backendType === 'anthropic' || backendType === 'openai' || backendType === 'auto')
       && !isLoopback(backend.baseUrl))
   )
-  if (needsAuth && backendType === 'anthropic') {
+  if (needsAuth && isAnthropic) {
     lines.push(`  -H "x-api-key: $${authEnv}"`)
     lines.push(`  -H ${shellQuote(`anthropic-version: ${header(detail.requestHeaders, 'anthropic-version') ?? '2023-06-01'}`)}`)
   } else if (needsAuth) {
@@ -40,6 +44,22 @@ export function buildCurl(detail: RequestDetail, listen: string, backend?: Statu
 function header(headers: Record<string, string[]> | null, name: string): string | undefined {
   if (!headers) return undefined
   return Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1]?.[0]
+}
+
+function resolveBase(origin: string): string {
+  const base = origin.startsWith('http://') || origin.startsWith('https://') ? origin : `http://${origin}`
+  try {
+    const url = new URL(base)
+    if (isWildcardHost(url.hostname)) url.hostname = '127.0.0.1'
+    return url.origin
+  } catch {
+    return base
+  }
+}
+
+function isWildcardHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '')
+  return host === '0.0.0.0' || host === '::' || host === '0:0:0:0:0:0:0:0'
 }
 
 function isLoopback(baseUrl: string): boolean {
