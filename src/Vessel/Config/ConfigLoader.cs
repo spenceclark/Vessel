@@ -278,6 +278,9 @@ public static class ConfigLoader
     /// </summary>
     private static bool IsLoopbackOrPrivateHost(string host)
     {
+        if (host.EndsWith('.'))
+            host = host[..^1];
+
         if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
             || host.EndsWith(".local", StringComparison.OrdinalIgnoreCase)
             || host.EndsWith(".internal", StringComparison.OrdinalIgnoreCase))

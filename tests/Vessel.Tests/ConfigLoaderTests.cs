@@ -339,9 +339,24 @@ public class ConfigLoaderTests : IDisposable
     [InlineData("http://[::1]:11434")]
     [InlineData("http://myserver.local:11434")]
     [InlineData("http://myserver.internal:11434")]
-    [InlineData("https://api.openai.com")]
     public void HttpForLoopbackOrPrivateHost_IsAllowed(string baseUrl)
     {
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, $$"""
+            {
+              "defaultBackend": "ollama",
+              "backends": { "ollama": { "baseUrl": "{{baseUrl}}" } }
+            }
+            """);
+
+        (VesselConfig config, _) = ConfigLoader.LoadOrCreate(path);
+        Assert.Equal(baseUrl, config.Backends["ollama"].BaseUrl);
+    }
+
+    [Fact]
+    public void HttpsForPublicHost_IsAllowed()
+    {
+        const string baseUrl = "https://api.openai.com";
         string path = PathFor("vessel.json");
         File.WriteAllText(path, $$"""
             {
