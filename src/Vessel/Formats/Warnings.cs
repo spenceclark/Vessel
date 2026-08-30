@@ -42,6 +42,13 @@ public static class Warnings
     public const string UsageInjected = "usage_injected";
 
     /// <summary>
+    /// The request declared tools, but the model emitted a matching tool-call-shaped JSON
+    /// object in text instead of a structured tool call. Detection only; Vessel never
+    /// rewrites the response.
+    /// </summary>
+    public const string ToolCallInText = "tool_call_in_text";
+
+    /// <summary>
     /// Canonical ordering used when serializing a row's warnings, so the stored array is
     /// deterministic regardless of the order producers discovered the codes.
     /// </summary>
@@ -49,6 +56,7 @@ public static class Warnings
     [
         TruncatedResponse, HttpError, ProxyError, ClientDisconnect, TokensEstimated,
         StreamIncomplete, ParseError, BodyTruncated, ColdLoad, SlowTtft, UsageInjected,
+        ToolCallInText,
     ];
 
     /// <summary>Deduplicates and orders codes into the canonical sequence for storage.</summary>

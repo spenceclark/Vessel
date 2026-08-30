@@ -169,4 +169,60 @@ public class FormatEnricherTests
 
         Assert.Null(enriched.TokPerSec);
     }
+
+    [Fact]
+    public void ToolCallInText_NarrativeWithFencedJsonForDeclaredTool_IsWarned()
+    {
+        var enricher = new FormatEnricher(new VesselConfig(), FormatEnricher.DefaultAdapters());
+        CaptureRecord record = Record(
+            "/v1/chat/completions",
+            """{"model":"m","tools":[{"type":"function","function":{"name":"get_weather"}}]}""",
+            """{"choices":[{"message":{"role":"assistant","content":"I will call the weather service.\n\n```json\n{\"name\":\"get_weather\",\"arguments\":{\"city\":\"London\"}}\n```"},"finish_reason":"stop"}]}""");
+
+        EnrichedRecord enriched = enricher.Enrich(record);
+
+        Assert.Contains(Warnings.ToolCallInText, Warns(enriched));
+    }
+
+    [Fact]
+    public void ToolCallInText_WholeJsonForDeclaredTool_IsWarned()
+    {
+        var enricher = new FormatEnricher(new VesselConfig(), FormatEnricher.DefaultAdapters());
+        CaptureRecord record = Record(
+            "/v1/chat/completions",
+            """{"model":"m","tools":[{"type":"function","function":{"name":"get_weather"}}]}""",
+            """{"choices":[{"message":{"role":"assistant","content":"{\"name\":\"get_weather\",\"arguments\":{\"city\":\"London\"}}"},"finish_reason":"stop"}]}""");
+
+        EnrichedRecord enriched = enricher.Enrich(record);
+
+        Assert.Contains(Warnings.ToolCallInText, Warns(enriched));
+    }
+
+    [Fact]
+    public void ToolCallInText_WholeJsonForUndeclaredTool_IsNotWarned()
+    {
+        var enricher = new FormatEnricher(new VesselConfig(), FormatEnricher.DefaultAdapters());
+        CaptureRecord record = Record(
+            "/v1/chat/completions",
+            """{"model":"m","tools":[{"type":"function","function":{"name":"get_weather"}}]}""",
+            """{"choices":[{"message":{"role":"assistant","content":"{\"name\":\"delete_account\",\"arguments\":{}}"},"finish_reason":"stop"}]}""");
+
+        EnrichedRecord enriched = enricher.Enrich(record);
+
+        Assert.DoesNotContain(Warnings.ToolCallInText, Warns(enriched));
+    }
+
+    [Fact]
+    public void ToolCallInText_StructuredToolCall_IsNotWarned()
+    {
+        var enricher = new FormatEnricher(new VesselConfig(), FormatEnricher.DefaultAdapters());
+        CaptureRecord record = Record(
+            "/v1/chat/completions",
+            """{"model":"m","tools":[{"type":"function","function":{"name":"get_weather"}}]}""",
+            """{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"London\"}"}}]},"finish_reason":"tool_calls"}]}""");
+
+        EnrichedRecord enriched = enricher.Enrich(record);
+
+        Assert.DoesNotContain(Warnings.ToolCallInText, Warns(enriched));
+    }
 }

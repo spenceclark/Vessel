@@ -183,6 +183,14 @@ public sealed class FormatEnricher
         }
 
         double? tokPerSec = TokPerSec(record, result, tokensOut);
+        JsonNode? responseNode = result.ReassembledResponse is not null
+            ? JsonUtil.Parse(Utf8(result.ReassembledResponse))
+            : JsonUtil.Parse(responseText);
+        if (ToolCallInTextDetector.IsDetected(requestNode, responseNode, result.ResponseText))
+        {
+            result.Warnings.Add(Warnings.ToolCallInText);
+        }
+
         string? warningsJson = SerializeWarnings(
             BuildWarnings(record, result.Warnings, result.StopReason, estimated, decodeTruncated));
 
