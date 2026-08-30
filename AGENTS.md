@@ -2,6 +2,7 @@
 
 docs/brief.md - Overview of the project
 docs/architecture - Technical architecture to use
+docs/code.md - As-built code guide: structure, request lifecycle, concurrency, APIs, UI
 docs/plan.md - The overall build out plan
 docs/ui-spec.md - UI Specification & Design System
 docs/phases/phase-x.md - The specific spec for each phase
