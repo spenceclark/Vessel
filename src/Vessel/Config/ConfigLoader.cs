@@ -166,6 +166,17 @@ public static class ConfigLoader
                 throw new ConfigException(
                     $"config '{path}': backend '{name}' baseUrl '{backend.BaseUrl}' is not an absolute http(s) URL");
             }
+
+            // #5 — plaintext http:// leaks API keys and prompts on the wire; only allow it
+            // for hosts that never leave the local machine or LAN (loopback, RFC1918,
+            // .local/.internal). Public hosts (and real APIs are https-only anyway) must use
+            // https. This runs both at startup and on PUT /vessel/api/config (D7).
+            if (uri.Scheme == Uri.UriSchemeHttp && !IsLoopbackOrPrivateHost(uri.Host))
+            {
+                throw new ConfigException(
+                    $"config '{path}': backend '{name}' baseUrl '{backend.BaseUrl}' uses http:// for a " +
+                    "publicly routable host; use https://");
+            }
         }
 
         if (string.IsNullOrWhiteSpace(config.DefaultBackend))
@@ -256,6 +267,42 @@ public static class ConfigLoader
         }
 
         return warnings;
+    }
+
+    /// <summary>
+    /// #5 — true for hosts that can only ever be reached from this machine or its LAN:
+    /// loopback (<c>localhost</c>, 127.0.0.0/8, ::1), RFC1918 private IPv4 ranges
+    /// (10/8, 172.16/12, 192.168/16), and the <c>.local</c>/<c>.internal</c> hostname
+    /// suffixes used by mDNS and container/LAN setups. Everything else — including any
+    /// other public DNS name — is treated as publicly routable.
+    /// </summary>
+    private static bool IsLoopbackOrPrivateHost(string host)
+    {
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".local", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".internal", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (System.Net.IPAddress.TryParse(host, out System.Net.IPAddress? address))
+        {
+            if (System.Net.IPAddress.IsLoopback(address))
+            {
+                return true;
+            }
+
+            if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+            {
+                byte[] bytes = address.GetAddressBytes();
+                bool is10 = bytes[0] == 10;
+                bool is172_16 = bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31;
+                bool is192_168 = bytes[0] == 192 && bytes[1] == 168;
+                return is10 || is172_16 || is192_168;
+            }
+        }
+
+        return false;
     }
 
     public static bool TryParseListen(string listen, out System.Net.IPAddress address, out int port)
