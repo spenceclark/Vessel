@@ -340,3 +340,10 @@ ticked; deviations recorded here.
   screenshot remain author-recorded release assets; no synthetic media was substituted.
 - D10 builds linux/amd64 and linux/arm64 through Buildx/QEMU. The release container gate
   verifies status, a proxy stub, `/data` persistence, restart, and the shipped compose file.
+- **osx-x64 dropped for v0.1 (deviation from D2's four-RID list, 2026-08-30).** GitHub
+  retired the free `macos-13` Intel smoke runner — the osx-x64 smoke leg waited 7.5h+ for a
+  runner that never came (D3 anticipated this). Rather than take D3's Rosetta-on-arm64 or
+  build-only fallback, the RID is dropped entirely: Apple stopped selling Intel Macs in 2023
+  and the local-model audience is Apple-Silicon-only, so the win-x64/linux-x64/osx-arm64
+  triple covers the real users; Intel-Mac holdouts build from source. The landing page's
+  download hint is updated to match (macOS = Apple Silicon build).

@@ -15,7 +15,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rid: [win-x64, linux-x64, osx-arm64, osx-x64]
+        # osx-x64 (Intel Mac) dropped for v0.1: Apple stopped selling Intel Macs in 2023
+        # and local-model users are all on Apple Silicon. Intel holdouts can build from
+        # source. Also sidesteps the retired macos-13 smoke runner (phase-6 D3 fallback).
+        rid: [win-x64, linux-x64, osx-arm64]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,8 +64,6 @@ jobs:
             os: ubuntu-latest
           - rid: osx-arm64
             os: macos-latest
-          - rid: osx-x64
-            os: macos-13
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

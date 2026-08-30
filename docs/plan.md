@@ -181,9 +181,10 @@ Claude Code against a running Vessel.
 observe-and-compare, and everything in Phases 7–8 gets better with real users' feedback
 (and makes good headline releases for an open-source project's cadence).*
 
-- [ ] Self-contained single-file publish for win-x64, linux-x64, osx-arm64, osx-x64;
-      trimming on per phase-6 D1, with the MCP SDK's trim-safety (the Phase 5b
-      blocker) resolved first — all-RIDs-untrimmed is the recorded fallback.
+- [ ] Self-contained single-file publish for win-x64, linux-x64, osx-arm64
+      (osx-x64 dropped for v0.1 — see phase-6.md §6); trimming on per phase-6 D1,
+      with the MCP SDK's trim-safety (the Phase 5b blocker) resolved first —
+      all-RIDs-untrimmed is the recorded fallback.
 - [ ] First-run experience: no config → creates the Ollama-only default (reconfirmed by
       Phase 5 PD1), then prints the two-line "point your client here" instructions.
 - [ ] README: what/why, 30-second quickstart per client (Ollama CLI, OpenAI SDK, Aider,

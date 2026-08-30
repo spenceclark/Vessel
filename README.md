@@ -4,8 +4,7 @@
 > `base_url` at one small binary and get capture, search, metrics, replay, Compare, and
 > a private UI—without sending prompts to a third party.
 
-<!-- Human release asset: add docs/assets/compare.gif before publishing v0.1.0. -->
-<!-- Human release asset: add docs/assets/main-ui.png before publishing v0.1.0. -->
+![Main Screen Shot](docs/assets/main_screen.png)
 
 ## Quickstart
 
