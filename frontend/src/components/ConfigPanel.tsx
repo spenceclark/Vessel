@@ -9,11 +9,58 @@ import { cn } from '@/lib/utils'
 
 const SELECT_CLASS = 'h-7 rounded-control border border-border bg-surface-2 px-2 text-sm text-text'
 
+interface BackendCatalogEntry {
+  key: string
+  label: string
+  name: string
+  baseUrl: string
+  type: string
+  authEnv?: string
+}
+
+// Known backends per docs/architecture.md §9 — keep this catalog in sync with that table.
+// It's the single source the "Add backend" picker prefills name/baseUrl/type/authEnv from,
+// so the dropdown and the docs can't drift apart.
+const BACKEND_CATALOG: readonly BackendCatalogEntry[] = [
+  { key: 'ollama', label: 'Ollama', name: 'ollama', baseUrl: 'http://localhost:11434', type: 'ollama' },
+  { key: 'lmstudio', label: 'LM Studio', name: 'lmstudio', baseUrl: 'http://localhost:1234', type: 'openai' },
+  { key: 'llamacpp', label: 'llama.cpp', name: 'llamacpp', baseUrl: 'http://localhost:8080', type: 'openai' },
+  { key: 'vllm', label: 'vLLM', name: 'vllm', baseUrl: 'http://localhost:8000', type: 'openai' },
+  { key: 'lemonade', label: 'Lemonade', name: 'lemonade', baseUrl: 'http://localhost:13305', type: 'openai' },
+  { key: 'unsloth', label: 'Unsloth', name: 'unsloth', baseUrl: 'http://localhost:8888', type: 'openai' },
+  {
+    key: 'openai',
+    label: 'OpenAI',
+    name: 'openai',
+    baseUrl: 'https://api.openai.com',
+    type: 'openai',
+    authEnv: 'OPENAI_API_KEY',
+  },
+  {
+    key: 'anthropic',
+    label: 'Anthropic / Claude',
+    name: 'anthropic',
+    baseUrl: 'https://api.anthropic.com',
+    type: 'anthropic',
+    authEnv: 'ANTHROPIC_API_KEY',
+  },
+  {
+    key: 'gemini',
+    label: 'Gemini',
+    name: 'gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    type: 'openai',
+    authEnv: 'GEMINI_API_KEY',
+  },
+]
+
+const CUSTOM_BACKEND_KEY = 'custom'
+
 /**
- * D7 — the config editor: backends table (add/remove/default/injectStreamUsage),
- * retention/capture/slow-TTFT numbers, listen (flagged as restart-required). Client-side
- * required-field checks before Save; the server's 400 validation message surfaces
- * verbatim on failure.
+ * D7 — the config editor: backends table (add from a known-backend catalog/remove/default/
+ * exact-token-counts toggle), retention/capture/slow-TTFT numbers, listen (flagged as
+ * restart-required). Client-side required-field checks before Save; the server's 400
+ * validation message surfaces verbatim on failure.
  */
 export function ConfigPanel() {
   const queryClient = useQueryClient()
@@ -90,13 +137,17 @@ export function ConfigPanel() {
     })
   }
 
-  function addBackend() {
+  function addBackend(entry?: BackendCatalogEntry) {
     setDraft((d) => {
       if (!d) return d
-      let name = 'new-backend'
+      const base = entry?.name ?? 'new-backend'
+      let name = base
       let n = 2
-      while (name in d.backends) name = `new-backend-${n++}`
-      return { ...d, backends: { ...d.backends, [name]: { baseUrl: '', type: 'auto' } } }
+      while (name in d.backends) name = `${base}-${n++}`
+      const backend: BackendConfigDto = entry
+        ? { baseUrl: entry.baseUrl, type: entry.type, ...(entry.authEnv ? { authEnv: entry.authEnv } : {}) }
+        : { baseUrl: '', type: 'auto' }
+      return { ...d, backends: { ...d.backends, [name]: backend } }
     })
   }
 
@@ -159,7 +210,31 @@ export function ConfigPanel() {
       <div>
         <div className="mb-1.5 flex items-center justify-between">
           <SectionLabel>Backends</SectionLabel>
-          <Button onClick={addBackend}>Add backend</Button>
+          <select
+            value=""
+            onChange={(e) => {
+              const key = e.target.value
+              if (!key) return
+              if (key === CUSTOM_BACKEND_KEY) {
+                addBackend()
+                return
+              }
+              const entry = BACKEND_CATALOG.find((b) => b.key === key)
+              if (entry) addBackend(entry)
+            }}
+            className={SELECT_CLASS}
+            aria-label="Add backend"
+          >
+            <option value="" disabled>
+              Add backend…
+            </option>
+            {BACKEND_CATALOG.map((b) => (
+              <option key={b.key} value={b.key}>
+                {b.label}
+              </option>
+            ))}
+            <option value={CUSTOM_BACKEND_KEY}>Custom…</option>
+          </select>
         </div>
         <div className="flex flex-col gap-2">
           {Object.entries(draft.backends).map(([name, backend]) => (
@@ -291,14 +366,23 @@ function BackendRow({
           </select>
           <p className="text-xs text-text-muted">auto = detect from traffic; observation only — typed backends unlock replay targeting and correct replay auth.</p>
         </div>
-        <label className="flex items-center gap-1 text-xs text-text-muted">
-          <input
-            type="checkbox"
-            checked={backend.injectStreamUsage ?? false}
-            onChange={(e) => onUpdate({ injectStreamUsage: e.target.checked })}
-          />
-          injectStreamUsage
-        </label>
+        {(backend.type === 'openai' || backend.type === 'auto') && (
+          <div className="flex flex-col gap-1">
+            <label className="flex items-center gap-1 text-xs text-text">
+              <input
+                type="checkbox"
+                checked={backend.injectStreamUsage ?? false}
+                onChange={(e) => onUpdate({ injectStreamUsage: e.target.checked })}
+              />
+              Exact token counts (streamed)
+            </label>
+            <p className="text-xs text-text-muted">
+              Adds <code className="font-mono">include_usage</code> to streamed OpenAI-format requests so token
+              counts are exact instead of estimated (~). Modifies the outgoing request only — the captured bytes
+              are still exactly what the client sent.
+            </p>
+          </div>
+        )}
         <Input
           type="text"
           value={backend.authEnv ?? ''}
