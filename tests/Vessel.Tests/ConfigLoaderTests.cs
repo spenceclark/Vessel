@@ -311,6 +311,64 @@ public class ConfigLoaderTests : IDisposable
         },
     };
 
+    [Theory]
+    [InlineData("http://api.openai.com")]
+    [InlineData("http://example.com:8080")]
+    [InlineData("http://8.8.8.8")]
+    public void HttpForPubliclyRoutableHost_Throws(string baseUrl)
+    {
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, $$"""
+            {
+              "defaultBackend": "ollama",
+              "backends": { "ollama": { "baseUrl": "{{baseUrl}}" } }
+            }
+            """);
+
+        var ex = Assert.Throws<ConfigException>(() => ConfigLoader.LoadOrCreate(path));
+        Assert.Contains("ollama", ex.Message);
+        Assert.Contains("https://", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("http://localhost:11434")]
+    [InlineData("http://127.0.0.1:11434")]
+    [InlineData("http://192.168.1.50:11434")]
+    [InlineData("http://10.0.0.5:11434")]
+    [InlineData("http://172.16.0.5:11434")]
+    [InlineData("http://[::1]:11434")]
+    [InlineData("http://myserver.local:11434")]
+    [InlineData("http://myserver.internal:11434")]
+    public void HttpForLoopbackOrPrivateHost_IsAllowed(string baseUrl)
+    {
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, $$"""
+            {
+              "defaultBackend": "ollama",
+              "backends": { "ollama": { "baseUrl": "{{baseUrl}}" } }
+            }
+            """);
+
+        (VesselConfig config, _) = ConfigLoader.LoadOrCreate(path);
+        Assert.Equal(baseUrl, config.Backends["ollama"].BaseUrl);
+    }
+
+    [Fact]
+    public void HttpsForPublicHost_IsAllowed()
+    {
+        const string baseUrl = "https://api.openai.com";
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, $$"""
+            {
+              "defaultBackend": "ollama",
+              "backends": { "ollama": { "baseUrl": "{{baseUrl}}" } }
+            }
+            """);
+
+        (VesselConfig config, _) = ConfigLoader.LoadOrCreate(path);
+        Assert.Equal(baseUrl, config.Backends["ollama"].BaseUrl);
+    }
+
     [Fact]
     public void CaseInsensitiveDefaultBackendName_IsAccepted()
     {
