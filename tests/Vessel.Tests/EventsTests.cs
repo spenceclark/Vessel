@@ -203,7 +203,9 @@ public class EventsTests
         // can lose to by sheer bad luck even though it's already the fast path. Real
         // traffic never has a sub-millisecond TTFT, so this isn't papering over a real
         // ordering bug — it's giving the test a realistic race instead of an artificial one.
-        var request = new HttpRequestMessage(HttpMethod.Post, $"{vessel.BaseUrl}/sse?n=3&delayMs=30&initialDelayMs=20&modelcheck")
+        // Sized at 150ms so the background hand-off wins even under a contended CI runner's
+        // thread-pool scheduling (20ms held locally but lost the race on CI).
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{vessel.BaseUrl}/sse?n=3&delayMs=30&initialDelayMs=150&modelcheck")
         {
             Content = new StringContent("""{"model":"test-model-xyz"}""", System.Text.Encoding.UTF8, "application/json"),
         };
