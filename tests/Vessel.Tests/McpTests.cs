@@ -414,6 +414,31 @@ public sealed class McpTests
     }
 
     /// <summary>
+    /// Chrome DevTools auto-probes /.well-known/appspecific/com.chrome.devtools.json
+    /// against the UI origin when DevTools is open. That path, and the broader
+    /// /.well-known/appspecific/ prefix, is reserved as control plane: 404, never
+    /// proxied, never captured.
+    /// </summary>
+    [Theory]
+    [InlineData("/.well-known/appspecific/com.chrome.devtools.json")]
+    [InlineData("/.well-known/appspecific/")]
+    [InlineData("/.well-known/appspecific/other-tool.json")]
+    public async Task WellKnownAppspecificPaths_AreControlPlane_ReturnNotFound_NeverCaptured(string path)
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var http = new HttpClient();
+
+        using HttpResponseMessage response = await http.GetAsync(vessel.BaseUrl + path, CT);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.True(response.Headers.Contains("X-Vessel-Error"));
+        Assert.Equal("not_found", response.Headers.GetValues("X-Vessel-Error").First());
+
+        JsonElement listResponse = await RestJson(vessel.BaseUrl, "/vessel/api/requests?limit=100");
+        JsonElement rows = listResponse.GetProperty("rows");
+        Assert.Empty(rows.EnumerateArray());
+    }
+
+    /// <summary>
     /// Paths under /b/{backend}/.well-known/... are still proxied, not reserved.
     /// A backend that serves these paths remains reachable via the /b/ prefix.
     /// </summary>
@@ -436,6 +461,27 @@ public sealed class McpTests
         CapturedRow captured = await CaptureDb.WaitForRow(
             vessel.DbPath, row => row.Path == "/.well-known/openid-configuration");
         Assert.Equal("/.well-known/openid-configuration", captured.Path);
+    }
+
+    /// <summary>
+    /// Same as above for the appspecific prefix: a backend that serves
+    /// /.well-known/appspecific/... remains reachable through /b/{backend}/, even
+    /// though the bare path is reserved as control plane.
+    /// </summary>
+    [Fact]
+    public async Task WellKnownAppspecificPaths_UnderBBackendPrefix_AreProxied()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var http = new HttpClient();
+
+        using HttpResponseMessage response = await http.GetAsync(
+            vessel.BaseUrl + "/b/stub/.well-known/appspecific/com.chrome.devtools.json", CT);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        CapturedRow captured = await CaptureDb.WaitForRow(
+            vessel.DbPath, row => row.Path == "/.well-known/appspecific/com.chrome.devtools.json");
+        Assert.Equal("/.well-known/appspecific/com.chrome.devtools.json", captured.Path);
     }
 
     /// <summary>

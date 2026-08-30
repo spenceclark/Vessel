@@ -145,14 +145,15 @@ public static class VesselApp
         app.Map("/vessel", (RequestDelegate)StaticUi.Handle);
         app.Map("/vessel/{**rest}", (RequestDelegate)StaticUi.Handle);
 
-        // D5 — OAuth discovery well-known paths, reserved as control plane.
-        // Never proxied, never captured. Mapped before the proxy catch-all.
+        // D5 — OAuth discovery and appspecific well-known paths, reserved as control
+        // plane. Never proxied, never captured. Mapped before the proxy catch-all.
         app.Use(async (context, next) =>
         {
             var path = context.Request.Path.Value ?? "";
             if (path.StartsWith("/.well-known/oauth-authorization-server", StringComparison.OrdinalIgnoreCase)
                 || path.StartsWith("/.well-known/oauth-protected-resource", StringComparison.OrdinalIgnoreCase)
-                || path.StartsWith("/.well-known/openid-configuration", StringComparison.OrdinalIgnoreCase))
+                || path.StartsWith("/.well-known/openid-configuration", StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith("/.well-known/appspecific/", StringComparison.OrdinalIgnoreCase))
             {
                 await WellKnownEndpoints.HandleWellKnown(context);
                 return;
