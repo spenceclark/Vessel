@@ -59,3 +59,5 @@ vessel.db-shm
 vessel.db-wal
 frontend/dist/
 frontend/node_modules/
+
+private/
