@@ -107,6 +107,48 @@ export function RequestList({
     }
   }, [lastIndex, itemCount, hasNextPage, isFetchingNextPage, fetchNextPage])
 
+  // Issue #6 — ↑/↓ move the selection to the prev/next request (email-client pattern)
+  // and scroll it into view via the virtualizer, instead of the browser's default
+  // scroll-the-focused-pane behavior. Ignored while focus is in the search box or any
+  // other text input, so the filter field isn't hijacked.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+
+      const active = document.activeElement
+      if (
+        active instanceof HTMLElement &&
+        (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)
+      ) {
+        return
+      }
+
+      if (!selection || selection.kind === 'compare') return
+
+      const currentIndex =
+        selection.kind === 'inflight'
+          ? inFlightList.findIndex((item) => item.seq === selection.seq)
+          : inFlightList.length + rows.findIndex((row) => row.id === selection.id)
+      if (currentIndex === -1) return
+
+      const nextIndex = e.key === 'ArrowUp' ? currentIndex - 1 : currentIndex + 1
+      if (nextIndex < 0 || nextIndex >= itemCount) return
+
+      e.preventDefault()
+
+      if (nextIndex < inFlightList.length) {
+        onSelectInFlight(inFlightList[nextIndex].seq)
+      } else {
+        const row = rows[nextIndex - inFlightList.length]
+        if (row) onSelectRow(row.id)
+      }
+      virtualizer.scrollToIndex(nextIndex, { align: 'auto' })
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [selection, inFlightList, rows, itemCount, virtualizer, onSelectRow, onSelectInFlight])
+
   return (
     <div ref={parentRef} className="h-full overflow-y-auto">
       {newSinceFilter > 0 && (
