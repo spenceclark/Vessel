@@ -6,8 +6,13 @@ import { api } from '@/api/client'
 import type { BackendConfigDto, ConfigGetResponse } from '@/api/types'
 import { ConfigPanel } from './ConfigPanel'
 
-const TYPE_EXPLAINER = 'auto = detect from traffic; observation only — typed backends unlock replay targeting and correct replay auth.'
+// The shared explainers open with a control-name lead-in (<span>Type</span> etc., #42
+// follow-up), so a paragraph's own text starts at the em-dash — match the explainer
+// sentence as a substring (exact: false) rather than the whole node text.
+const TYPE_EXPLAINER = 'auto = detect from traffic; observation only. Typed backends unlock replay targeting and correct replay auth.'
 const INJECT_STREAM_USAGE_LABEL = 'Exact token counts (streamed)'
+const findByTypeExplainer = () => screen.findByText(TYPE_EXPLAINER, { exact: false })
+const getAllByTypeExplainer = () => screen.getAllByText(TYPE_EXPLAINER, { exact: false })
 
 afterEach(() => {
   cleanup()
@@ -46,7 +51,7 @@ describe('ConfigPanel backend type explainer (R12)', () => {
   it.each(['light', 'dark'] as const)('renders with muted xs styling in the %s theme', async (theme) => {
     renderConfigPanel(theme)
 
-    const explainer = await screen.findByText(TYPE_EXPLAINER)
+    const explainer = await findByTypeExplainer()
     expect(document.documentElement.dataset.theme).toBe(theme)
     expect(explainer.classList.contains('text-xs')).toBe(true)
     expect(explainer.classList.contains('text-text-muted')).toBe(true)
@@ -143,14 +148,61 @@ describe('ConfigPanel injectStreamUsage explainer (#10)', () => {
       anthropic: { baseUrl: 'https://api.anthropic.com', type: 'anthropic', authEnv: 'ANTHROPIC_API_KEY' },
     })
 
-    await screen.findByText(TYPE_EXPLAINER)
+    await findByTypeExplainer()
     expect(screen.queryByLabelText(INJECT_STREAM_USAGE_LABEL)).toBeNull()
   })
 
   it('hides the control for an Ollama backend, which never reads it', async () => {
     renderConfigPanel('dark')
 
-    await screen.findByText(TYPE_EXPLAINER)
+    await findByTypeExplainer()
     expect(screen.queryByLabelText(INJECT_STREAM_USAGE_LABEL)).toBeNull()
+  })
+})
+
+describe('ConfigPanel compact backend cards (#42)', () => {
+  it('renders each explainer once at section level, not per backend card', async () => {
+    renderConfigPanel('dark', {
+      ollama: { baseUrl: 'http://localhost:11434', type: 'ollama' },
+      openai: { baseUrl: 'https://api.openai.com', type: 'openai' },
+      anthropic: { baseUrl: 'https://api.anthropic.com', type: 'anthropic' },
+    })
+
+    await findByTypeExplainer()
+    expect(getAllByTypeExplainer()).toHaveLength(1)
+    expect(screen.getAllByText(/adds/i)).toHaveLength(1)
+
+    for (const nameInput of screen.getAllByPlaceholderText('name')) {
+      const card = nameInput.closest('div.rounded-control') as HTMLElement
+      expect(within(card).queryByText(TYPE_EXPLAINER, { exact: false })).toBeNull()
+      expect(within(card).queryByText(/adds/i)).toBeNull()
+    }
+  })
+
+  it('leads each shared explainer with its control name so the paragraphs do not read as orphans', async () => {
+    renderConfigPanel('dark', { openai: { baseUrl: 'https://api.openai.com', type: 'openai' } })
+
+    const typeLeadIn = await screen.findByText('Type')
+    expect(typeLeadIn.classList.contains('font-[550]')).toBe(true)
+    expect(typeLeadIn.classList.contains('text-text-secondary')).toBe(true)
+    expect(screen.getByText('Exact token counts')).toBeTruthy()
+  })
+
+  it('hides the shared include_usage explainer while no row presents the checkbox', async () => {
+    renderConfigPanel('dark', {
+      ollama: { baseUrl: 'http://localhost:11434', type: 'ollama' },
+      anthropic: { baseUrl: 'https://api.anthropic.com', type: 'anthropic', authEnv: 'ANTHROPIC_API_KEY' },
+    })
+
+    await findByTypeExplainer()
+    expect(screen.queryByText(/adds/i)).toBeNull()
+    expect(screen.queryByLabelText(INJECT_STREAM_USAGE_LABEL)).toBeNull()
+  })
+
+  it('labels the default radio "Default" in sentence case', async () => {
+    renderConfigPanel('dark')
+
+    const radio = (await screen.findByRole('radio', { name: 'Default' })) as HTMLInputElement
+    expect(radio.checked).toBe(true)
   })
 })

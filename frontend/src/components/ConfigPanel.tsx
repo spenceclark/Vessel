@@ -194,6 +194,14 @@ export function ConfigPanel() {
     }
   }
 
+  // #42 — the include_usage explainer is shared at section level and only meaningful
+  // while at least one row actually presents that checkbox (openai/auto types read it;
+  // anthropic/ollama never do). Computed here rather than inside the card map so the
+  // loop stays free of panel-level concerns.
+  const hasInjectableBackend = Object.values(draft.backends).some(
+    (backend) => backend.type === 'openai' || backend.type === 'auto',
+  )
+
   return (
     <div className="flex flex-col gap-4 text-sm">
       {restartRequired.length > 0 && (
@@ -235,6 +243,27 @@ export function ConfigPanel() {
             ))}
             <option value={CUSTOM_BACKEND_KEY}>Custom…</option>
           </select>
+        </div>
+        {/* #42 — the type/include_usage explainers render once, here, instead of repeating
+            verbatim on every backend card (18 identical paragraphs at nine backends was the
+            root cause of the panel's height). The §8 settings-control rule needs an explainer
+            *available*, not repeated per instance; the include_usage one only shows while
+            some row actually presents that checkbox. Each paragraph leads with its control's
+            name (weight-550 --text-secondary, the existing inline-label vocabulary) so it
+            doesn't read as an orphan detached from the control it describes (#42 follow-up). */}
+        <div className="mb-2 flex flex-col gap-0.5">
+          <p className="text-xs text-text-muted">
+            <span className="font-[550] text-text-secondary">Type</span> — auto = detect from traffic; observation
+            only. Typed backends unlock replay targeting and correct replay auth.
+          </p>
+          {hasInjectableBackend && (
+            <p className="text-xs text-text-muted">
+              <span className="font-[550] text-text-secondary">Exact token counts</span> — adds{' '}
+              <code className="font-mono">include_usage</code> to streamed OpenAI-format requests so counts are
+              exact instead of estimated (~). Modifies the outgoing request only; captured bytes are still
+              exactly what the client sent.
+            </p>
+          )}
         </div>
         <div className="flex flex-col gap-2">
           {Object.entries(draft.backends).map(([name, backend]) => (
@@ -338,6 +367,10 @@ function BackendRow({
   // oxlint-disable-next-line react/set-state-in-effect -- a backend rename from the parent must replace this row's local text draft.
   useEffect(() => setNameDraft(name), [name])
 
+  // #42 — two-row card. Row 1 identifies and routes the backend (name · baseUrl · type ·
+  // Default · Remove); row 2 is per-request tuning (exact token counts · auth env). The
+  // explainers that used to hang under the type select and the checkbox now live once at
+  // the Backends section header, so nothing here repeats per card.
   return (
     <div className="flex flex-col gap-1 rounded-control border border-border p-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -356,33 +389,22 @@ function BackendRow({
           className="min-w-[180px] flex-1 font-mono"
           placeholder="http://localhost:11434"
         />
-        <div className="flex flex-col gap-1">
-          <select value={backend.type} onChange={(e) => onUpdate({ type: e.target.value })} className={SELECT_CLASS}>
-            {['auto', 'ollama', 'openai', 'anthropic'].map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-          <p className="text-xs text-text-muted">auto = detect from traffic; observation only — typed backends unlock replay targeting and correct replay auth.</p>
-        </div>
-        {(backend.type === 'openai' || backend.type === 'auto') && (
-          <div className="flex flex-col gap-1">
-            <label className="flex items-center gap-1 text-xs text-text">
-              <input
-                type="checkbox"
-                checked={backend.injectStreamUsage ?? false}
-                onChange={(e) => onUpdate({ injectStreamUsage: e.target.checked })}
-              />
-              Exact token counts (streamed)
-            </label>
-            <p className="text-xs text-text-muted">
-              Adds <code className="font-mono">include_usage</code> to streamed OpenAI-format requests so token
-              counts are exact instead of estimated (~). Modifies the outgoing request only — the captured bytes
-              are still exactly what the client sent.
-            </p>
-          </div>
-        )}
+        <select value={backend.type} onChange={(e) => onUpdate({ type: e.target.value })} className={SELECT_CLASS}>
+          {['auto', 'ollama', 'openai', 'anthropic'].map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+        <label className="flex items-center gap-1 text-xs text-text-muted">
+          <input type="radio" name="default-backend" checked={isDefault} onChange={onMakeDefault} />
+          Default
+        </label>
+        <Button variant="ghost" disabled={!canRemove} onClick={onRemove}>
+          Remove
+        </Button>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
         <Input
           type="text"
           value={backend.authEnv ?? ''}
@@ -391,13 +413,16 @@ function BackendRow({
           placeholder="auth env (optional)"
           aria-label={`Authentication environment variable for ${name}`}
         />
-        <label className="ml-auto flex items-center gap-1 text-xs text-text-muted">
-          <input type="radio" name="default-backend" checked={isDefault} onChange={onMakeDefault} />
-          default
-        </label>
-        <Button variant="ghost" disabled={!canRemove} onClick={onRemove}>
-          Remove
-        </Button>
+        {(backend.type === 'openai' || backend.type === 'auto') && (
+          <label className="flex items-center gap-1 text-xs text-text">
+            <input
+              type="checkbox"
+              checked={backend.injectStreamUsage ?? false}
+              onChange={(e) => onUpdate({ injectStreamUsage: e.target.checked })}
+            />
+            Exact token counts (streamed)
+          </label>
+        )}
       </div>
       {renameError && <p className="text-xs text-danger">{renameError}</p>}
     </div>
