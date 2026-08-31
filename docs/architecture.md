@@ -118,8 +118,10 @@ session name. The capture record carries the name to the single writer, which lo
 up or creates it on first sight before inserting the capture. This is never a process-wide
 session switch: concurrent clients can use different names without interfering, while
 headerless requests continue to use the Reset-driven current session. Blank or
-whitespace-only values behave as if the header were absent. Replay deliberately remains
-headerless and therefore lands in the current session.
+whitespace-only values, and names longer than 128 characters, behave as if the header
+were absent. At the 500-marker cap, an unseen name also falls back to current; existing
+names continue to resolve. Replay deliberately remains headerless and therefore lands
+in the current session.
 
 ### 3.4 Forward-as-is
 
@@ -356,9 +358,10 @@ Reset-driven current session, and headerless requests reference it. A named requ
 instead resolves its captured `X-Vessel-Session` name to an existing row (newest exact
 match) or creates a non-current row on the single writer. Persisting `is_current` is
 necessary because a named row may be newer without becoming the headerless default.
-The UI session picker lists every marker newest-first (name plus id, with current
-identified), pins Current and All, and shows the 15 most recent other sessions with
-type-ahead over the full set. Each entry includes request count and relative last activity.
+`GET /sessions` returns at most 500 markers newest-first and always includes the current
+marker. The UI session picker pins Current and All, and shows the 15 most recent other
+sessions with type-ahead over that bounded result. Each entry includes request count and
+relative last activity.
 It scopes both history and the stats bar to the selected id; “All sessions” removes the
 scope. `started` and recovery descriptors carry the exact session name while its id is
 writer-unknown, so an existing named session can show its in-flight rows. The first request
@@ -366,7 +369,8 @@ for a brand-new name appears under All until its marker is inserted and the pick
 History is never lost by resetting or switching.
 
 Retention and clear passes prune session markers with no remaining requests, except for
-the current marker, which must remain a valid destination for headerless traffic.
+the current marker and markers held by active captures. Those markers must remain valid
+destinations until their requests reach the writer.
 Explicit session deletion is a scoped clear: `DELETE /vessel/api/sessions/{id}` removes
 that non-current marker, all of its request rows, and matching FTS rows in one writer-thread
 transaction. A replay in another session survives with `replay_of` cleared when its original
@@ -385,6 +389,8 @@ Two independent, configurable caps, enforced by the writer after each batch:
 without blocking. The Data panel offers **Clear all**, **Clear before date**, and typed-confirmation
 bulk deletion for selected non-current sessions. A single non-current picker row instead uses a
 lightweight Delete/Cancel confirmation that shows its request count; current has no affordance.
+Bulk deletion attempts every selected session and reports completed and failed deletions
+separately, since successful deletes cannot be rolled back when a later target fails.
 
 ---
 
@@ -400,7 +406,7 @@ Everything Vessel-owned lives under `/vessel/` (impossible to collide with `/v1/
 | `GET /vessel/api/requests/{id}` | full detail, bodies decompressed |
 | `POST /vessel/api/requests/{id}/replay` | re-send captured request; body may override `backend` and/or `model`; result is a new request row with `replay_of` set |
 | `GET /vessel/api/requests/{id}/replays` | direct replay children, for Compare entry points |
-| `GET /vessel/api/sessions` · `POST /vessel/api/sessions` | newest-first list (`isCurrent`, request count, last-request time) / reset (create + activate marker) |
+| `GET /vessel/api/sessions` · `POST /vessel/api/sessions` | newest-first list capped at 500 with current guaranteed (`isCurrent`, request count, last-request time) / reset (create + activate marker, optional name ≤128 chars) |
 | `DELETE /vessel/api/sessions/{id}` | delete one non-current session marker with all request + FTS rows as a writer-scoped clear |
 | `GET /vessel/api/stats?session=` | totals, failures, avg latency / tok/s / ttft, token totals in/out/cached (accepted scope, post-Phase-4 addition — phase-3.md D3) |
 | `GET /vessel/api/events` | SSE lifecycle feed: `hello`, `started`, `request_ready`, `first_token`, `completed`, `cleared` (§4.4) |

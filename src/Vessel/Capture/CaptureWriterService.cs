@@ -262,7 +262,7 @@ public sealed class CaptureWriterService(
             }
 
             IReadOnlyList<long> ids = store.InsertBatch(enriched);
-            store.EnforceRetention();
+            store.EnforceRetention(ActiveSessionIds());
             _consecutiveFailures = 0;
 
             for (int i = 0; i < enriched.Count; i++)
@@ -319,7 +319,7 @@ public sealed class CaptureWriterService(
     {
         try
         {
-            int deleted = store.Clear(command.BeforeIso);
+            int deleted = store.Clear(command.BeforeIso, ActiveSessionIds());
 
             // R23/H0a — publish the in-band `cleared` event at clear-commit time, on the writer
             // thread, so its SSE id orders after every `completed` this clear could have
@@ -342,7 +342,7 @@ public sealed class CaptureWriterService(
     {
         try
         {
-            SessionDeleteResult result = store.DeleteSession(command.SessionId);
+            SessionDeleteResult result = store.DeleteSession(command.SessionId, ActiveSessionIds());
             if (result.Status == SessionDeleteStatus.Deleted)
             {
                 // The predicate lets connected clients remove only this session's buffered
@@ -357,6 +357,15 @@ public sealed class CaptureWriterService(
             command.Completion.TrySetException(ex);
         }
     }
+
+    /// <summary>
+    /// Session ids captured by headerless requests at start time remain FK targets until
+    /// those requests finish, even if Reset makes their marker non-current meanwhile.
+    /// </summary>
+    private HashSet<long> ActiveSessionIds() => events.GetActiveRequests().Active
+        .Where(active => active.SessionId.HasValue)
+        .Select(active => active.SessionId!.Value)
+        .ToHashSet();
 
     private static Summary ToSummary(long id, EnrichedRecord enriched)
     {

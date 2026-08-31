@@ -131,6 +131,14 @@ public sealed record SessionInfo(
     long RequestCount,
     string? LastRequestAt);
 
+/// <summary>#29 review bounds for the per-request session control surface and its polled listing.</summary>
+public static class SessionLimits
+{
+    public const int MaxNameLength = 128;
+
+    public const int MaxMarkers = 500;
+}
+
 /// <summary>
 /// D2 — <c>GET /requests/facets</c> response: distinct values for the filter-bar
 /// dropdowns, scoped like the list. No counts.

@@ -227,7 +227,11 @@ function SessionPicker({
     setDeleting(true)
     setDeleteError(null)
     try {
-      await onDeleteSession(pendingDelete.id)
+      const result = await onDeleteSession(pendingDelete.id)
+      if (result.failures.length > 0) {
+        setDeleteError(result.failures[0].message)
+        return
+      }
       setPendingDelete(null)
       close()
     } catch (error) {

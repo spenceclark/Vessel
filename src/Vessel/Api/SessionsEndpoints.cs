@@ -32,6 +32,21 @@ public static class SessionsEndpoints
         {
         }
 
+
+        name = name?.Trim();
+        if (string.IsNullOrEmpty(name))
+        {
+            name = null;
+        }
+
+        if (name?.Length > SessionLimits.MaxNameLength)
+        {
+            await VesselErrors.Write(
+                context, StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
+                $"session name must be at most {SessionLimits.MaxNameLength} characters");
+            return;
+        }
+
         var channel = context.RequestServices.GetRequiredService<CaptureChannel>();
         var currentSession = context.RequestServices.GetRequiredService<CurrentSession>();
 
@@ -107,6 +122,13 @@ public static class SessionsEndpoints
             return;
         }
 
+        if (result.Status == SessionDeleteStatus.InUse)
+        {
+            await VesselErrors.Write(
+                context, StatusCodes.Status409Conflict, VesselErrors.InvalidRequest,
+                "the session is still referenced by an in-flight request");
+            return;
+        }
         context.Response.ContentType = "application/json; charset=utf-8";
         await JsonSerializer.SerializeAsync(
             context.Response.Body, new ClearResponse(result.Deleted),

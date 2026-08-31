@@ -228,7 +228,8 @@ request through:
 
     Retention and clear also prune empty non-current session markers; explicit session
     deletion removes one marker plus its request/FTS rows in a transaction. The current marker
-    is retained even with zero rows so headerless traffic always has a valid destination.
+    and any start-time session ids held by active captures are retained even with zero rows, so
+    queued captures always have a valid destination.
 
 13. **Client side.** The HTTP response finished back in step 9/10; everything after
     was off the request path. The UI saw the request live through
@@ -316,7 +317,7 @@ marking (e.g. `not_found`, `invalid_request`, `forbidden_host`, `upstream_unreac
 | `DELETE /vessel/api/requests` | Clear: `scope=all` or `before={ISO timestamp}`; runs on the writer thread; ack count is UX only |
 | `GET /vessel/api/requests/facets` | Distinct backend/model/tag/format values for the filter bar |
 | `GET /vessel/api/stats?session=` | Totals, failures, avg latency/tok/s/TTFT, token sums; `session` = id, `current`, or `all` |
-| `GET /vessel/api/sessions` / `POST` | List sessions newest-first with name/current/count/last activity / reset (create marker + activate) |
+| `GET /vessel/api/sessions` / `POST` | List at most 500 sessions newest-first with current guaranteed / reset with an optional name of at most 128 characters |
 | `DELETE /vessel/api/sessions/{id}` | Delete a non-current session marker and all its request/FTS rows atomically on the writer |
 | `GET/PUT /vessel/api/config` | `{ config, restartRequired }` / apply (validates, persists, live-swaps snapshot; `listen` needs restart) |
 | `GET /vessel/api/events` | SSE lifecycle feed: `hello`, `started`, `request_ready`, `first_token`, `completed`, `cleared` |
@@ -395,5 +396,6 @@ count-confirmed single-session deletion + reset),
 request/response views with raw and raw-stream toggles, replay dialog), `CompareView`
 (side-by-side diff), `ConfigPanel`/`ThemePanel`/`DataPanel`, plus `BindAddressBanner`,
 `CaptureHealthBanner`, and `DecodeTruncatedNotice`. `DataPanel` owns typed-confirmation bulk
-session deletion (multi-select, counts, current disabled) alongside clear-all/before. Theme (light/dark/system) is
+session deletion (multi-select, counts, current disabled, every selection attempted and partial
+success reported) alongside clear-all/before. Theme (light/dark/system) is
 initialized pre-paint by `public/theme-init.js` to avoid a flash.

@@ -332,6 +332,15 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
             }
         }
 
+        // Per-request names are untrusted cardinality. Existing markers remain usable at
+        // the cap; unseen names fall back to current so capture continues without growing
+        // the marker table or the polled session payload without bound.
+        if (name.Length > SessionLimits.MaxNameLength
+            || ExecuteScalar("SELECT COUNT(*) FROM sessions") >= SessionLimits.MaxMarkers)
+        {
+            return EnsureInitialSession();
+        }
+
         return InsertSession(name, isCurrent: false);
     }
 
@@ -354,7 +363,7 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     /// <see cref="Retention"/> fresh each call, so a live config PUT takes effect on the
     /// very next batch.
     /// </summary>
-    public void EnforceRetention()
+    public void EnforceRetention(IReadOnlySet<long>? protectedSessionIds = null)
     {
         long excess = ExecuteScalar("SELECT COUNT(*) FROM requests") - Retention.MaxRequests;
         if (excess > 0)
@@ -379,7 +388,7 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
             }
         }
 
-        PruneEmptySessions();
+        PruneEmptySessions(protectedSessionIds);
     }
 
     /// <summary>
@@ -427,7 +436,7 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     /// oldest-<c>N</c> limit. <c>incremental_vacuum</c> runs after commit so the file
     /// actually shrinks.
     /// </summary>
-    public int Clear(string? beforeIso)
+    public int Clear(string? beforeIso, IReadOnlySet<long>? protectedSessionIds = null)
     {
         SqliteConnection connection = Connected();
         using SqliteTransaction transaction = connection.BeginTransaction();
@@ -461,7 +470,7 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
         }
 
         transaction.Commit();
-        PruneEmptySessions();
+        PruneEmptySessions(protectedSessionIds);
         Execute("PRAGMA incremental_vacuum");
         return deleted;
     }
@@ -471,7 +480,7 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     /// in one transaction. Checking <c>is_current</c> inside that transaction means a Reset
     /// queued near this command cannot turn an API-side pre-check into deletion of current.
     /// </summary>
-    public SessionDeleteResult DeleteSession(long sessionId)
+    public SessionDeleteResult DeleteSession(long sessionId, IReadOnlySet<long>? protectedSessionIds = null)
     {
         SqliteConnection connection = Connected();
         using SqliteTransaction transaction = connection.BeginTransaction();
@@ -496,6 +505,12 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
         {
             transaction.Rollback();
             return new SessionDeleteResult(SessionDeleteStatus.Current, 0);
+        }
+
+        if (protectedSessionIds?.Contains(sessionId) is true)
+        {
+            transaction.Rollback();
+            return new SessionDeleteResult(SessionDeleteStatus.InUse, 0);
         }
 
         const string matching = "SELECT id FROM requests WHERE session_id = $session_id";
@@ -545,9 +560,28 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     /// Reset-driven current marker is retained even while empty so headerless traffic
     /// always has a valid destination.
     /// </summary>
-    private void PruneEmptySessions() => Execute(
-        "DELETE FROM sessions WHERE is_current = 0 " +
-        "AND NOT EXISTS (SELECT 1 FROM requests WHERE requests.session_id = sessions.id)");
+    private void PruneEmptySessions(IReadOnlySet<long>? protectedSessionIds)
+    {
+        using SqliteCommand command = Connected().CreateCommand();
+        command.CommandText =
+            "DELETE FROM sessions WHERE is_current = 0 " +
+            "AND NOT EXISTS (SELECT 1 FROM requests WHERE requests.session_id = sessions.id)";
+        if (protectedSessionIds is { Count: > 0 })
+        {
+            string[] parameters = new string[protectedSessionIds.Count];
+            int index = 0;
+            foreach (long sessionId in protectedSessionIds)
+            {
+                string name = $"$protected_{index}";
+                parameters[index++] = name;
+                AddTo(command, name).Value = sessionId;
+            }
+
+            command.CommandText += $" AND id NOT IN ({string.Join(", ", parameters)})";
+        }
+
+        command.ExecuteNonQuery();
+    }
 
     private static SqliteParameter AddTo(SqliteCommand command, string name)
     {

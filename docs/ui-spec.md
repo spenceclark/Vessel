@@ -187,8 +187,9 @@ The app stops being full-bleed. It becomes **panels floating on a canvas**:
   separated by hairline dividers, not a run-on text line.
 - **Session picker, bounded.** All sessions and the Reset-driven current marker are
   pinned. Below them, show the newest 15 non-current markers; a type-ahead input filters
-  the complete `GET /sessions` result so older runs remain reachable without an unbounded
-  menu. Each row shows name + id, request count, and relative time of its latest request
+  the bounded `GET /sessions` result (at most 500 markers, with current guaranteed) so
+  recent runs remain reachable without an unbounded menu. Each row shows name + id,
+  request count, and relative time of its latest request
   (falling back to marker creation for an empty current session). It uses the existing
   `Popover` and `Input` primitives and closes after selection.
 - **Session deletion, graduated confirmation.** Non-current picker rows expose a delete
@@ -196,8 +197,9 @@ The app stops being full-bleed. It becomes **panels floating on a canvas**:
   visible request count — `Delete <name> — N requests?` — with Delete/Cancel and no typed phrase.
   The Data panel is the bulk path: a multi-select checklist shows counts, renders current as
   disabled, and one typed `DELETE` confirms the selected batch. Standing rule: typed confirmation
-  for bulk/unbounded deletion; count-showing click-confirm for one named target. Current is never
-  deletable anywhere.
+  for bulk/unbounded deletion; count-showing click-confirm for one named target. Every selected
+  bulk target is attempted, with completed and failed deletions reported separately. Current is
+  never deletable anywhere.
 - **List panel**: search + filter controls live *inside* the panel as its header
   (own bottom border), rows below. Selected row = `--surface-3` fill + 2px accent
   inset bar on the left edge; hover = `--surface-2`.

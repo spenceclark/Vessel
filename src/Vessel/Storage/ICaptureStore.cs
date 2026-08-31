@@ -14,7 +14,7 @@ public interface ICaptureStore
     /// <summary>Inserts the batch and returns each row's new id, in the same order as <paramref name="batch"/>.</summary>
     IReadOnlyList<long> InsertBatch(IReadOnlyList<EnrichedRecord> batch);
 
-    void EnforceRetention();
+    void EnforceRetention(IReadOnlySet<long>? protectedSessionIds = null);
 
     /// <summary>D4 — the newest <c>sessions</c> row, or a freshly created "session 1" on an empty database.</summary>
     SessionInfo EnsureInitialSession();
@@ -41,13 +41,13 @@ public interface ICaptureStore
     /// already reflects the deletion. The returned count is UX only (the "Deleted N" toast).
     /// </para>
     /// </summary>
-    int Clear(string? beforeIso);
+    int Clear(string? beforeIso, IReadOnlySet<long>? protectedSessionIds = null);
 
     /// <summary>
     /// #41 — atomically deletes one non-current session marker together with all of its
     /// request and FTS rows. The current marker is protected at execution time.
     /// </summary>
-    SessionDeleteResult DeleteSession(long sessionId);
+    SessionDeleteResult DeleteSession(long sessionId, IReadOnlySet<long>? protectedSessionIds = null);
 }
 
 public enum SessionDeleteStatus
@@ -55,6 +55,7 @@ public enum SessionDeleteStatus
     Deleted,
     NotFound,
     Current,
+    InUse,
 }
 
 public sealed record SessionDeleteResult(SessionDeleteStatus Status, int Deleted);

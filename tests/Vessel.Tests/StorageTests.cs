@@ -149,6 +149,56 @@ public class StorageTests
     }
 
     [Fact]
+    public void SessionMarkerBounds_ProtectActiveIds_CapNamesAndBoundListing()
+    {
+        string dir = Directory.CreateTempSubdirectory("vessel-store-").FullName;
+        string dbPath = Path.Combine(dir, "vessel.db");
+        try
+        {
+            long listedCurrentId;
+            using (SqliteCaptureStore store = NewStore(dir))
+            {
+                store.Initialize();
+                long protectedId = store.EnsureInitialSession().Id;
+                store.CreateSession("new current");
+                var protectedIds = new HashSet<long> { protectedId };
+
+                store.EnforceRetention(protectedIds);
+                Assert.Equal(0, store.Clear(beforeIso: null, protectedIds));
+                Assert.Equal(
+                    new SessionDeleteResult(SessionDeleteStatus.InUse, 0),
+                    store.DeleteSession(protectedId, protectedIds));
+
+                using (var verify = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+                {
+                    verify.Open();
+                    Assert.Equal(1L, Scalar(verify, $"SELECT COUNT(*) FROM sessions WHERE id = {protectedId}"));
+                }
+
+                for (int i = 2; i < SessionLimits.MaxMarkers; i++)
+                {
+                    store.ResolveNamedSession($"run-{i}");
+                }
+
+                long currentId = store.EnsureInitialSession().Id;
+                Assert.Equal(currentId, store.ResolveNamedSession("one-too-many").Id);
+                Assert.Equal(currentId, store.ResolveNamedSession(new string('x', SessionLimits.MaxNameLength + 1)).Id);
+                listedCurrentId = store.CreateSession("newest current beyond list cap").Id;
+            }
+
+            var readStore = new SqliteReadStore(dbPath);
+            SessionInfo[] listed = readStore.ListSessions();
+            Assert.Equal(SessionLimits.MaxMarkers, listed.Length);
+            Assert.Contains(listed, session => session.Id == listedCurrentId && session.IsCurrent);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void DeleteSession_RemovesRowsFtsAndMarkerAtomically_LeavesOtherAndCurrent()
     {
         string dir = Directory.CreateTempSubdirectory("vessel-store-").FullName;

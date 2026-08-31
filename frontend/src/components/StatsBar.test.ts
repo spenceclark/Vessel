@@ -83,8 +83,12 @@ function renderStatsBar(
   onScopeChange: (scope: number | 'all') => void = () => {},
   sessions: SessionInfo[] = SESSIONS,
   onDataCleared?: (scope: { all: true } | { before: string }) => void,
-  onDeleteSessions: (sessionIds: number[]) => Promise<{ sessionsDeleted: number; requestsDeleted: number }>
-    = async (sessionIds) => ({ sessionsDeleted: sessionIds.length, requestsDeleted: 0 }),
+  onDeleteSessions: (sessionIds: number[]) => Promise<{
+    sessionsDeleted: number
+    requestsDeleted: number
+    failures: { sessionId: number; message: string }[]
+  }>
+    = async (sessionIds) => ({ sessionsDeleted: sessionIds.length, requestsDeleted: 0, failures: [] }),
 ) {
   vi.spyOn(api, 'getStats').mockResolvedValue(STATS)
   vi.spyOn(api, 'getStatus').mockResolvedValue(payload)
@@ -153,7 +157,7 @@ describe('StatsBar session picker (issue #29)', () => {
 
 describe('Session deletion UX (issue #41 feedback)', () => {
   it('confirms one non-current picker row by visible request count without typing', async () => {
-    const onDeleteSessions = vi.fn(async () => ({ sessionsDeleted: 1, requestsDeleted: 8 }))
+    const onDeleteSessions = vi.fn(async () => ({ sessionsDeleted: 1, requestsDeleted: 8, failures: [] }))
     renderStatsBar(
       status({ firstRun: false, defaultBackendReachable: null }),
       () => {},
@@ -183,7 +187,11 @@ describe('Session deletion UX (issue #41 feedback)', () => {
       },
       { ...SESSIONS[1] },
     ]
-    const onDeleteSessions = vi.fn(async () => ({ sessionsDeleted: 2, requestsDeleted: 10 }))
+    const onDeleteSessions = vi.fn(async () => ({
+      sessionsDeleted: 1,
+      requestsDeleted: 8,
+      failures: [{ sessionId: 4, message: 'session is in use' }],
+    }))
     renderStatsBar(
       status({ firstRun: false, defaultBackendReachable: null }),
       () => {},
@@ -207,7 +215,9 @@ describe('Session deletion UX (issue #41 feedback)', () => {
     fireEvent.click(confirm)
 
     await waitFor(() => expect(onDeleteSessions).toHaveBeenCalledWith([3, 4]))
-    expect(await screen.findByText('Deleted 2 sessions and 10 requests.')).toBeTruthy()
+    expect(await screen.findByText(
+      'Deleted 1 session and 8 requests. Failed to delete 1 session: run-43 (session is in use).',
+    )).toBeTruthy()
   })
 })
 

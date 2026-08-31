@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Vessel.Config;
+using Vessel.Storage;
 using Xunit;
 
 namespace Vessel.Tests;
@@ -431,6 +432,16 @@ public class ApiTests
         Assert.NotEqual(firstSessionId, secondSessionId);
         Assert.Equal("second", created.GetProperty("name").GetString());
 
+        // Review finding: Reset makes the old marker non-current while this request still
+        // holds its start-time id. Neither explicit delete nor clear's empty-marker pruning
+        // may remove that FK target before the request finishes.
+        using HttpResponseMessage protectedDelete = await client.DeleteAsync(
+            $"{vessel.BaseUrl}/vessel/api/sessions/{firstSessionId}", CT);
+        Assert.Equal(HttpStatusCode.Conflict, protectedDelete.StatusCode);
+        using HttpResponseMessage clear = await client.DeleteAsync(
+            $"{vessel.BaseUrl}/vessel/api/requests?scope=all", CT);
+        Assert.Equal(HttpStatusCode.OK, clear.StatusCode);
+
         using HttpResponseMessage inFlightResp = await inFlight;
         Assert.Equal(HttpStatusCode.OK, inFlightResp.StatusCode);
 
@@ -510,6 +521,30 @@ public class ApiTests
         JsonElement currentAfterHeaderless = await GetJson(
             client, $"{vessel.BaseUrl}/vessel/api/stats?session={currentSessionId}", CT);
         Assert.Equal(1, currentAfterHeaderless.GetProperty("total").GetInt64());
+    }
+
+    [Fact]
+    public async Task SessionNames_AreBoundedAtTheProxyAndResetApi()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+        string overlong = new('x', SessionLimits.MaxNameLength + 1);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{vessel.BaseUrl}/api/chat?overlong-session");
+        request.Headers.TryAddWithoutValidation("X-Vessel-Session", overlong);
+        using HttpResponseMessage response = await client.SendAsync(request, CT);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        CapturedRow row = await CaptureDb.WaitForRow(vessel.DbPath, captured => captured.Path.Contains("overlong-session"));
+
+        JsonElement sessions = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/sessions", CT);
+        JsonElement current = sessions.EnumerateArray().Single(session => session.GetProperty("isCurrent").GetBoolean());
+        Assert.Equal(current.GetProperty("id").GetInt64(), row.SessionId);
+        Assert.DoesNotContain(sessions.EnumerateArray(), session => session.GetProperty("name").GetString() == overlong);
+
+        using HttpResponseMessage reset = await client.PostAsJsonAsync(
+            $"{vessel.BaseUrl}/vessel/api/sessions", new { name = overlong }, CT);
+        Assert.Equal(HttpStatusCode.BadRequest, reset.StatusCode);
+        Assert.Equal("invalid_request", reset.Headers.GetValues("X-Vessel-Error").Single());
     }
 
     // C1 (phase-4 carry-in): a non-numeric or overflowing id must 404, not 500.

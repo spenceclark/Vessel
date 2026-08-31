@@ -94,6 +94,15 @@ export default function App() {
 
   const handleReset = useCallback(async () => {
     const session = await api.createSession()
+    // Seed the returned marker before selecting it. Without this, the orphan-scope effect
+    // observes the previous list for one render and immediately bounces Reset back to old current.
+    queryClient.setQueryData<SessionInfo[]>(['sessions'], (sessions) => [
+      session,
+      ...(sessions ?? []).filter((candidate) => candidate.id !== session.id).map((candidate) => ({
+        ...candidate,
+        isCurrent: false,
+      })),
+    ])
     setScope(session.id)
     setSelection(null)
     await queryClient.invalidateQueries({ queryKey: ['sessions'] })
@@ -145,26 +154,30 @@ export default function App() {
 
   const handleDeleteSessions = useCallback(async (sessionIds: number[]): Promise<SessionDeleteSummary> => {
     const deletedIds: number[] = []
+    const failures: { sessionId: number; message: string }[] = []
     let requestsDeleted = 0
-    try {
-      for (const sessionId of sessionIds) {
+    for (const sessionId of sessionIds) {
+      try {
         const result = await api.deleteSession(sessionId)
         deletedIds.push(sessionId)
         requestsDeleted += result.deleted
-      }
-    } finally {
-      if (deletedIds.length > 0) {
-        handleSessionsDeleted(deletedIds)
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['requests'] }),
-          queryClient.invalidateQueries({ queryKey: ['stats'] }),
-          queryClient.invalidateQueries({ queryKey: ['facets'] }),
-          queryClient.invalidateQueries({ queryKey: ['sessions'] }),
-        ])
+      } catch (error) {
+        failures.push({
+          sessionId,
+          message: error instanceof Error ? error.message : 'Failed to delete session.',
+        })
       }
     }
 
-    return { sessionsDeleted: deletedIds.length, requestsDeleted }
+    if (deletedIds.length > 0) handleSessionsDeleted(deletedIds)
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['requests'] }),
+      queryClient.invalidateQueries({ queryKey: ['stats'] }),
+      queryClient.invalidateQueries({ queryKey: ['facets'] }),
+      queryClient.invalidateQueries({ queryKey: ['sessions'] }),
+    ])
+
+    return { sessionsDeleted: deletedIds.length, requestsDeleted, failures }
   }, [handleSessionsDeleted, queryClient])
 
   return (

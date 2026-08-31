@@ -47,10 +47,15 @@ export function DataPanel({
     setMessage(null)
     try {
       const result = await onDeleteSessions(sessionIds)
-      setMessage(
+      const success =
         `Deleted ${result.sessionsDeleted} session${result.sessionsDeleted === 1 ? '' : 's'} and `
-        + `${result.requestsDeleted} request${result.requestsDeleted === 1 ? '' : 's'}.`,
-      )
+        + `${result.requestsDeleted} request${result.requestsDeleted === 1 ? '' : 's'}.`
+      const failure = result.failures.length === 0
+        ? ''
+        : ` Failed to delete ${result.failures.length} session${result.failures.length === 1 ? '' : 's'}: ${result.failures
+          .map(({ sessionId, message }) => `${sessions.find((session) => session.id === sessionId)?.name?.trim() || `#${sessionId}`} (${message})`)
+          .join(', ')}.`
+      setMessage(success + failure)
       reset()
     } catch (err) {
       setMessage(err instanceof ApiError ? err.message : 'Failed to delete session.')

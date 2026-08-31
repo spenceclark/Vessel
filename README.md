@@ -81,6 +81,10 @@ does not change the Reset-driven session used by headerless traffic:
 curl http://127.0.0.1:4550/api/chat -H "X-Vessel-Session: run-42" -d '...'
 ```
 
+Session names are limited to 128 characters and Vessel retains at most 500 session
+markers. At that cap, requests for unseen names are captured in the current session;
+existing named sessions continue to work.
+
 Both compose: `/b/ollama/t/planner/api/chat`. Routing precedence is `/b/{backend}/…`,
 then `X-Vessel-Backend`, then the default backend. Vessel strips its own `X-Vessel-*`
 headers before forwarding — backends never see them.

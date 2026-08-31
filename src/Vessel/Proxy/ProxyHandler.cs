@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Vessel.Api;
 using Vessel.Capture;
 using Vessel.Config;
+using Vessel.Storage;
 using Yarp.ReverseProxy.Forwarder;
 
 namespace Vessel.Proxy;
@@ -198,7 +199,7 @@ public sealed class ProxyHandler
     private static string? ParseSessionName(IHeaderDictionary headers)
     {
         string? name = headers[SessionHeader].FirstOrDefault()?.Trim();
-        return string.IsNullOrEmpty(name) ? null : name;
+        return string.IsNullOrEmpty(name) || name.Length > SessionLimits.MaxNameLength ? null : name;
     }
 
     /// <summary>

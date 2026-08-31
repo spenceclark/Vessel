@@ -187,6 +187,7 @@ export type RequestClearScope = { all: true } | { before: string }
 export interface SessionDeleteSummary {
   sessionsDeleted: number
   requestsDeleted: number
+  failures: { sessionId: number; message: string }[]
 }
 
 /**

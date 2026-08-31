@@ -75,7 +75,7 @@ public class CaptureWriterResilienceTests : IDisposable
             }
         }
 
-        public void EnforceRetention()
+        public void EnforceRetention(IReadOnlySet<long>? protectedSessionIds = null)
         {
         }
 
@@ -88,9 +88,9 @@ public class CaptureWriterResilienceTests : IDisposable
         public SessionInfo ResolveNamedSession(string name) =>
             new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name, false, 0, null);
 
-        public int Clear(string? beforeIso) => 0;
+        public int Clear(string? beforeIso, IReadOnlySet<long>? protectedSessionIds = null) => 0;
 
-        public SessionDeleteResult DeleteSession(long sessionId) =>
+        public SessionDeleteResult DeleteSession(long sessionId, IReadOnlySet<long>? protectedSessionIds = null) =>
             new(SessionDeleteStatus.Deleted, 0);
 
         public int SnapshotAttempts()
@@ -389,7 +389,7 @@ public class CaptureWriterResilienceTests : IDisposable
             }
         }
 
-        public void EnforceRetention()
+        public void EnforceRetention(IReadOnlySet<long>? protectedSessionIds = null)
         {
         }
 
@@ -402,7 +402,7 @@ public class CaptureWriterResilienceTests : IDisposable
         public SessionInfo ResolveNamedSession(string name) =>
             new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name, false, 0, null);
 
-        public int Clear(string? beforeIso)
+        public int Clear(string? beforeIso, IReadOnlySet<long>? protectedSessionIds = null)
         {
             lock (_lock)
             {
@@ -413,7 +413,7 @@ public class CaptureWriterResilienceTests : IDisposable
             }
         }
 
-        public SessionDeleteResult DeleteSession(long sessionId)
+        public SessionDeleteResult DeleteSession(long sessionId, IReadOnlySet<long>? protectedSessionIds = null)
         {
             lock (_lock)
             {
