@@ -128,6 +128,9 @@ export const api = {
     return request<ClearResponse>(`/requests?${qs}`, { method: 'DELETE' })
   },
 
+  deleteSession: (sessionId: number) =>
+    request<ClearResponse>(`/sessions/${sessionId}`, { method: 'DELETE' }),
+
   getConfig: () => request<ConfigGetResponse>('/config'),
 
   putConfig: (config: VesselConfigDto) =>

@@ -23,6 +23,13 @@ public interface ICaptureStore
     SessionInfo CreateSession(string? name);
 
     /// <summary>
+    /// Resolves a per-request session name to its existing marker, or creates it on first
+    /// sight. Called only by the capture writer, so lookup-or-create needs no second lock.
+    /// It does not change the Reset-driven current session.
+    /// </summary>
+    SessionInfo ResolveNamedSession(string name);
+
+    /// <summary>
     /// D6 — deletes <c>requests</c> rows (and their FTS rows) matching
     /// <paramref name="beforeIso"/>, or every row when null, and returns the row count.
     /// <para>
@@ -35,4 +42,19 @@ public interface ICaptureStore
     /// </para>
     /// </summary>
     int Clear(string? beforeIso);
+
+    /// <summary>
+    /// #41 — atomically deletes one non-current session marker together with all of its
+    /// request and FTS rows. The current marker is protected at execution time.
+    /// </summary>
+    SessionDeleteResult DeleteSession(long sessionId);
 }
+
+public enum SessionDeleteStatus
+{
+    Deleted,
+    NotFound,
+    Current,
+}
+
+public sealed record SessionDeleteResult(SessionDeleteStatus Status, int Deleted);

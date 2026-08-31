@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type {
   CompletedEvent,
+  ClearedEvent,
   FirstTokenEvent,
   HelloEvent,
   RequestReadyEvent,
@@ -10,7 +11,8 @@ import type {
 export interface InFlightRequest {
   seq: number
   startedAt: string
-  sessionId: number
+  sessionId: number | null
+  sessionName: string | null
   method: string
   path: string
   backend: string
@@ -32,8 +34,8 @@ export interface EventHandlers {
   onRequestReady: (data: RequestReadyEvent, id: number) => void
   onFirstToken: (data: FirstTokenEvent, id: number) => void
   onCompleted: (data: CompletedEvent, id: number) => void
-  /** H0a/R23/J0 — history was cleared at this position; the frame itself carries no payload. */
-  onCleared: (id: number) => void
+  /** H0a/R23/J0/#41 — history was cleared at this position, optionally for one session. */
+  onCleared: (data: ClearedEvent, id: number) => void
   /** H0b — the first frame of every connection: this process's run id (a change means a restart). */
   onHello: (data: HelloEvent) => void
   /** R11 — frames were dropped between the last one and this one; the caller must reconcile. */
@@ -125,9 +127,9 @@ export function useEvents(handlers: EventHandlers) {
     )
     // `cleared` is a real published frame (it carries an `id:`), so it flows through `receive`
     // and participates in gap detection — a dropped clear is detectable like any other loss.
-    // Its position is the only thing it carries; the payload is empty (J0).
+    // Global/before clears carry an empty payload; session deletion carries its exact id.
     source.addEventListener('cleared', (e: MessageEvent<string>) =>
-      receive<unknown>(e, (_data, id) => handlersRef.current.onCleared(id)),
+      receive<ClearedEvent>(e, (data, id) => handlersRef.current.onCleared(data, id)),
     )
     // `hello` deliberately carries no `id:` (see the server), so it must NOT go through
     // `receive` — it is server identity, not a lifecycle frame, and must never move the gap

@@ -10,8 +10,10 @@ namespace Vessel.Capture;
 /// transformer can stamp the overhead mark, and turned into a <see cref="CaptureRecord"/>
 /// once the response is complete. <see cref="Seq"/> is a process-lifetime counter — the
 /// correlation key the SSE feed uses before a request has a DB id (D5); <see cref="SessionId"/>
-/// is captured from <c>CurrentSession</c> once, here, so a record enqueued before a session
-/// reset keeps the session it started in even if it doesn't flush until after (D4).
+/// is captured from <c>CurrentSession</c> once, here, so a headerless record enqueued before a
+/// session reset keeps the session it started in even if it doesn't flush until after (D4).
+/// <see cref="SessionName"/> carries an optional per-request named-session selector; the writer
+/// resolves that name to an id without changing the Reset-driven current session.
 /// </summary>
 public sealed class CaptureContext
 {
@@ -24,9 +26,11 @@ public sealed class CaptureContext
     private readonly RequestModelSnifferService? _modelSniffer;
 
     public CaptureContext(
-        long maxBodyBytes, long sessionId, CaptureEvents events, RequestModelSnifferService? modelSniffer = null)
+        long maxBodyBytes, long sessionId, CaptureEvents events, RequestModelSnifferService? modelSniffer = null,
+        string? sessionName = null)
     {
         SessionId = sessionId;
+        SessionName = sessionName;
         _events = events;
         _modelSniffer = modelSniffer;
         RequestBuffer = new CaptureBuffer(maxBodyBytes);
@@ -42,6 +46,8 @@ public sealed class CaptureContext
     public long Seq { get; private set; }
 
     public long SessionId { get; }
+
+    public string? SessionName { get; }
 
     public string StartedAtIso => _startedAtUtc.ToString("o");
 
@@ -83,7 +89,9 @@ public sealed class CaptureContext
     /// backend and tags are known, and before anything reads <see cref="Seq"/>.
     /// </summary>
     public void Register(string method, string path, string backend, string[] tags, long? replayOf) =>
-        Seq = _events.Register(StartedAtIso, SessionId, method, path, backend, tags, replayOf);
+        Seq = _events.Register(
+            StartedAtIso, SessionName is null ? SessionId : null,
+            method, path, backend, tags, replayOf, sessionName: SessionName);
 
     private double ElapsedMs => Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
 
@@ -166,6 +174,7 @@ public sealed class CaptureContext
             StartedAt: StartedAtIso,
             Seq: Seq,
             SessionId: SessionId,
+            SessionName: SessionName,
             Backend: decision.Backend?.Name ?? decision.RequestedName ?? "",
             TagsJson: decision.Tags.Length == 0
                 ? null

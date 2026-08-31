@@ -145,6 +145,7 @@ public static class VesselApp
         app.MapGet("/vessel/api/stats", (RequestDelegate)StatsEndpoint.Handle);
         app.MapGet("/vessel/api/sessions", (RequestDelegate)SessionsEndpoints.List);
         app.MapPost("/vessel/api/sessions", (RequestDelegate)SessionsEndpoints.Create);
+        app.MapDelete("/vessel/api/sessions/{id:long}", (RequestDelegate)SessionsEndpoints.Delete);
         app.MapGet("/vessel/api/config", (RequestDelegate)ConfigEndpoints.Get);
         app.MapPut("/vessel/api/config", (RequestDelegate)ConfigEndpoints.Put);
         app.MapGet("/vessel/api/events", (RequestDelegate)EventsEndpoint.Handle);

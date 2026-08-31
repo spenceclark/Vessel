@@ -114,4 +114,49 @@ public class ClearTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal("invalid_request", response.Headers.GetValues("X-Vessel-Error").Single());
     }
+
+    [Fact]
+    public async Task DeleteSession_RunsAsScopedClear_ProtectsCurrentAndReportsMissing()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        using HttpResponseMessage currentRequest = await client.GetAsync($"{vessel.BaseUrl}/api/chat?current", CT);
+        Assert.Equal(HttpStatusCode.OK, currentRequest.StatusCode);
+
+        using var namedRequest = new HttpRequestMessage(HttpMethod.Get, $"{vessel.BaseUrl}/api/chat?named");
+        namedRequest.Headers.Add("X-Vessel-Session", "delete-me");
+        using HttpResponseMessage namedResponse = await client.SendAsync(namedRequest, CT);
+        Assert.Equal(HttpStatusCode.OK, namedResponse.StatusCode);
+        await CaptureDb.WaitUntil(vessel.DbPath, rows => rows.Count, count => count >= 2);
+
+        using HttpResponseMessage listResponse = await client.GetAsync($"{vessel.BaseUrl}/vessel/api/sessions", CT);
+        using JsonDocument sessions = JsonDocument.Parse(await listResponse.Content.ReadAsStringAsync(CT));
+        JsonElement named = sessions.RootElement.EnumerateArray()
+            .Single(session => session.GetProperty("name").GetString() == "delete-me");
+        JsonElement current = sessions.RootElement.EnumerateArray()
+            .Single(session => session.GetProperty("isCurrent").GetBoolean());
+        long namedId = named.GetProperty("id").GetInt64();
+        long currentId = current.GetProperty("id").GetInt64();
+
+        using HttpResponseMessage deleted = await client.DeleteAsync(
+            $"{vessel.BaseUrl}/vessel/api/sessions/{namedId}", CT);
+        Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+        Assert.Equal(1, await DeletedCount(deleted, CT));
+        Assert.Single(CaptureDb.Query(vessel.DbPath));
+
+        using HttpResponseMessage afterResponse = await client.GetAsync($"{vessel.BaseUrl}/vessel/api/sessions", CT);
+        using JsonDocument after = JsonDocument.Parse(await afterResponse.Content.ReadAsStringAsync(CT));
+        Assert.DoesNotContain(after.RootElement.EnumerateArray(), session => session.GetProperty("id").GetInt64() == namedId);
+
+        using HttpResponseMessage currentDelete = await client.DeleteAsync(
+            $"{vessel.BaseUrl}/vessel/api/sessions/{currentId}", CT);
+        Assert.Equal(HttpStatusCode.Conflict, currentDelete.StatusCode);
+        Assert.Equal("invalid_request", currentDelete.Headers.GetValues("X-Vessel-Error").Single());
+
+        using HttpResponseMessage missing = await client.DeleteAsync(
+            $"{vessel.BaseUrl}/vessel/api/sessions/999999", CT);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        Assert.Equal("not_found", missing.Headers.GetValues("X-Vessel-Error").Single());
+    }
 }

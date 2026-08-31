@@ -111,6 +111,16 @@ Free-form labels (e.g. agent name) that flow to the UI and are filterable:
 - **Header**: `X-Vessel-Tags: planner,run-42` (comma-separated).
 - **Path**: `/t/{tag}/…`, composable with backend prefix: `/b/ollama/t/planner/api/chat`.
 
+### 3.3.1 Named sessions
+
+`X-Vessel-Session: {name}` assigns only that request to the exact, case-sensitive
+session name. The capture record carries the name to the single writer, which looks it
+up or creates it on first sight before inserting the capture. This is never a process-wide
+session switch: concurrent clients can use different names without interfering, while
+headerless requests continue to use the Reset-driven current session. Blank or
+whitespace-only values behave as if the header were absent. Replay deliberately remains
+headerless and therefore lands in the current session.
+
 ### 3.4 Forward-as-is
 
 - All request headers and the body are forwarded verbatim, **except** `X-Vessel-*` headers,
@@ -195,8 +205,9 @@ it, or (when capture admission is closed) `ProxyHandler` and the writer's drain 
 guarded span covers request preparation too — so a `seq` can never leak in the active set while
 forwarding stays independent of capture health. Clearing is the in-band `cleared` event,
 published under the same lock as `completed` so it orders correctly against them, and it
-carries **no payload**: the client drops the rows and buffered completions it holds at that
-position and refetches, and REST reads are authoritative and never client-filtered. That
+carries no payload for all/before clears; a session-scoped clear carries the exact
+`sessionId` predicate. The client drops the matching cached rows and buffered completions at
+that position and refetches, and REST reads remain authoritative. That
 refetch cancels any outstanding list read first, because a pending initial fetch would
 otherwise be reused rather than superseded, and its pre-clear snapshot would win. Earlier
 rounds tried to ship the deletion *predicate* to the client (an id boundary, then a versioned
@@ -312,7 +323,8 @@ CREATE INDEX ix_requests_session ON requests(session_id);
 CREATE TABLE sessions (
     id          INTEGER PRIMARY KEY,
     started_at  TEXT NOT NULL,
-    name        TEXT
+    name        TEXT,
+    is_current  INTEGER NOT NULL DEFAULT 0
 );
 
 -- full-text search over flattened prompt/response text
@@ -333,15 +345,34 @@ therefore show a different capture's body under an id it already had open. Decis
 schema migration for guaranteed non-reuse — that needs `AUTOINCREMENT` plus a rebuild
 migration for existing databases, and the actual failure mode only reaches a **stale
 already-open tab**, not a freshly-loaded one. The client-side fix instead: any clear
-(all/before) evicts every cached `['request', *]` detail and clears the selection when
+(all/before/session) evicts every cached `['request', *]` detail and clears the selection when
 the clear reached it (ui-spec/App.tsx, code review R14a) — closing the practical exposure
 without a migration. Revisit `AUTOINCREMENT` only if id reuse causes a real incident.
 
 ### 6.3 Sessions
 
-A session is a marker row, nothing more. "Reset session" inserts a new `sessions` row;
-subsequent requests reference it; the session stats bar aggregates
-`WHERE session_id = current`. History across old sessions is preserved and browsable.
+A session is a marker row. "Reset session" inserts a new row, marks it as the one
+Reset-driven current session, and headerless requests reference it. A named request
+instead resolves its captured `X-Vessel-Session` name to an existing row (newest exact
+match) or creates a non-current row on the single writer. Persisting `is_current` is
+necessary because a named row may be newer without becoming the headerless default.
+The UI session picker lists every marker newest-first (name plus id, with current
+identified), pins Current and All, and shows the 15 most recent other sessions with
+type-ahead over the full set. Each entry includes request count and relative last activity.
+It scopes both history and the stats bar to the selected id; “All sessions” removes the
+scope. `started` and recovery descriptors carry the exact session name while its id is
+writer-unknown, so an existing named session can show its in-flight rows. The first request
+for a brand-new name appears under All until its marker is inserted and the picker refreshes.
+History is never lost by resetting or switching.
+
+Retention and clear passes prune session markers with no remaining requests, except for
+the current marker, which must remain a valid destination for headerless traffic.
+Explicit session deletion is a scoped clear: `DELETE /vessel/api/sessions/{id}` removes
+that non-current marker, all of its request rows, and matching FTS rows in one writer-thread
+transaction. A replay in another session survives with `replay_of` cleared when its original
+is deleted, preserving both the row and referential integrity. The current marker is rejected at execution time. Its ordered `cleared
+{sessionId}` frame removes only that session from connected clients; the authoritative
+refetch and snapshot recovery rules are otherwise unchanged.
 
 ### 6.4 Retention
 
@@ -351,7 +382,9 @@ Two independent, configurable caps, enforced by the writer after each batch:
 - `maxDbSizeMb` (default 500) — delete oldest rows until under the cap.
 
 `PRAGMA auto_vacuum = INCREMENTAL` with periodic `incremental_vacuum` returns space
-without blocking. UI offers **Clear all** and **Clear before date**.
+without blocking. The Data panel offers **Clear all**, **Clear before date**, and typed-confirmation
+bulk deletion for selected non-current sessions. A single non-current picker row instead uses a
+lightweight Delete/Cancel confirmation that shows its request count; current has no affordance.
 
 ---
 
@@ -367,7 +400,8 @@ Everything Vessel-owned lives under `/vessel/` (impossible to collide with `/v1/
 | `GET /vessel/api/requests/{id}` | full detail, bodies decompressed |
 | `POST /vessel/api/requests/{id}/replay` | re-send captured request; body may override `backend` and/or `model`; result is a new request row with `replay_of` set |
 | `GET /vessel/api/requests/{id}/replays` | direct replay children, for Compare entry points |
-| `GET /vessel/api/sessions` · `POST /vessel/api/sessions` | list / reset (create marker) |
+| `GET /vessel/api/sessions` · `POST /vessel/api/sessions` | newest-first list (`isCurrent`, request count, last-request time) / reset (create + activate marker) |
+| `DELETE /vessel/api/sessions/{id}` | delete one non-current session marker with all request + FTS rows as a writer-scoped clear |
 | `GET /vessel/api/stats?session=` | totals, failures, avg latency / tok/s / ttft, token totals in/out/cached (accepted scope, post-Phase-4 addition — phase-3.md D3) |
 | `GET /vessel/api/events` | SSE lifecycle feed: `hello`, `started`, `request_ready`, `first_token`, `completed`, `cleared` (§4.4) |
 | `GET /vessel/api/active` | recovery snapshot `{ active, logPosition, serverRunId }` — the in-flight requests as displayable descriptors, and the log position that set is true as of (§4.4, Batch F/H/I/J/K) |
@@ -562,8 +596,8 @@ into the list. TanStack Virtual for the history list (10k rows must scroll smoot
 
 ### Views
 
-- **Header bar** — session stats (requests, failures, avg latency, avg tok/s, avg TTFT),
-  Reset Session, backend health dots.
+- **Header bar** — selected-session stats (requests, failures, avg latency, avg tok/s,
+  avg TTFT), newest-first session picker, Reset Session, backend health dots.
 - **History list** (left) — reverse-chronological, virtualized, live. Row: path, model,
   duration, tok/s, tags, warning badge. Filter bar: free text (FTS), backend, model, tag,
   status, warnings-only.

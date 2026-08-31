@@ -1,24 +1,29 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/api/client'
+import type { RequestClearScope, SessionDeleteSummary, SessionInfo } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 const CONFIRM_WORD = 'DELETE'
 
 /**
- * D6 — Clear all / Clear before date, the product's only destructive surface. Each
- * action is behind a typed-confirmation step (type "DELETE" to enable Confirm) rather
- * than a single click.
+ * D6/#41 — bulk or unbounded deletion lives here and requires typed confirmation.
+ * Single-session deletion uses the count-confirm flow in the session picker.
  */
 export function DataPanel({
+  sessions,
   onCleared,
+  onDeleteSessions,
 }: {
-  onCleared?: (scope: { all: true } | { before: string }) => void
+  sessions: SessionInfo[]
+  onCleared?: (scope: RequestClearScope) => void
+  onDeleteSessions: (sessionIds: number[]) => Promise<SessionDeleteSummary>
 }) {
   const queryClient = useQueryClient()
-  const [mode, setMode] = useState<'idle' | 'all' | 'before'>('idle')
+  const [mode, setMode] = useState<'idle' | 'all' | 'before' | 'session'>('idle')
   const [beforeDate, setBeforeDate] = useState('')
+  const [sessionIds, setSessionIds] = useState<number[]>([])
   const [confirmText, setConfirmText] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
@@ -26,6 +31,33 @@ export function DataPanel({
   function reset() {
     setMode('idle')
     setConfirmText('')
+    setSessionIds([])
+  }
+
+  function begin(nextMode: 'all' | 'before' | 'session') {
+    setMode(nextMode)
+    setMessage(null)
+    setConfirmText('')
+    if (nextMode !== 'session') setSessionIds([])
+  }
+
+  async function runSessionDelete() {
+    if (sessionIds.length === 0) return
+    setBusy(true)
+    setMessage(null)
+    try {
+      const result = await onDeleteSessions(sessionIds)
+      setMessage(
+        `Deleted ${result.sessionsDeleted} session${result.sessionsDeleted === 1 ? '' : 's'} and `
+        + `${result.requestsDeleted} request${result.requestsDeleted === 1 ? '' : 's'}.`,
+      )
+      reset()
+    } catch (err) {
+      setMessage(err instanceof ApiError ? err.message : 'Failed to delete session.')
+      reset()
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function runClear(scope: { all: true } | { before: string }) {
@@ -53,11 +85,14 @@ export function DataPanel({
   }
 
   const canConfirm = confirmText === CONFIRM_WORD && !busy
+  const deletableSessions = sessions.filter((session) => !session.isCurrent)
+  const selectedSessions = deletableSessions.filter((session) => sessionIds.includes(session.id))
+  const selectedRequestCount = selectedSessions.reduce((sum, session) => sum + session.requestCount, 0)
 
   return (
     <div className="flex flex-col gap-4 text-sm">
       <p className="text-text-muted">
-        Deleting captured requests is permanent and cannot be undone. This is the only destructive action in Vessel.
+        Bulk deletion is permanent and cannot be undone. Review the scope and request counts before confirming.
       </p>
 
       {message && <div className="rounded-control border border-border bg-surface-2 px-3 py-2 text-xs text-text">{message}</div>}
@@ -65,7 +100,7 @@ export function DataPanel({
       <div className="flex flex-col gap-2 rounded-control border border-border p-3">
         <div className="font-medium text-text">Clear all requests</div>
         {mode !== 'all' ? (
-          <Button variant="destructive" className="w-fit" onClick={() => { setMode('all'); setMessage(null) }}>
+          <Button variant="destructive" className="w-fit" onClick={() => begin('all')}>
             Clear all…
           </Button>
         ) : (
@@ -82,9 +117,61 @@ export function DataPanel({
       </div>
 
       <div className="flex flex-col gap-2 rounded-control border border-border p-3">
+        <div className="font-medium text-text">Delete sessions</div>
+        <p className="text-xs text-text-muted">
+          Select one or more sessions to permanently delete their markers and captured requests. Current is protected.
+        </p>
+        {mode !== 'session' ? (
+          <Button
+            variant="destructive"
+            className="w-fit"
+            disabled={deletableSessions.length === 0}
+            onClick={() => begin('session')}
+          >
+            Delete sessions…
+          </Button>
+        ) : (
+          <>
+            <div className="max-h-56 overflow-y-auto rounded-control border border-border bg-surface-2 p-1" aria-label="Sessions to delete">
+              {sessions.map((session) => (
+                <label
+                  key={session.id}
+                  className="flex items-center gap-2 rounded-control px-2 py-1.5 hover:bg-surface-3 has-disabled:opacity-50"
+                >
+                  <input
+                    type="checkbox"
+                    checked={sessionIds.includes(session.id)}
+                    disabled={session.isCurrent || busy}
+                    onChange={(event) => setSessionIds((selected) => event.target.checked
+                      ? [...selected, session.id]
+                      : selected.filter((id) => id !== session.id))}
+                  />
+                  <span className="min-w-0 flex-1 truncate font-mono text-sm text-text">
+                    {session.name?.trim() || `Session #${session.id}`} · #{session.id}{session.isCurrent ? ' · current' : ''}
+                  </span>
+                  <span className="shrink-0 text-xs text-text-muted">
+                    {session.requestCount} request{session.requestCount === 1 ? '' : 's'}
+                  </span>
+                </label>
+              ))}
+            </div>
+            <ConfirmBlock
+              label={`Type "${CONFIRM_WORD}" to permanently delete ${selectedSessions.length} session${selectedSessions.length === 1 ? '' : 's'} and ${selectedRequestCount} request${selectedRequestCount === 1 ? '' : 's'}.`}
+              confirmText={confirmText}
+              onConfirmTextChange={setConfirmText}
+              canConfirm={canConfirm && selectedSessions.length > 0}
+              busy={busy}
+              onConfirm={runSessionDelete}
+              onCancel={reset}
+            />
+          </>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-2 rounded-control border border-border p-3">
         <div className="font-medium text-text">Clear before date</div>
         {mode !== 'before' ? (
-          <Button className="w-fit" onClick={() => { setMode('before'); setMessage(null) }}>
+          <Button className="w-fit" onClick={() => begin('before')}>
             Clear before…
           </Button>
         ) : (

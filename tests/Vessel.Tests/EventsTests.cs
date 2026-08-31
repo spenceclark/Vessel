@@ -18,6 +18,50 @@ public class EventsTests
     private static CancellationToken CT => TestContext.Current.CancellationToken;
 
     [Fact]
+    public async Task Cleared_SessionDeleteCarriesExactPredicate_GlobalClearStaysEmpty()
+    {
+        var hub = new CaptureEvents();
+        using CaptureSubscription subscription = hub.Subscribe();
+
+        hub.Cleared(42);
+        hub.Cleared();
+
+        SseEvent scoped = await subscription.Reader.ReadAsync(CT);
+        Assert.Equal("cleared", scoped.Name);
+        using (JsonDocument payload = JsonDocument.Parse(scoped.Json))
+        {
+            Assert.Equal(42, payload.RootElement.GetProperty("sessionId").GetInt64());
+        }
+
+        SseEvent global = await subscription.Reader.ReadAsync(CT);
+        Assert.Equal("{}", global.Json);
+        Assert.True(scoped.Id < global.Id);
+    }
+
+    [Fact]
+    public async Task NamedSession_IsPresentInStartedAndRecoveryDescriptorBeforeIdResolution()
+    {
+        var hub = new CaptureEvents();
+        using CaptureSubscription subscription = hub.Subscribe();
+
+        long seq = hub.Register(
+            "2026-08-29T00:00:01.0000000Z", null, "POST", "/api/chat", "stub", [],
+            sessionName: "run-42");
+
+        SseEvent started = await subscription.Reader.ReadAsync(CT);
+        using JsonDocument payload = JsonDocument.Parse(started.Json);
+        Assert.Equal(JsonValueKind.Null, payload.RootElement.GetProperty("sessionId").ValueKind);
+        Assert.Equal("run-42", payload.RootElement.GetProperty("sessionName").GetString());
+
+        ActiveDescriptor descriptor = Assert.Single(hub.GetActiveRequests().Active);
+        Assert.Equal(seq, descriptor.Seq);
+        Assert.Null(descriptor.SessionId);
+        Assert.Equal("run-42", descriptor.SessionName);
+
+        hub.Completed(seq, null);
+    }
+
+    [Fact]
     public async Task ReplayCorrelation_IsPresentInStartedAndFrameLossRecoveryDescriptor()
     {
         var hub = new CaptureEvents();

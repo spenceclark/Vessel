@@ -182,9 +182,22 @@ The app stops being full-bleed. It becomes **panels floating on a canvas**:
 - The **viewport never scrolls**. Panels scroll internally (list rows; detail tab
   content). Header panel and the list panel's filter area are always visible.
 - **Header panel** (was the full-width StatsBar): a real panel — mark + wordmark on
-  the left; stat group center-left; session scope toggle, Reset, gear, backend
+  the left; stat group center-left; a session picker popover, Reset, gear, backend
   indicator right. Stats render as label-over-value pairs (`xs` label, `stat` value)
   separated by hairline dividers, not a run-on text line.
+- **Session picker, bounded.** All sessions and the Reset-driven current marker are
+  pinned. Below them, show the newest 15 non-current markers; a type-ahead input filters
+  the complete `GET /sessions` result so older runs remain reachable without an unbounded
+  menu. Each row shows name + id, request count, and relative time of its latest request
+  (falling back to marker creation for an empty current session). It uses the existing
+  `Popover` and `Input` primitives and closes after selection.
+- **Session deletion, graduated confirmation.** Non-current picker rows expose a delete
+  affordance where sessions are browsed. It opens an inline confirmation showing the name and
+  visible request count — `Delete <name> — N requests?` — with Delete/Cancel and no typed phrase.
+  The Data panel is the bulk path: a multi-select checklist shows counts, renders current as
+  disabled, and one typed `DELETE` confirms the selected batch. Standing rule: typed confirmation
+  for bulk/unbounded deletion; count-showing click-confirm for one named target. Current is never
+  deletable anywhere.
 - **List panel**: search + filter controls live *inside* the panel as its header
   (own bottom border), rows below. Selected row = `--surface-3` fill + 2px accent
   inset bar on the left edge; hover = `--surface-2`.
@@ -226,7 +239,11 @@ model repeat on every row and carry little scanning value:
   pulse (the only looping animation in the app) + running timer, no metric columns
   until `first_token`/completion supply them.
 - **In-flight rows obey session scope and nothing else** (code review D05). `started`
-  carries `sessionId`, so scoping is exact. Any *other* active filter collapses them to a
+  carries `sessionId` for headerless traffic and `sessionName` for named traffic, so an
+  existing picker entry scopes either exactly. A brand-new name has no marker to select
+  until the writer performs lookup-or-create, so its first request is visible in All
+  sessions while in flight and joins its named session immediately on completion. Any
+  *other* active filter collapses rows to a
   single "N in flight" strip at the top of the list instead of rows: an in-flight request
   has no final status, model or warnings yet, so testing it against those predicates would
   be guesswork in either direction — hiding real traffic or showing traffic that won't

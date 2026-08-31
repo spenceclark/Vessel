@@ -4,6 +4,7 @@ import {
   filtersActive,
   type ActiveDescriptor,
   type CompletedEvent,
+  type ClearedEvent,
   type FirstTokenEvent,
   type RequestFilters,
   type RequestListResponse,
@@ -36,9 +37,10 @@ import { useEvents, type InFlightRequest } from './useEvents'
  *    whose `started` frame the feed dropped is *displayed* after recovery, not merely known
  *    about. The intersection with locally-known starts that stood here is gone.
  * 3. **Between recoveries, ordered replay only** (rule 3). Frames apply strictly in id order;
- *    `cleared` drops the cached rows and the buffer *at its position* and schedules a refetch.
+ *    `cleared` drops the cached rows and buffer *at its position* and schedules a refetch;
+ *    #41's session deletion carries an exact session-id scope, while all/before clear all.
  *    A detected gap goes to rule 2 — never to ad-hoc reasoning about what was missed.
- * 4. **REST reads are authoritative and never client-filtered** (rule 4). No predicate, no
+ * 4. **REST reads are authoritative** (rule 4). Apart from #41's exact session-id predicate, no
  *    boundary, no provenance set: nothing the client holds ever deletes a row a fetch
  *    returned. A clear or recovery always starts a *new* fetch afterwards, and the
  *    last-started fetch wins. **K0a** — "new" has to be enforced, not assumed: TanStack v5
@@ -93,7 +95,7 @@ type QueuedEvent = { id: number } & (
   | { kind: 'request_ready'; data: RequestReadyEvent }
   | { kind: 'first_token'; data: FirstTokenEvent }
   | { kind: 'completed'; data: CompletedEvent }
-  | { kind: 'cleared' }
+  | { kind: 'cleared'; data: ClearedEvent }
 )
 
 export interface LiveHistory {
@@ -107,10 +109,12 @@ export interface LiveHistory {
 
 export function useLiveHistory({
   scope,
+  sessionName = null,
   filters,
   onCompleted,
 }: {
   scope: SessionScope | null
+  sessionName?: string | null
   filters: RequestFilters
   /** Fired for every completion, in arrival order, regardless of scope/filters (selection handover). */
   onCompleted?: (row: Summary | null, seq: number) => void
@@ -213,18 +217,21 @@ export function useLiveHistory({
   )
 
   /**
-   * J0 rule 3 — a `cleared` frame means "history was deleted at this position": drop every
-   * cached row, without inspecting any of them. There is no predicate to apply, deliberately.
-   * The rows that survived the clear come back from the refetch rule 4 schedules, which reads
-   * the post-clear database; a clear-before therefore repopulates rather than filters.
+   * J0 rule 3 — a `cleared` frame means "history was deleted at this position". All/before
+   * clears drop every cached row without re-deriving their SQL predicate; #41's session clear
+   * removes only rows carrying its exact session id. The refetch rule 4 schedules remains the
+   * authoritative post-clear view.
    */
-  const purgeListCaches = useCallback(() => {
+  const purgeListCaches = useCallback((sessionId?: number) => {
     for (const [key, cache] of queryClient.getQueriesData<ListCache>({ queryKey: REQUESTS_QUERY_ROOT })) {
       if (!cache) continue
-      if (cache.pages.every((page) => page.rows.length === 0)) continue
+      if (cache.pages.every((page) => page.rows.every((row) => sessionId !== undefined && row.sessionId !== sessionId))) continue
       queryClient.setQueryData<ListCache>(key, {
         ...cache,
-        pages: cache.pages.map((page) => ({ ...page, rows: [] })),
+        pages: cache.pages.map((page) => ({
+          ...page,
+          rows: sessionId === undefined ? [] : page.rows.filter((row) => row.sessionId !== sessionId),
+        })),
       })
     }
   }, [queryClient])
@@ -305,9 +312,21 @@ export function useLiveHistory({
         // buffer, and the rows completed earlier in *this* window (which are not in the cache
         // yet, so the purge above cannot see them). No row is inspected; the refetch below
         // brings back whatever survived.
-        pendingRef.current = []
-        toMerge.length = 0
-        purgeListCaches()
+        const deletedSessionId = event.data.sessionId
+        if (deletedSessionId !== undefined) {
+          void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+        }
+        pendingRef.current = deletedSessionId === undefined
+          ? []
+          : pendingRef.current.filter((row) => row.sessionId !== deletedSessionId)
+        if (deletedSessionId === undefined) {
+          toMerge.length = 0
+        } else {
+          for (let i = toMerge.length - 1; i >= 0; i--) {
+            if (toMerge[i].sessionId === deletedSessionId) toMerge.splice(i, 1)
+          }
+        }
+        purgeListCaches(deletedSessionId)
         cleared = true
         continue
       }
@@ -500,7 +519,7 @@ export function useLiveHistory({
     onRequestReady: (data, id) => enqueueEvent({ kind: 'request_ready', data, id }),
     onFirstToken: (data, id) => enqueueEvent({ kind: 'first_token', data, id }),
     onCompleted: (data, id) => enqueueEvent({ kind: 'completed', data, id }),
-    onCleared: (id) => enqueueEvent({ kind: 'cleared', id }),
+    onCleared: (data, id) => enqueueEvent({ kind: 'cleared', data, id }),
     onHello: (data) => {
       const prev = serverRunIdRef.current
       serverRunIdRef.current = data.serverRunId
@@ -525,9 +544,12 @@ export function useLiveHistory({
     },
   })
 
-  // D05 — in-flight rows are scoped to the viewed session and nothing else.
+  // D05/#29 — headerless in-flight rows match by id; named rows match the selected
+  // marker's exact name. A new name has no picker entry until its first insert, so its
+  // first request remains visible only in All while in flight.
   const inFlight = Array.from(inFlightMap.values()).filter(
-    (item) => scope === 'all' || (scope !== null && item.sessionId === scope),
+    (item) => scope === 'all'
+      || (scope !== null && (item.sessionId === scope || (sessionName !== null && item.sessionName === sessionName))),
   )
 
   return {
@@ -550,6 +572,7 @@ function toInFlight(descriptor: ActiveDescriptor): InFlightRequest {
     seq: descriptor.seq,
     startedAt: descriptor.startedAt,
     sessionId: descriptor.sessionId,
+    sessionName: descriptor.sessionName,
     method: descriptor.method,
     path: descriptor.path,
     backend: descriptor.backend,
@@ -566,6 +589,7 @@ function sameInFlight(a: InFlightRequest, b: InFlightRequest): boolean {
     a.seq === b.seq &&
     a.startedAt === b.startedAt &&
     a.sessionId === b.sessionId &&
+    a.sessionName === b.sessionName &&
     a.method === b.method &&
     a.path === b.path &&
     a.backend === b.backend &&

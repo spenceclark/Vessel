@@ -211,6 +211,9 @@ public sealed class CaptureWriterService(
                 case ClearCommand command:
                     RunClear(command);
                     break;
+                case DeleteSessionCommand command:
+                    RunDeleteSession(command);
+                    break;
             }
         }
 
@@ -252,7 +255,10 @@ public sealed class CaptureWriterService(
             var enriched = new List<EnrichedRecord>(captures.Count);
             foreach (CaptureRecord record in captures)
             {
-                enriched.Add(enricher.Enrich(record));
+                CaptureRecord resolved = record.SessionName is null
+                    ? record
+                    : record with { SessionId = store.ResolveNamedSession(record.SessionName).Id };
+                enriched.Add(enricher.Enrich(resolved));
             }
 
             IReadOnlyList<long> ids = store.InsertBatch(enriched);
@@ -324,6 +330,27 @@ public sealed class CaptureWriterService(
             // state the client has to reason about, so it is published, not remembered.
             events.Cleared();
             command.Completion.TrySetResult(deleted);
+        }
+        catch (Exception ex)
+        {
+            command.Completion.TrySetException(ex);
+        }
+    }
+
+    /// <summary>#41 — runs a session-scoped clear on the writer thread; never throws out.</summary>
+    private void RunDeleteSession(DeleteSessionCommand command)
+    {
+        try
+        {
+            SessionDeleteResult result = store.DeleteSession(command.SessionId);
+            if (result.Status == SessionDeleteStatus.Deleted)
+            {
+                // The predicate lets connected clients remove only this session's buffered
+                // and cached rows while preserving the same ordered clear/refetch machinery.
+                events.Cleared(command.SessionId);
+            }
+
+            command.Completion.TrySetResult(result);
         }
         catch (Exception ex)
         {

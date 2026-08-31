@@ -74,6 +74,13 @@ curl http://127.0.0.1:4550/api/chat -H "X-Vessel-Tags: DungeonMaster,run-42" -d 
 # or the path form, for header-less clients:  /t/DungeonMaster/api/chat
 ```
 
+Assign a request to a named run with `X-Vessel-Session` (created on first use). This
+does not change the Reset-driven session used by headerless traffic:
+
+```bash
+curl http://127.0.0.1:4550/api/chat -H "X-Vessel-Session: run-42" -d '...'
+```
+
 Both compose: `/b/ollama/t/planner/api/chat`. Routing precedence is `/b/{backend}/…`,
 then `X-Vessel-Backend`, then the default backend. Vessel strips its own `X-Vessel-*`
 headers before forwarding — backends never see them.
@@ -165,7 +172,8 @@ Authorization headers are redacted at rest, and Vessel never stores API keys any
 Vessel binds localhost by default; if you bind a non-loopback address, the UI and
 startup log warn that people on the network may read captured prompts (and access MCP
 when enabled). Keep retention caps appropriate, and use the UI’s Data panel to clear
-history. To remove Vessel completely: delete the executable and the `vessel-proxy`
+history or bulk-delete non-current sessions; individual sessions can be deleted from the
+session picker. To remove Vessel completely: delete the executable and the `vessel-proxy`
 data folder — there is nothing else.
 
 ## Building from source

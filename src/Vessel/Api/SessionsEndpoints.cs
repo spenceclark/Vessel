@@ -59,4 +59,57 @@ public static class SessionsEndpoints
         context.Response.ContentType = "application/json; charset=utf-8";
         await JsonSerializer.SerializeAsync(context.Response.Body, info, ApiJsonContext.Default.SessionInfo, context.RequestAborted);
     }
+
+    /// <summary>#41 — deletes one non-current session and its captured rows as a writer command.</summary>
+    public static async Task Delete(HttpContext context)
+    {
+        if (!long.TryParse(
+                Convert.ToString(context.Request.RouteValues["id"], System.Globalization.CultureInfo.InvariantCulture),
+                System.Globalization.CultureInfo.InvariantCulture,
+                out long sessionId)
+            || sessionId <= 0)
+        {
+            await VesselErrors.Write(
+                context, StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
+                "session id must be a positive integer");
+            return;
+        }
+
+        var channel = context.RequestServices.GetRequiredService<CaptureChannel>();
+        var completion = new TaskCompletionSource<SessionDeleteResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        channel.Enqueue(new DeleteSessionCommand(sessionId, completion));
+
+        SessionDeleteResult result;
+        try
+        {
+            result = await completion.Task.WaitAsync(context.RequestAborted);
+        }
+        catch (CaptureStoppedException ex)
+        {
+            await VesselErrors.Write(
+                context, StatusCodes.Status503ServiceUnavailable, VesselErrors.CaptureStopped, ex.Message);
+            return;
+        }
+
+        if (result.Status == SessionDeleteStatus.NotFound)
+        {
+            await VesselErrors.Write(
+                context, StatusCodes.Status404NotFound, VesselErrors.NotFound,
+                $"session {sessionId} was not found");
+            return;
+        }
+
+        if (result.Status == SessionDeleteStatus.Current)
+        {
+            await VesselErrors.Write(
+                context, StatusCodes.Status409Conflict, VesselErrors.InvalidRequest,
+                "the current session cannot be deleted");
+            return;
+        }
+
+        context.Response.ContentType = "application/json; charset=utf-8";
+        await JsonSerializer.SerializeAsync(
+            context.Response.Body, new ClearResponse(result.Deleted),
+            ApiJsonContext.Default.ClearResponse, context.RequestAborted);
+    }
 }

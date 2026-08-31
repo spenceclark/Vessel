@@ -219,9 +219,11 @@ decisions, and acceptance live there:
 
 - Export to CSV/JSONL · context-growth chart (charts need ui-spec §2 tokens added
   first) · additional reporting · cost estimates (§9 `pricing`) · replay dialect
-  fix-ups (`max_tokens → max_completion_tokens`, surfaced in Compare) · named sessions
-  (`X-Vessel-Session`, per-request assignment + session picker) · tool-call fumble
-  detection (`tool_call_in_text` — **detect only, never auto-repair**).
+  fix-ups (`max_tokens → max_completion_tokens`, surfaced in Compare) · ~~named sessions
+  (`X-Vessel-Session`, per-request assignment + session picker)~~ **implemented** · tool-call fumble
+  · ~~session deletion (writer-scoped rows + marker; picker count-confirm for one,
+  typed-confirmation Data-panel multi-select for bulk)~~ **implemented**
+  · tool-call fumble detection (`tool_call_in_text` — **detect only, never auto-repair**).
 - Distribution / docs: a Homebrew tap, a winget/scoop manifest, and a README
   macOS-unblock refresh.
 

@@ -44,7 +44,9 @@ caps from config.
 
 **Proxy/** — `RouteResolver` is a pure function (path + headers + backends →
 `RouteDecision`): `/b/{backend}` path prefix, then `X-Vessel-Backend` header, then the
-default backend; `/t/{tags}` and `X-Vessel-Tags` add free-form tags. `BackendRegistry`
+default backend; `/t/{tags}` and `X-Vessel-Tags` add free-form tags. `ProxyHandler`
+also captures an optional `X-Vessel-Session` exact name for writer-side assignment.
+`BackendRegistry`
 resolves a `ConfigSnapshot` into an immutable `BackendSet` (name → backend map +
 default, one value so they can't disagree). `ProxyHandler` is the catch-all endpoint
 (see §2). `VesselTransformer` is the YARP `HttpTransformer`: rewrites the destination
@@ -62,7 +64,7 @@ backend reachable?" TCP connect on first run only.
   never alters or withholds a byte.
 - `CaptureChannel` — the unbounded `Channel<CaptureWork>` queue from request path to
   writer. `CaptureWork` is a union: captured requests plus control commands
-  (`CreateSessionCommand`, `ClearCommand`) that must execute on the single writer
+  (`CreateSessionCommand`, `ClearCommand`, `DeleteSessionCommand`) that must execute on the single writer
   thread, each carrying a `TaskCompletionSource` for its HTTP caller.
 - `CaptureWriterService` — hosted service; the single consumer. Initializes the DB
   before Kestrel accepts traffic, batches (≤64 records or 250 ms), enriches, inserts,
@@ -74,7 +76,8 @@ backend reachable?" TCP connect on first run only.
 - `RequestModelSnifferService` + `RequestModelSniffer` — dedicated background loop
   that parses the `model` field off a fully-read request body and publishes
   `request_ready`.
-- `CurrentSession` — volatile holder of the active session id, read once per request.
+- `CurrentSession` — volatile holder of the Reset-driven active session id, read once
+  per headerless request. Named requests do not change it.
 - `BackendHealthTracker` — passive health (green/red dots) derived from captured
   outcomes; never generates backend traffic.
 
@@ -155,9 +158,10 @@ request through:
    request's limits (activity timeout, capture cap) — a concurrent config PUT can
    never mix revision N's limits with revision N+1's backends.
 
-3. **Capture context.** A `CaptureContext` is created: session id snapshotted from
-   `CurrentSession`, two capped body buffers, a monotonic start timestamp. It is
-   stashed in `HttpContext.Items` so the transformer can find it.
+3. **Capture context.** A `CaptureContext` is created: the Reset-driven session id is
+   snapshotted from `CurrentSession`, and an optional trimmed `X-Vessel-Session` name
+   is stamped alongside it. Two capped body buffers and a monotonic start timestamp
+   follow. The context is stashed in `HttpContext.Items` so the transformer can find it.
 
 4. **Response tee installed.** The `IHttpResponseBodyFeature` is replaced with a
    `StreamResponseBodyFeature` wrapping a `ResponseTeeStream` around the real stream.
@@ -215,11 +219,16 @@ request through:
     is published here instead, so the seq still leaves the active set.
 
 12. **Background writer.** The writer batches the record with others (≤64 or 250 ms,
-    FIFO — a clear/session command observes every capture queued ahead of it), runs
-    enrichment (detection → adapter → estimation → warnings → tok/s; reassembled
-    response for streams), inserts the batch in one transaction, enforces retention
+    FIFO — a clear/session command observes every capture queued ahead of it), resolves
+    any named-session selector by exact lookup-or-create on this writer (without changing
+`CurrentSession`), runs enrichment (detection → adapter → estimation → warnings →
+    tok/s; reassembled response for streams), inserts the batch in one transaction, enforces retention
     caps, and publishes one `completed` SSE frame per row carrying the real DB id and
     a `Summary`.
+
+    Retention and clear also prune empty non-current session markers; explicit session
+    deletion removes one marker plus its request/FTS rows in a transaction. The current marker
+    is retained even with zero rows so headerless traffic always has a valid destination.
 
 13. **Client side.** The HTTP response finished back in step 9/10; everything after
     was off the request path. The UI saw the request live through
@@ -307,7 +316,8 @@ marking (e.g. `not_found`, `invalid_request`, `forbidden_host`, `upstream_unreac
 | `DELETE /vessel/api/requests` | Clear: `scope=all` or `before={ISO timestamp}`; runs on the writer thread; ack count is UX only |
 | `GET /vessel/api/requests/facets` | Distinct backend/model/tag/format values for the filter bar |
 | `GET /vessel/api/stats?session=` | Totals, failures, avg latency/tok/s/TTFT, token sums; `session` = id, `current`, or `all` |
-| `GET /vessel/api/sessions` / `POST` | List sessions / reset (create marker + activate) |
+| `GET /vessel/api/sessions` / `POST` | List sessions newest-first with name/current/count/last activity / reset (create marker + activate) |
+| `DELETE /vessel/api/sessions/{id}` | Delete a non-current session marker and all its request/FTS rows atomically on the writer |
 | `GET/PUT /vessel/api/config` | `{ config, restartRequired }` / apply (validates, persists, live-swaps snapshot; `listen` needs restart) |
 | `GET /vessel/api/events` | SSE lifecycle feed: `hello`, `started`, `request_ready`, `first_token`, `completed`, `cleared` |
 | `GET /vessel/api/active` | Recovery snapshot `{ active, logPosition, serverRunId }` |
@@ -352,7 +362,8 @@ one screen.
 **State and data:**
 - **TanStack Query v5** owns all REST state. Query keys are centralized in
   `api/queryKeys.ts` (`['requests', scope, filters]` infinite list, `['request', id]`
-  detail, `['sessions']`, `['status']` with a 5 s poll shared by StatsBar and the
+  detail, `['sessions']` (also refreshed when a completion reveals an unknown named
+  session id), `['status']` with a 5 s poll shared by StatsBar and the
   banners). The list is an infinite query keyed by the `before` cursor.
 - **SSE** via `api/useEvents.ts`: a single `EventSource` to `/vessel/api/events`, gap
   detection on the `id:` watermark, `hello`-driven restart detection; handlers reach it
@@ -377,9 +388,12 @@ produces a live `src`/`href` (defense in depth behind the CSP served on `/vessel
 and rendering failures are contained by `RenderErrorBoundary` per pane rather than
 taking down the app.
 
-**Chrome:** `StatsBar` (session totals + reset), `FilterBar` (text + facet filters),
+**Chrome:** `StatsBar` (selected-session totals + searchable bounded session picker +
+count-confirmed single-session deletion + reset),
+`FilterBar` (text + facet filters),
 `DetailPane`/`InFlightDetailPane` (metrics incl. TTFT and Vessel overhead, headers,
 request/response views with raw and raw-stream toggles, replay dialog), `CompareView`
 (side-by-side diff), `ConfigPanel`/`ThemePanel`/`DataPanel`, plus `BindAddressBanner`,
-`CaptureHealthBanner`, and `DecodeTruncatedNotice`. Theme (light/dark/system) is
+`CaptureHealthBanner`, and `DecodeTruncatedNotice`. `DataPanel` owns typed-confirmation bulk
+session deletion (multi-select, counts, current disabled) alongside clear-all/before. Theme (light/dark/system) is
 initialized pre-paint by `public/theme-init.js` to avoid a flash.
