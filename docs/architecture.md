@@ -370,11 +370,19 @@ History is never lost by resetting or switching.
 
 Retention and clear passes prune session markers with no remaining requests, except for
 the current marker and markers held by active captures. Those markers must remain valid
-destinations until their requests reach the writer.
+destinations until their requests reach the writer. One microsecond-scale window remains:
+a capture's start-time id is snapshotted when its `CaptureContext` is created but joins
+the protected active set only at `Register`, so a Reset plus clear landing between the
+two can prune an emptied marker and leave that row with a dangling `session_id` (FK
+enforcement is off by design). The row remains browsable under All sessions.
 Explicit session deletion is a scoped clear: `DELETE /vessel/api/sessions/{id}` removes
 that non-current marker, all of its request rows, and matching FTS rows in one writer-thread
 transaction. A replay in another session survives with `replay_of` cleared when its original
-is deleted, preserving both the row and referential integrity. The current marker is rejected at execution time. Its ordered `cleared
+is deleted, preserving both the row and referential integrity. The current marker is
+rejected at execution time. A named request already in flight is invisible to that
+in-use check — its id is writer-unknown until insert — so its session can be deleted;
+the completing capture's lookup-or-create then recreates the marker carrying that row.
+Its ordered `cleared
 {sessionId}` frame removes only that session from connected clients; the authoritative
 refetch and snapshot recovery rules are otherwise unchanged.
 

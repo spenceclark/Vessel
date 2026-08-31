@@ -363,8 +363,8 @@ one screen.
 **State and data:**
 - **TanStack Query v5** owns all REST state. Query keys are centralized in
   `api/queryKeys.ts` (`['requests', scope, filters]` infinite list, `['request', id]`
-  detail, `['sessions']` (also refreshed when a completion reveals an unknown named
-  session id), `['status']` with a 5 s poll shared by StatsBar and the
+  detail, `['sessions']` (polled every 5 s, and refreshed when a completion reveals an
+  unknown named session id), `['status']` with a 5 s poll shared by StatsBar and the
   banners). The list is an infinite query keyed by the `before` cursor.
 - **SSE** via `api/useEvents.ts`: a single `EventSource` to `/vessel/api/events`, gap
   detection on the `id:` watermark, `hello`-driven restart detection; handlers reach it

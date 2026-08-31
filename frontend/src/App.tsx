@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
-import { REQUEST_DETAIL_QUERY_ROOT } from '@/api/queryKeys'
+import { REQUEST_DETAIL_QUERY_ROOT, REQUESTS_QUERY_ROOT } from '@/api/queryKeys'
 import { EMPTY_FILTERS, type RequestClearScope, type RequestDetail, type RequestFilters, type SessionDeleteSummary, type SessionInfo, type SessionScope } from '@/api/types'
 import { useLiveHistory } from '@/api/useLiveHistory'
 import { CaptureHealthBanner } from '@/components/CaptureHealthBanner'
@@ -171,7 +171,7 @@ export default function App() {
 
     if (deletedIds.length > 0) handleSessionsDeleted(deletedIds)
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['requests'] }),
+      queryClient.invalidateQueries({ queryKey: REQUESTS_QUERY_ROOT }),
       queryClient.invalidateQueries({ queryKey: ['stats'] }),
       queryClient.invalidateQueries({ queryKey: ['facets'] }),
       queryClient.invalidateQueries({ queryKey: ['sessions'] }),
