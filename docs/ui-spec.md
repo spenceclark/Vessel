@@ -653,12 +653,23 @@ than signal. On narrow viewports, response panels stack.
   rename. An on-demand per-backend
   "check now" is still a possible later addition — opt-in, one-shot, never
   background.
-- **Config panel: injectStreamUsage needs an explainer (review TODO, not yet
-  implemented)**: the checkbox is bare jargon — the product's own author had to ask
-  what it does. Add a one-line `xs --text-muted` explainer under the control:
-  "Adds `include_usage` to streamed OpenAI-format requests so token counts are
-  exact instead of estimated (~). Modifies requests; your client's original bytes
-  are still what's stored." Same treatment for any future config control whose
-  name alone doesn't explain its effect — a settings control gets either a
-  self-explanatory label or an explainer line, never a bare internal name (§8
-  standing rule from this finding).
+- **Config panel: compact backend cards with shared explainers (issue #42,
+  implemented)**: backend cards render as two rows — row 1: name (mono, the card's
+  anchor) · baseUrl (flex) · type select · **Default** radio (sentence case — the
+  lowercase "default" read as a broken label) · Remove; row 2: Exact token counts
+  (streamed) checkbox · auth env input. The type and `include_usage` explainers
+  (`xs --text-muted`) render **once under the Backends section header**, not per
+  card: live use showed the verbatim per-card copies as the panel's height problem
+  (18 identical paragraphs at nine backends, blocks blurring together), and the §8
+  settings-control rule requires an explainer to be *available*, not repeated per
+  instance. Each explainer leads with its control's name as an inline label (`xs`,
+  weight 550, `--text-secondary` — the existing inline-label vocabulary) so the
+  shared paragraphs don't read as orphans detached from the controls they describe
+  (follow-up from live use of the compacted layout). The `include_usage` explainer
+  shows only while at least one configured backend actually presents that checkbox
+  (openai/auto type). Per-control info-icon tooltips stay considered-and-deferred —
+  they would delete the block entirely (the cleaner end-state) but add a primitive,
+  and §8.2 requires new primitives to land in this doc first; revisit if the
+  explainer block grows again. Standing rule unchanged: a settings control gets
+  either a self-explanatory label or an explainer line, never a bare internal name
+  (§8 standing rule from this finding).
