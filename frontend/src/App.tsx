@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
-import { REQUEST_DETAIL_QUERY_ROOT } from '@/api/queryKeys'
-import { EMPTY_FILTERS, type RequestDetail, type RequestFilters, type SessionScope } from '@/api/types'
+import { REQUEST_DETAIL_QUERY_ROOT, REQUESTS_QUERY_ROOT } from '@/api/queryKeys'
+import { EMPTY_FILTERS, SESSION_LIST_LIMIT, type RequestClearScope, type RequestDetail, type RequestFilters, type SessionDeleteSummary, type SessionInfo, type SessionScope } from '@/api/types'
 import { useLiveHistory } from '@/api/useLiveHistory'
 import { CaptureHealthBanner } from '@/components/CaptureHealthBanner'
 import { BindAddressBanner } from '@/components/BindAddressBanner'
@@ -28,29 +28,65 @@ export type Selection =
 export default function App() {
   const queryClient = useQueryClient()
   const [scope, setScope] = useState<SessionScope | null>(null)
-  const [currentSessionId, setCurrentSessionId] = useState<number | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
   const [filters, setFilters] = useState<RequestFilters>(EMPTY_FILTERS)
 
-  const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: api.listSessions })
+  const sessionsQuery = useQuery({
+    queryKey: ['sessions'],
+    queryFn: api.listSessions,
+    refetchInterval: 5_000,
+  })
+  const selectedSession = typeof scope === 'number'
+    ? sessionsQuery.data?.find((session) => session.id === scope)
+    : undefined
+  // Name assignment resolves to the newest exact match. If a legacy/manual reset left
+  // duplicate names, only that newest marker may claim the named in-flight traffic.
+  const selectedSessionName = selectedSession?.name
+    && sessionsQuery.data?.find((session) => session.name === selectedSession.name)?.id === selectedSession.id
+    ? selectedSession.name
+    : null
 
-  // Default view = current session (D6): the newest session marker, once it's known.
+  // Default view = the Reset-driven current session. Named sessions may be newer without
+  // becoming current, so #29 makes that state explicit instead of inferring it from order.
   useEffect(() => {
-    if (currentSessionId !== null) return
-    const newest = sessionsQuery.data?.[0]
-    if (newest) {
+    if (scope !== null) return
+    const current = sessionsQuery.data?.find((session) => session.isCurrent)
+      ?? sessionsQuery.data?.[0]
+    if (current) {
       // oxlint-disable-next-line react/set-state-in-effect -- this synchronizes the initial server-owned session into local view state exactly once.
-      setCurrentSessionId(newest.id)
-      setScope(newest.id)
+      setScope(current.id)
     }
-  }, [sessionsQuery.data, currentSessionId])
+  }, [sessionsQuery.data, scope])
+
+  // #41 — another tab or API client can delete the session this tab is viewing. Once the
+  // invalidated session list confirms it is gone, return to current instead of leaving the
+  // picker and list on an unbrowsable orphan scope.
+  useEffect(() => {
+    if (typeof scope !== 'number' || !sessionsQuery.data) return
+    if (sessionsQuery.data.some((session) => session.id === scope)) return
+    // #29 — the listing is server-bounded, so absence only means "deleted" when the response
+    // came back short. At the limit the viewed session may simply have fallen outside the
+    // newest-N window, and yanking the scope would make a live session unreachable here.
+    if (sessionsQuery.data.length >= SESSION_LIST_LIMIT) return
+    const current = sessionsQuery.data.find((session) => session.isCurrent)
+    // oxlint-disable-next-line react/set-state-in-effect -- synchronizes server-owned deletion into the local view.
+    setScope(current?.id ?? 'all')
+    setSelection(null)
+  }, [sessionsQuery.data, scope])
 
   // R10/R11/D05 — live history (in-flight map, completion merging, reconciliation) is one
   // model, owned by one hook. App only supplies scope/filters and handles selection.
   const { inFlight, connected, newSinceFilter, clearNewSinceFilter } = useLiveHistory({
     scope,
+    sessionName: selectedSessionName,
     filters,
     onCompleted: (row, seq) => {
+      if (row?.sessionId != null) {
+        const knownSessions = queryClient.getQueryData<SessionInfo[]>(['sessions'])
+        if (!knownSessions?.some((session) => session.id === row.sessionId)) {
+          void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+        }
+      }
       if (row?.replayOf != null) {
         void queryClient.invalidateQueries({ queryKey: ['replays', row.replayOf] })
       }
@@ -62,7 +98,15 @@ export default function App() {
 
   const handleReset = useCallback(async () => {
     const session = await api.createSession()
-    setCurrentSessionId(session.id)
+    // Seed the returned marker before selecting it. Without this, the orphan-scope effect
+    // observes the previous list for one render and immediately bounces Reset back to old current.
+    queryClient.setQueryData<SessionInfo[]>(['sessions'], (sessions) => [
+      session,
+      ...(sessions ?? []).filter((candidate) => candidate.id !== session.id).map((candidate) => ({
+        ...candidate,
+        isCurrent: false,
+      })),
+    ])
     setScope(session.id)
     setSelection(null)
     await queryClient.invalidateQueries({ queryKey: ['sessions'] })
@@ -77,7 +121,7 @@ export default function App() {
   // clear actually reached the selected row. (The live list/buffer purge is server-driven,
   // via the in-band `cleared` SSE event in useLiveHistory — R23/H0a — not this callback.)
   const handleDataCleared = useCallback(
-    (clearedScope: { all: true } | { before: string }) => {
+    (clearedScope: RequestClearScope) => {
       const cachedDetails = queryClient.getQueriesData<RequestDetail>({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
       queryClient.removeQueries({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
 
@@ -96,6 +140,50 @@ export default function App() {
     [queryClient],
   )
 
+  const handleSessionsDeleted = useCallback((sessionIds: number[]) => {
+    const deleted = new Set(sessionIds)
+    const cachedDetails = queryClient.getQueriesData<RequestDetail>({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
+    queryClient.removeQueries({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
+
+    setSelection((selected) => {
+      if (selected?.kind !== 'row') return selected
+      const cached = cachedDetails.find(([key]) => key[1] === selected.id)?.[1]
+      return cached && !deleted.has(cached.sessionId ?? -1) ? selected : null
+    })
+    setScope((currentScope) => {
+      if (typeof currentScope !== 'number' || !deleted.has(currentScope)) return currentScope
+      return sessionsQuery.data?.find((session) => session.isCurrent)?.id ?? 'all'
+    })
+  }, [queryClient, sessionsQuery.data])
+
+  const handleDeleteSessions = useCallback(async (sessionIds: number[]): Promise<SessionDeleteSummary> => {
+    const deletedIds: number[] = []
+    const failures: { sessionId: number; message: string }[] = []
+    let requestsDeleted = 0
+    for (const sessionId of sessionIds) {
+      try {
+        const result = await api.deleteSession(sessionId)
+        deletedIds.push(sessionId)
+        requestsDeleted += result.deleted
+      } catch (error) {
+        failures.push({
+          sessionId,
+          message: error instanceof Error ? error.message : 'Failed to delete session.',
+        })
+      }
+    }
+
+    if (deletedIds.length > 0) handleSessionsDeleted(deletedIds)
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: REQUESTS_QUERY_ROOT }),
+      queryClient.invalidateQueries({ queryKey: ['stats'] }),
+      queryClient.invalidateQueries({ queryKey: ['facets'] }),
+      queryClient.invalidateQueries({ queryKey: ['sessions'] }),
+    ])
+
+    return { sessionsDeleted: deletedIds.length, requestsDeleted, failures }
+  }, [handleSessionsDeleted, queryClient])
+
   return (
     <div className="h-screen overflow-hidden bg-canvas">
       <div className="mx-auto flex h-full max-w-[1600px] flex-col gap-3 p-4 lg:p-6">
@@ -103,10 +191,11 @@ export default function App() {
         <BindAddressBanner />
         <StatsBar
           scope={scope}
-          currentSessionId={currentSessionId}
+          sessions={sessionsQuery.data ?? []}
           onScopeChange={setScope}
           onReset={handleReset}
           onDataCleared={handleDataCleared}
+          onDeleteSessions={handleDeleteSessions}
           connected={connected}
         />
         <div className="flex min-h-0 flex-1 gap-3">

@@ -123,7 +123,21 @@ public sealed record StatsResponse(
     bool TokensEstimated);
 
 /// <summary>D3/D4 — a <c>sessions</c> marker row: <c>GET/POST /sessions</c> wire shape.</summary>
-public sealed record SessionInfo(long Id, string StartedAt, string? Name);
+public sealed record SessionInfo(
+    long Id,
+    string StartedAt,
+    string? Name,
+    bool IsCurrent,
+    long RequestCount,
+    string? LastRequestAt);
+
+/// <summary>#29 review bounds for the per-request session control surface and its polled listing.</summary>
+public static class SessionLimits
+{
+    public const int MaxNameLength = 128;
+
+    public const int MaxMarkers = 500;
+}
 
 /// <summary>
 /// D2 — <c>GET /requests/facets</c> response: distinct values for the filter-bar

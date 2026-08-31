@@ -205,6 +205,27 @@ public sealed class McpTests
         Assert.Equal(
             restSessions.EnumerateArray().Select(item => item.GetProperty("id").GetInt64()),
             mcpSessions.EnumerateArray().Select(item => item.GetProperty("id").GetInt64()));
+        Assert.Equal(
+            restSessions.EnumerateArray().Select(item => item.GetProperty("name").GetString()),
+            mcpSessions.EnumerateArray().Select(item => item.GetProperty("name").GetString()));
+        Assert.Contains("MCP parity", mcpSessions.EnumerateArray().Select(item => item.GetProperty("name").GetString()));
+
+        // #41 — after the session-scoped clear removes rows + marker, REST and the read-only
+        // MCP view converge on the same session list.
+        await CreateSession(vessel.BaseUrl, "new current");
+        using (var http = new HttpClient())
+        using (HttpResponseMessage deleted = await http.DeleteAsync(
+            $"{vessel.BaseUrl}/vessel/api/sessions/{sessionId}", CT))
+        {
+            Assert.Equal(System.Net.HttpStatusCode.OK, deleted.StatusCode);
+        }
+
+        JsonElement restAfterDelete = await RestJson(vessel.BaseUrl, "/vessel/api/sessions");
+        JsonElement mcpAfterDelete = await ToolJson(client, "list_sessions", new Dictionary<string, object?> { ["limit"] = 20 });
+        Assert.Equal(
+            restAfterDelete.EnumerateArray().Select(item => item.GetProperty("id").GetInt64()),
+            mcpAfterDelete.EnumerateArray().Select(item => item.GetProperty("id").GetInt64()));
+        Assert.DoesNotContain("MCP parity", mcpAfterDelete.EnumerateArray().Select(item => item.GetProperty("name").GetString()));
     }
 
     [Fact]

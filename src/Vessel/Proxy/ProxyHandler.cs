@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Vessel.Api;
 using Vessel.Capture;
 using Vessel.Config;
+using Vessel.Storage;
 using Yarp.ReverseProxy.Forwarder;
 
 namespace Vessel.Proxy;
@@ -75,7 +76,9 @@ public sealed class ProxyHandler
             VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
         };
 
-        var capture = new CaptureContext(maxBodyBytes, _currentSession.Id, _captureEvents, _modelSniffer);
+        string? sessionName = ParseSessionName(context.Request.Headers);
+        var capture = new CaptureContext(
+            maxBodyBytes, _currentSession.Id, _captureEvents, _modelSniffer, sessionName);
         context.Items[CaptureContext.ItemsKey] = capture;
 
         // The response tee: bytes written to the client first, then buffered. The feature
@@ -188,8 +191,16 @@ public sealed class ProxyHandler
 
     public const string ReplayHeader = "X-Vessel-Replay-Of";
 
+    public const string SessionHeader = "X-Vessel-Session";
+
     private static long? TryParseReplayOf(IHeaderDictionary headers) =>
         long.TryParse(headers[ReplayHeader].FirstOrDefault(), out long replayOf) && replayOf > 0 ? replayOf : null;
+
+    private static string? ParseSessionName(IHeaderDictionary headers)
+    {
+        string? name = headers[SessionHeader].FirstOrDefault()?.Trim();
+        return string.IsNullOrEmpty(name) || name.Length > SessionLimits.MaxNameLength ? null : name;
+    }
 
     /// <summary>
     /// Installs the request-body tee. For an injectStreamUsage-eligible backend (D11), the

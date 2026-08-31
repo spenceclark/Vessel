@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Settings } from 'lucide-react'
+import { ChevronDown, Search, Settings, Trash2 } from 'lucide-react'
 import { api } from '@/api/client'
-import { firstRunProbeSaysUnreachable, type BackendHealth, type SessionScope, type StatusBackend } from '@/api/types'
+import { firstRunProbeSaysUnreachable, type BackendHealth, type RequestClearScope, type SessionDeleteSummary, type SessionInfo, type SessionScope, type StatusBackend } from '@/api/types'
 import { ConfigPanel } from '@/components/ConfigPanel'
 import { DataPanel } from '@/components/DataPanel'
 import { ThemePanel } from '@/components/ThemePanel'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog, Dialog } from '@/components/ui/dialog'
 import { Mark } from '@/components/ui/Mark'
+import { Input } from '@/components/ui/input'
 import { Popover } from '@/components/ui/popover'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
@@ -17,17 +18,19 @@ import { formatCompactTokenCount, formatMs, formatTokPerSec } from '@/lib/format
 /** §5 — the header panel: mark + wordmark, stat group, session toggle / Reset / gear / backend indicator. */
 export function StatsBar({
   scope,
-  currentSessionId,
+  sessions,
   onScopeChange,
   onReset,
   onDataCleared,
+  onDeleteSessions,
   connected,
 }: {
   scope: SessionScope | null
-  currentSessionId: number | null
+  sessions: SessionInfo[]
   onScopeChange: (scope: SessionScope) => void
   onReset: () => Promise<void>
-  onDataCleared?: (scope: { all: true } | { before: string }) => void
+  onDataCleared?: (scope: RequestClearScope) => void
+  onDeleteSessions: (sessionIds: number[]) => Promise<SessionDeleteSummary>
   /** D8 (review §4 risk) — the SSE connection state `useEvents` already tracked but no one displayed. */
   connected: boolean
 }) {
@@ -140,20 +143,12 @@ export function StatsBar({
             Disconnected
           </span>
         )}
-        <Tabs
-          value={scope === 'all' ? 'all' : 'current'}
-          onValueChange={(v) => {
-            if (v === 'all') onScopeChange('all')
-            else if (currentSessionId !== null) onScopeChange(currentSessionId)
-          }}
-        >
-          <TabsList>
-            <TabsTrigger value="current" disabled={currentSessionId === null}>
-              Current
-            </TabsTrigger>
-            <TabsTrigger value="all">All</TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <SessionPicker
+          scope={scope}
+          sessions={sessions}
+          onScopeChange={onScopeChange}
+          onDeleteSession={(sessionId) => onDeleteSessions([sessionId])}
+        />
         <Button disabled={resetting} onClick={() => setConfirmOpen(true)}>
           Reset session
         </Button>
@@ -168,7 +163,7 @@ export function StatsBar({
       <ConfirmDialog
         open={confirmOpen}
         title="Reset session?"
-        description="Starts a new session for new traffic. Nothing is deleted — switch to All to browse full history."
+        description="Starts a new session for headerless traffic. Nothing is deleted — choose another session or All sessions to browse history."
         confirmLabel="Reset"
         onConfirm={handleConfirmReset}
         onCancel={cancelReset}
@@ -182,7 +177,7 @@ export function StatsBar({
             <TabsTrigger value="appearance">Appearance</TabsTrigger>
           </TabsList>
           <TabsContent value="data" className="pt-3">
-            <DataPanel onCleared={onDataCleared} />
+            <DataPanel sessions={sessions} onCleared={onDataCleared} onDeleteSessions={onDeleteSessions} />
           </TabsContent>
           <TabsContent value="config" className="pt-3">
             <ConfigPanel />
@@ -194,6 +189,216 @@ export function StatsBar({
       </Dialog>
     </div>
   )
+}
+
+function sessionLabel(session: SessionInfo) {
+  const name = session.name?.trim() || `Session #${session.id}`
+  return `${name} · #${session.id}${session.isCurrent ? ' · current' : ''}`
+}
+
+const RecentSessionLimit = 15
+
+function SessionPicker({
+  scope,
+  sessions,
+  onScopeChange,
+  onDeleteSession,
+}: {
+  scope: SessionScope | null
+  sessions: SessionInfo[]
+  onScopeChange: (scope: SessionScope) => void
+  onDeleteSession: (sessionId: number) => Promise<SessionDeleteSummary>
+}) {
+  const [query, setQuery] = useState('')
+  const [pendingDelete, setPendingDelete] = useState<SessionInfo | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const current = sessions.find((session) => session.isCurrent)
+  const selected = typeof scope === 'number' ? sessions.find((session) => session.id === scope) : undefined
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+  const candidates = sessions.filter((session) => !session.isCurrent)
+  const visible = normalizedQuery
+    ? candidates.filter((session) => sessionLabel(session).toLocaleLowerCase().includes(normalizedQuery))
+    : candidates.slice(0, RecentSessionLimit)
+  const triggerLabel = scope === 'all' ? 'All sessions' : selected ? sessionLabel(selected) : 'Choose session'
+
+  async function confirmDelete(close: () => void) {
+    if (!pendingDelete || pendingDelete.isCurrent) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      const result = await onDeleteSession(pendingDelete.id)
+      if (result.failures.length > 0) {
+        setDeleteError(result.failures[0].message)
+        return
+      }
+      setPendingDelete(null)
+      close()
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'Failed to delete session.')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <Popover
+      label="Choose session"
+      contentClassName="w-80"
+      onOpenChange={(open) => {
+        if (!open) {
+          setQuery('')
+          setPendingDelete(null)
+          setDeleteError(null)
+        }
+      }}
+      trigger={(open, toggle, contentId) => (
+        <button
+          type="button"
+          aria-label="Session"
+          aria-expanded={open}
+          aria-controls={open ? contentId : undefined}
+          disabled={scope === null}
+          onClick={toggle}
+          className="flex h-7 max-w-56 items-center gap-2 rounded-control border border-border bg-surface-2 px-2 text-sm text-text hover:bg-surface-3 disabled:opacity-50"
+        >
+          <span className="min-w-0 truncate font-mono">{triggerLabel}</span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-text-muted" strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      )}
+    >
+      {(close) => (
+        <div className="flex flex-col gap-2">
+          <Input
+            autoFocus
+            aria-label="Filter sessions"
+            placeholder="Filter sessions…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            icon={<Search strokeWidth={1.75} />}
+          />
+          {pendingDelete ? (
+            <div className="flex flex-col gap-3 rounded-control border border-danger/40 bg-surface-2 p-3" role="alertdialog" aria-label="Confirm session deletion">
+              <p className="text-sm text-text">
+                Delete <span className="font-mono">{pendingDelete.name?.trim() || `Session #${pendingDelete.id}`}</span>
+                {' — '}{pendingDelete.requestCount} request{pendingDelete.requestCount === 1 ? '' : 's'}?
+              </p>
+              <p className="text-xs text-text-muted">The session marker and captured requests will be permanently deleted.</p>
+              {deleteError && <p className="text-xs text-danger">{deleteError}</p>}
+              <div className="flex gap-2">
+                <Button variant="destructive" disabled={deleting} onClick={() => void confirmDelete(close)}>
+                  {deleting ? 'Deleting…' : 'Delete'}
+                </Button>
+                <Button variant="ghost" disabled={deleting} onClick={() => { setPendingDelete(null); setDeleteError(null) }}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-col gap-1" role="listbox" aria-label="Sessions">
+                <SessionOption
+                  label="All sessions"
+                  context="Full captured history"
+                  selected={scope === 'all'}
+                  onClick={() => { onScopeChange('all'); close() }}
+                />
+                {current && (
+                  <SessionOption
+                    label={sessionLabel(current)}
+                    context={sessionContext(current)}
+                    selected={scope === current.id}
+                    onClick={() => { onScopeChange(current.id); close() }}
+                  />
+                )}
+              </div>
+              <div className="h-px bg-border" aria-hidden="true" />
+              <div className="max-h-72 overflow-y-auto" role="listbox" aria-label="Recent sessions">
+                {visible.length === 0 ? (
+                  <p className="px-2 py-3 text-center text-xs text-text-muted">No matching sessions</p>
+                ) : visible.map((session) => (
+                  <SessionOption
+                    key={session.id}
+                    label={sessionLabel(session)}
+                    context={sessionContext(session)}
+                    selected={scope === session.id}
+                    onClick={() => { onScopeChange(session.id); close() }}
+                    onDelete={() => { setPendingDelete(session); setDeleteError(null) }}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </Popover>
+  )
+}
+
+function SessionOption({
+  label,
+  context,
+  selected,
+  onClick,
+  onDelete,
+}: {
+  label: string
+  context: string
+  selected: boolean
+  onClick: () => void
+  onDelete?: () => void
+}) {
+  return (
+    <div
+      role="option"
+      aria-selected={selected}
+      onClick={onClick}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onClick()
+        }
+      }}
+      tabIndex={0}
+      className={cn(
+        'flex w-full items-center rounded-control px-2 py-1.5 text-left hover:bg-surface-2',
+        selected && 'bg-surface-3',
+      )}
+    >
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate font-mono text-sm text-text">{label}</span>
+        <span className="text-xs text-text-muted">{context}</span>
+      </span>
+      {onDelete && (
+        <button
+          type="button"
+          aria-label={`Delete ${label}`}
+          title="Delete session"
+          onClick={(event) => { event.stopPropagation(); onDelete() }}
+          className="rounded-control p-1 text-text-muted hover:bg-surface-3 hover:text-danger"
+        >
+          <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      )}
+    </div>
+  )
+}
+
+function sessionContext(session: SessionInfo) {
+  const count = `${session.requestCount} request${session.requestCount === 1 ? '' : 's'}`
+  return `${count} · ${relativeDate(session.lastRequestAt ?? session.startedAt)}`
+}
+
+function relativeDate(iso: string) {
+  const time = new Date(iso).getTime()
+  if (!Number.isFinite(time)) return iso
+  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000))
+  if (seconds < 60) return 'just now'
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`
+  if (seconds < 2_592_000) return `${Math.floor(seconds / 86_400)}d ago`
+  return new Date(time).toLocaleDateString()
 }
 
 function BackendIndicator({ backends }: { backends: StatusBackend[] }) {

@@ -137,8 +137,9 @@ public sealed class CaptureEvents
     /// <summary>
     /// I0b(1)/D5 — allocates this request's <c>seq</c>, registers it as in-flight and emits
     /// <c>started</c>. Called at handler entry, once the backend/tags are resolved (request
-    /// path); <paramref name="sessionId"/> is known here (D05) so the UI can scope in-flight
-    /// rows to the viewed session instead of showing every session's live traffic.
+    /// path); <paramref name="sessionId"/> is known here for headerless traffic (D05) so the
+    /// UI can scope those in-flight rows exactly. It is null for a named request because #29
+    /// deliberately defers name-to-id lookup-or-create to the single writer.
     /// <para>
     /// Allocation happens <em>inside</em> this method, under the publish lock, so there is no
     /// window in which a seq exists without being registered (see <see cref="_seqCounter"/>).
@@ -150,7 +151,8 @@ public sealed class CaptureEvents
     /// </summary>
     /// <returns>The newly allocated, already-registered request seq.</returns>
     public long Register(
-        string startedAt, long sessionId, string method, string path, string backend, string[] tags, long? replayOf = null)
+        string startedAt, long? sessionId, string method, string path,
+        string backend, string[] tags, long? replayOf = null, string? sessionName = null)
     {
         long seq;
         lock (_publishLock)
@@ -159,7 +161,8 @@ public sealed class CaptureEvents
             // K0b — registered *with* its display metadata, so the recovery snapshot can
             // describe this request even to a client that never received its `started` frame.
             // Model and TtftMs are both learned later (RequestReady, FirstToken respectively).
-            _active.Add(seq, new ActiveDescriptor(seq, startedAt, sessionId, method, path, backend, tags, replayOf, null, null));
+            _active.Add(seq, new ActiveDescriptor(
+                seq, startedAt, sessionId, sessionName, method, path, backend, tags, replayOf, null, null));
         }
 
         // Serialized and published outside the allocation section (JSON touches no shared
@@ -176,7 +179,7 @@ public sealed class CaptureEvents
         if (!_subscribers.IsEmpty)
         {
             Publish("started", JsonSerializer.Serialize(
-                new StartedEvent(seq, startedAt, sessionId, method, path, backend, tags, replayOf),
+                new StartedEvent(seq, startedAt, sessionId, sessionName, method, path, backend, tags, replayOf),
                 EventsJsonContext.Default.StartedEvent));
         }
 
@@ -278,9 +281,10 @@ public sealed class CaptureEvents
     /// log. Emitted by the writer at clear-commit time, under the same publish lock as
     /// <c>completed</c>, so its id orders correctly against every completion.
     /// <para>
-    /// J0 — the frame is the fast path and carries <em>no recovery burden</em>: its payload is
-    /// empty, and the server retains no clear predicate, version or history at all. A client
-    /// that receives it drops what it holds at that position and refetches; a client that
+    /// J0 — the frame is the fast path and carries <em>no recovery burden</em>: all/before
+    /// clears use an empty payload, while #41 session deletion carries its exact session id.
+    /// The server retains no clear predicate, version or history. A client that
+    /// receives it drops the matching state at that position and refetches; a client that
     /// misses it recovers by snapshot instead, and the refetch that recovery schedules reads a
     /// database which already reflects every clear that ever ran. The retired I0a model (a
     /// versioned <c>{scope, beforeTs, boundaryId}</c> predicate the client re-applied) could
@@ -288,15 +292,18 @@ public sealed class CaptureEvents
     /// SQLite reused ids after a clear-all — the round-five review's §2.2 B and C.
     /// </para>
     /// </summary>
-    public void Cleared()
+    public void Cleared(long? sessionId = null)
     {
         if (_subscribers.IsEmpty)
         {
             return;
         }
 
-        // Nothing to serialize: the frame's position in the log is its entire content.
-        Publish("cleared", "{}");
+        // Global/before clears retain the empty payload. A session deletion adds the one
+        // predicate clients can apply exactly without timestamps or id-reuse heuristics.
+        string json = JsonSerializer.Serialize(
+            new ClearedEvent(sessionId), EventsJsonContext.Default.ClearedEvent);
+        Publish("cleared", json);
     }
 
     private void Publish(string name, string json)
@@ -345,7 +352,7 @@ public sealed record ActiveRequests(ActiveDescriptor[] Active, long LogPosition,
 /// <para>
 /// The snapshot carries these because a bare seq is not enough to *show* the request. The SSE
 /// feed is deliberately lossy, so the frame that would have supplied the method, path, start
-/// time, session, tags, model or live TTFT is exactly the frame a recovering client may have
+/// time, resolved session (when known), tags, model or live TTFT is exactly the frame a recovering client may have
 /// missed — and a monitor that knows a request is running but cannot display its measured
 /// progress is not monitoring it (R27).
 /// </para>
@@ -353,7 +360,8 @@ public sealed record ActiveRequests(ActiveDescriptor[] Active, long LogPosition,
 public sealed record ActiveDescriptor(
     long Seq,
     string StartedAt,
-    long SessionId,
+    long? SessionId,
+    string? SessionName,
     string Method,
     string Path,
     string Backend,
@@ -381,7 +389,8 @@ public sealed class CaptureSubscription : IDisposable
 }
 
 internal sealed record StartedEvent(
-    long Seq, string StartedAt, long SessionId, string Method, string Path, string Backend, string[] Tags, long? ReplayOf);
+    long Seq, string StartedAt, long? SessionId, string? SessionName,
+    string Method, string Path, string Backend, string[] Tags, long? ReplayOf);
 
 internal sealed record RequestReadyEvent(long Seq, string Model);
 
@@ -389,9 +398,13 @@ internal sealed record FirstTokenEvent(long Seq, double TtftMs);
 
 internal sealed record CompletedEvent(long Seq, Summary? Row);
 
+internal sealed record ClearedEvent(
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? SessionId);
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(StartedEvent))]
 [JsonSerializable(typeof(RequestReadyEvent))]
 [JsonSerializable(typeof(FirstTokenEvent))]
 [JsonSerializable(typeof(CompletedEvent))]
+[JsonSerializable(typeof(ClearedEvent))]
 internal sealed partial class EventsJsonContext : JsonSerializerContext;

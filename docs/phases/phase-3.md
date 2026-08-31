@@ -241,14 +241,15 @@ so the API can respond with it. No second write connection, no lock dance.
     writer's give-up/drain path completes every capture identity it discards. Forwarding
     stays independent of capture health. Without this, every proxied request after a
     give-up leaked a permanent active-set entry (the review's 32-retained-seqs probe).
-  - **`cleared` event (H0a, R23; payload replaced in Batch J).** Clearing is an in-band SSE
-    frame: `event: cleared` / `data: {}`. The writer publishes it at clear-commit time under
+  - **`cleared` event (H0a, R23; payload replaced in Batch J, session scope added by #41).**
+    Clearing is an in-band SSE frame: `event: cleared` / `data: {}` for all/before, or
+    `data: {sessionId}` for exact session deletion. The writer publishes it at clear-commit time under
     the same lock as `completed`, so a row a clear deletes is always seen `completed` *before*
     `cleared` (it had to be inserted to be deleted) — that ordering is retained and is what
     lets ordered replay divide the completions a clear removes from the ones it does not.
     ~~`data: {version, scope, beforeTs, boundaryId}`, which the client purged listed and
-    buffered rows by.~~ **Superseded by J0:** the frame carries no predicate and the server
-    retains none. It **retires** the Batch F3 boundary/generation model (the `DELETE /requests`
+    buffered rows by.~~ **Superseded by J0:** all/before carry no predicate and the server
+    retains none. #41 later adds only the exact session-id predicate. It **retires** the Batch F3 boundary/generation model (the `DELETE /requests`
     ack's `boundaryId` was unsound: ids follow persistence order, not start time) and, with
     J0, the I0a versioned-predicate model that replaced it.
 - ~~**Fourth-round re-review (Batch I, I0a/R23) — a clear is versioned, recoverable state;
@@ -277,9 +278,9 @@ so the API can respond with it. No second write connection, no lock dance.
     so its id is at or below that position — the snapshot, and the database the refetch reads,
     already account for it. Frames above the position replay in order on top.
   - **Between recoveries, ordered replay only.** Frames apply in id order; `cleared` drops the
-    cached rows and the buffer at its position and schedules a refetch. Any detected gap goes
+    cached rows and buffer at its position (all rows, or the exact #41 session id) and schedules a refetch. Any detected gap goes
     to recovery — never to ad-hoc reasoning about what was missed.
-  - **REST reads are authoritative and never client-filtered.** Nothing the client holds
+  - **REST reads are authoritative.** Except for #41's exact session-id scope, nothing the client holds
     deletes a row a fetch returned. A clear or recovery always starts a *new* fetch after
     itself, and the last-started fetch wins. **Sixth-round correction (K0a):** "new" is
     enforced by cancelling the outstanding list read first, then refetching. `refetchQueries`

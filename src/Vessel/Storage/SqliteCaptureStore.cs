@@ -90,6 +90,17 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
         ALTER TABLE requests ADD COLUMN prompt_preview TEXT;
         ALTER TABLE requests ADD COLUMN response_preview TEXT;
         """,
+        // v3 — issue #29: named sessions are created per request without replacing the
+        // Reset-driven current session. Persist the latter explicitly; "newest" is no
+        // longer equivalent once named sessions can be created in the background.
+        """
+        ALTER TABLE sessions ADD COLUMN is_current INTEGER NOT NULL DEFAULT 0;
+        UPDATE sessions
+        SET is_current = 1
+        WHERE id = (SELECT id FROM sessions ORDER BY id DESC LIMIT 1);
+        CREATE UNIQUE INDEX ix_sessions_current ON sessions(is_current) WHERE is_current = 1;
+        CREATE INDEX ix_sessions_name ON sessions(name);
+        """,
     ];
 
     private SqliteConnection? _connection;
@@ -270,35 +281,85 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
         return ids;
     }
 
-    /// <summary>D4 — the newest <c>sessions</c> row, or a freshly created "session 1" on an empty database.</summary>
+    /// <summary>D4/#29 — the persisted Reset-driven current session, or a freshly created "session 1".</summary>
     public SessionInfo EnsureInitialSession()
     {
         using (SqliteCommand select = Connected().CreateCommand())
         {
-            select.CommandText = "SELECT id, started_at, name FROM sessions ORDER BY id DESC LIMIT 1";
+            select.CommandText = "SELECT id, started_at, name FROM sessions WHERE is_current = 1 LIMIT 1";
             using SqliteDataReader reader = select.ExecuteReader();
             if (reader.Read())
             {
                 return new SessionInfo(
-                    reader.GetInt64(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2));
+                    reader.GetInt64(0), reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2), true, 0, null);
             }
         }
 
-        return InsertSession("session 1");
+        return InsertSession("session 1", isCurrent: true);
     }
 
     /// <summary>D4 — writer-thread-only insert for <c>POST /sessions</c>.</summary>
-    public SessionInfo CreateSession(string? name) => InsertSession(name);
+    public SessionInfo CreateSession(string? name)
+    {
+        using SqliteTransaction transaction = Connected().BeginTransaction();
+        using (SqliteCommand clear = Connected().CreateCommand())
+        {
+            clear.Transaction = transaction;
+            clear.CommandText = "UPDATE sessions SET is_current = 0 WHERE is_current = 1";
+            clear.ExecuteNonQuery();
+        }
 
-    private SessionInfo InsertSession(string? name)
+        SessionInfo session = InsertSession(name, isCurrent: true, transaction);
+        transaction.Commit();
+        return session;
+    }
+
+    /// <summary>#29 — exact, case-sensitive name lookup-or-create on the single writer.</summary>
+    public NamedSessionResolution ResolveNamedSession(string name)
+    {
+        using (SqliteCommand select = Connected().CreateCommand())
+        {
+            select.CommandText =
+                "SELECT id, started_at, name, is_current FROM sessions WHERE name = $name ORDER BY id DESC LIMIT 1";
+            select.Parameters.AddWithValue("$name", name);
+            using SqliteDataReader reader = select.ExecuteReader();
+            if (reader.Read())
+            {
+                return new NamedSessionResolution(
+                    new SessionInfo(
+                        reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
+                        reader.GetBoolean(3), 0, null),
+                    NameDropped: false);
+            }
+        }
+
+        // Per-request names are untrusted cardinality. Existing markers remain usable at
+        // the cap; unseen names fall back to current so capture continues without growing
+        // the marker table or the polled session payload without bound. The fallback is
+        // reported, not silent: the writer logs it so a capture landing in a session its
+        // caller never named is traceable.
+        if (name.Length > SessionLimits.MaxNameLength
+            || ExecuteScalar("SELECT COUNT(*) FROM sessions") >= SessionLimits.MaxMarkers)
+        {
+            return new NamedSessionResolution(EnsureInitialSession(), NameDropped: true);
+        }
+
+        return new NamedSessionResolution(InsertSession(name, isCurrent: false), NameDropped: false);
+    }
+
+    private SessionInfo InsertSession(string? name, bool isCurrent, SqliteTransaction? transaction = null)
     {
         using SqliteCommand insert = Connected().CreateCommand();
+        insert.Transaction = transaction;
         string startedAt = DateTime.UtcNow.ToString("o");
-        insert.CommandText = "INSERT INTO sessions (started_at, name) VALUES ($started_at, $name) RETURNING id";
+        insert.CommandText =
+            "INSERT INTO sessions (started_at, name, is_current) VALUES ($started_at, $name, $is_current) RETURNING id";
         insert.Parameters.AddWithValue("$started_at", startedAt);
         insert.Parameters.AddWithValue("$name", (object?)name ?? DBNull.Value);
+        insert.Parameters.AddWithValue("$is_current", isCurrent ? 1 : 0);
         long id = Convert.ToInt64(insert.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
-        return new SessionInfo(id, startedAt, name);
+        return new SessionInfo(id, startedAt, name, isCurrent, 0, null);
     }
 
     /// <summary>
@@ -306,7 +367,7 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     /// <see cref="Retention"/> fresh each call, so a live config PUT takes effect on the
     /// very next batch.
     /// </summary>
-    public void EnforceRetention()
+    public void EnforceRetention(IReadOnlySet<long>? protectedSessionIds = null)
     {
         long excess = ExecuteScalar("SELECT COUNT(*) FROM requests") - Retention.MaxRequests;
         if (excess > 0)
@@ -330,6 +391,8 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
                 break;
             }
         }
+
+        PruneEmptySessions(protectedSessionIds);
     }
 
     /// <summary>
@@ -377,7 +440,7 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     /// oldest-<c>N</c> limit. <c>incremental_vacuum</c> runs after commit so the file
     /// actually shrinks.
     /// </summary>
-    public int Clear(string? beforeIso)
+    public int Clear(string? beforeIso, IReadOnlySet<long>? protectedSessionIds = null)
     {
         SqliteConnection connection = Connected();
         using SqliteTransaction transaction = connection.BeginTransaction();
@@ -411,8 +474,117 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
         }
 
         transaction.Commit();
+        PruneEmptySessions(protectedSessionIds);
         Execute("PRAGMA incremental_vacuum");
         return deleted;
+    }
+
+    /// <summary>
+    /// #41 — deletes a non-current session's request rows, matching FTS rows, and marker
+    /// in one transaction. Checking <c>is_current</c> inside that transaction means a Reset
+    /// queued near this command cannot turn an API-side pre-check into deletion of current.
+    /// </summary>
+    public SessionDeleteResult DeleteSession(long sessionId, IReadOnlySet<long>? protectedSessionIds = null)
+    {
+        SqliteConnection connection = Connected();
+        using SqliteTransaction transaction = connection.BeginTransaction();
+
+        bool isCurrent;
+        using (SqliteCommand session = connection.CreateCommand())
+        {
+            session.Transaction = transaction;
+            session.CommandText = "SELECT is_current FROM sessions WHERE id = $session_id";
+            AddTo(session, "$session_id").Value = sessionId;
+            object? value = session.ExecuteScalar();
+            if (value is null)
+            {
+                transaction.Rollback();
+                return new SessionDeleteResult(SessionDeleteStatus.NotFound, 0);
+            }
+
+            isCurrent = Convert.ToBoolean(value, System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        if (isCurrent)
+        {
+            transaction.Rollback();
+            return new SessionDeleteResult(SessionDeleteStatus.Current, 0);
+        }
+
+        if (protectedSessionIds?.Contains(sessionId) is true)
+        {
+            transaction.Rollback();
+            return new SessionDeleteResult(SessionDeleteStatus.InUse, 0);
+        }
+
+        const string matching = "SELECT id FROM requests WHERE session_id = $session_id";
+        using (SqliteCommand fts = connection.CreateCommand())
+        {
+            fts.Transaction = transaction;
+            fts.CommandText = $"DELETE FROM requests_fts WHERE rowid IN ({matching})";
+            AddTo(fts, "$session_id").Value = sessionId;
+            fts.ExecuteNonQuery();
+        }
+
+        // Replays may live in another session. Preserve those rows, but detach their
+        // correlation before deleting the originals they reference so the FK remains valid.
+        using (SqliteCommand replays = connection.CreateCommand())
+        {
+            replays.Transaction = transaction;
+            replays.CommandText =
+                $"UPDATE requests SET replay_of = NULL WHERE (session_id IS NULL OR session_id <> $session_id) AND replay_of IN ({matching})";
+            AddTo(replays, "$session_id").Value = sessionId;
+            replays.ExecuteNonQuery();
+        }
+
+        int deleted;
+        using (SqliteCommand rows = connection.CreateCommand())
+        {
+            rows.Transaction = transaction;
+            rows.CommandText = "DELETE FROM requests WHERE session_id = $session_id";
+            AddTo(rows, "$session_id").Value = sessionId;
+            deleted = rows.ExecuteNonQuery();
+        }
+
+        using (SqliteCommand marker = connection.CreateCommand())
+        {
+            marker.Transaction = transaction;
+            marker.CommandText = "DELETE FROM sessions WHERE id = $session_id";
+            AddTo(marker, "$session_id").Value = sessionId;
+            marker.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        Execute("PRAGMA incremental_vacuum");
+        return new SessionDeleteResult(SessionDeleteStatus.Deleted, deleted);
+    }
+
+    /// <summary>
+    /// #29 — remove session markers whose last request aged out or was cleared. The
+    /// Reset-driven current marker is retained even while empty so headerless traffic
+    /// always has a valid destination.
+    /// </summary>
+    private void PruneEmptySessions(IReadOnlySet<long>? protectedSessionIds)
+    {
+        using SqliteCommand command = Connected().CreateCommand();
+        command.CommandText =
+            "DELETE FROM sessions WHERE is_current = 0 " +
+            "AND NOT EXISTS (SELECT 1 FROM requests WHERE requests.session_id = sessions.id)";
+        if (protectedSessionIds is { Count: > 0 })
+        {
+            string[] parameters = new string[protectedSessionIds.Count];
+            int index = 0;
+            foreach (long sessionId in protectedSessionIds)
+            {
+                string name = $"$protected_{index}";
+                parameters[index++] = name;
+                AddTo(command, name).Value = sessionId;
+            }
+
+            command.CommandText += $" AND id NOT IN ({string.Join(", ", parameters)})";
+        }
+
+        command.ExecuteNonQuery();
     }
 
     private static SqliteParameter AddTo(SqliteCommand command, string name)

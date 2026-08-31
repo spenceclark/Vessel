@@ -123,9 +123,10 @@ command (the phase-3 `CaptureWork` union gains `ClearCommand`), which deletes ma
 `requests` rows + their FTS rows in one transaction, then `incremental_vacuum`.
 Response `{ deleted: n }` via the command's `TaskCompletionSource`. UI: a "Data"
 section behind a gear icon next to the stats bar — Clear all / Clear before date, both
-with typed-confirmation dialogs (this is the product's only destructive surface).
-Retention config lives in the same section (D7). Sessions rows are *not* deleted —
-markers are metadata, not data.
+with typed-confirmation dialogs. Retention config lives in the same section (D7).
+At Phase 4, session markers were not deleted. Issue #41 later added atomic rows+marker
+session deletion: one named target uses a count-showing picker confirmation, while the
+Data panel uses typed confirmation for multi-select bulk deletion; current remains protected.
 
 ### D7 — Config editor + live apply (the real design work this phase)
 

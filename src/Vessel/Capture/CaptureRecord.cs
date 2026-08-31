@@ -31,4 +31,5 @@ public sealed record CaptureRecord(
     bool UsageInjected,
     /// <summary>R08 — the captured response bytes are Vessel's own error body, not the backend's.</summary>
     bool ResponseAuthoredByVessel = false,
-    long? ReplayOf = null);
+    long? ReplayOf = null,
+    string? SessionName = null);

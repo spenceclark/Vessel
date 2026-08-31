@@ -75,16 +75,26 @@ public class CaptureWriterResilienceTests : IDisposable
             }
         }
 
-        public void EnforceRetention()
+        public void EnforceRetention(IReadOnlySet<long>? protectedSessionIds = null)
         {
         }
 
-        public SessionInfo EnsureInitialSession() => new(1, "2026-01-01T00:00:00.0000000Z", "session 1");
+        public SessionInfo EnsureInitialSession() =>
+            new(1, "2026-01-01T00:00:00.0000000Z", "session 1", true, 0, null);
 
         public SessionInfo CreateSession(string? name) =>
-            new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name);
+            new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name, true, 0, null);
 
-        public int Clear(string? beforeIso) => 0;
+        public NamedSessionResolution ResolveNamedSession(string name) =>
+            new(
+                new SessionInfo(
+                    Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name, false, 0, null),
+                NameDropped: false);
+
+        public int Clear(string? beforeIso, IReadOnlySet<long>? protectedSessionIds = null) => 0;
+
+        public SessionDeleteResult DeleteSession(long sessionId, IReadOnlySet<long>? protectedSessionIds = null) =>
+            new(SessionDeleteStatus.Deleted, 0);
 
         public int SnapshotAttempts()
         {
@@ -218,12 +228,16 @@ public class CaptureWriterResilienceTests : IDisposable
         channel.Enqueue(new ClearCommand(null, clear));
         var session = new TaskCompletionSource<SessionInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
         channel.Enqueue(new CreateSessionCommand("after", session));
+        var deleteSession = new TaskCompletionSource<SessionDeleteResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        channel.Enqueue(new DeleteSessionCommand(2, deleteSession));
 
         // "Promptly" is the point: without the fix these never complete at all.
         await Assert.ThrowsAsync<CaptureStoppedException>(
             () => clear.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<CaptureStoppedException>(
             () => session.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<CaptureStoppedException>(
+            () => deleteSession.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
 
         await writer.StopAsync(TestContext.Current.CancellationToken);
     }
@@ -378,16 +392,23 @@ public class CaptureWriterResilienceTests : IDisposable
             }
         }
 
-        public void EnforceRetention()
+        public void EnforceRetention(IReadOnlySet<long>? protectedSessionIds = null)
         {
         }
 
-        public SessionInfo EnsureInitialSession() => new(1, "2026-01-01T00:00:00.0000000Z", "session 1");
+        public SessionInfo EnsureInitialSession() =>
+            new(1, "2026-01-01T00:00:00.0000000Z", "session 1", true, 0, null);
 
         public SessionInfo CreateSession(string? name) =>
-            new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name);
+            new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name, true, 0, null);
 
-        public int Clear(string? beforeIso)
+        public NamedSessionResolution ResolveNamedSession(string name) =>
+            new(
+                new SessionInfo(
+                    Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name, false, 0, null),
+                NameDropped: false);
+
+        public int Clear(string? beforeIso, IReadOnlySet<long>? protectedSessionIds = null)
         {
             lock (_lock)
             {
@@ -397,5 +418,41 @@ public class CaptureWriterResilienceTests : IDisposable
                 return deleted;
             }
         }
+
+        public SessionDeleteResult DeleteSession(long sessionId, IReadOnlySet<long>? protectedSessionIds = null)
+        {
+            lock (_lock)
+            {
+                _operations.Add($"delete-session:{sessionId}");
+                int deleted = _live.Count;
+                _live.Clear();
+                return new SessionDeleteResult(SessionDeleteStatus.Deleted, deleted);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task DeleteSessionRunsAfterCapturesQueuedBeforeIt()
+    {
+        var channel = new CaptureChannel();
+        var store = new OrderRecordingStore();
+        CaptureWriterService writer = NewWriter(channel, store);
+
+        channel.Enqueue(TestCapture.Record("/before-session-delete"));
+        var completion = new TaskCompletionSource<SessionDeleteResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        channel.Enqueue(new DeleteSessionCommand(2, completion));
+        channel.Enqueue(TestCapture.Record("/after-session-delete"));
+
+        await writer.StartAsync(TestContext.Current.CancellationToken);
+
+        SessionDeleteResult result = await completion.Task.WaitAsync(
+            TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await WaitFor(() => store.Operations.Contains("insert:/after-session-delete"));
+        await writer.StopAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(new SessionDeleteResult(SessionDeleteStatus.Deleted, 1), result);
+        Assert.Equal(
+            ["insert:/before-session-delete", "delete-session:2", "insert:/after-session-delete"],
+            store.Operations);
     }
 }

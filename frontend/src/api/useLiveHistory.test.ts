@@ -106,6 +106,7 @@ function startedEvent(seq: number, row: Summary) {
     seq,
     startedAt: row.startedAt,
     sessionId: row.sessionId,
+    sessionName: null,
     method: row.method,
     path: row.path,
     backend: row.backend,
@@ -127,7 +128,7 @@ function activeDescriptor(
   model: string | null = null,
   ttftMs: number | null = null,
 ): ActiveDescriptor {
-  return { ...startedEvent(seq, row), sessionId: row.sessionId ?? SESSION, model, ttftMs }
+  return { ...startedEvent(seq, row), sessionId: row.sessionId ?? SESSION, sessionName: null, model, ttftMs }
 }
 
 /** A list query mirroring RequestList's, so the hook operates on a real cache entry. */
@@ -169,7 +170,11 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function setup(options: { listFetch: () => Promise<RequestListResponse> }) {
+function setup(options: {
+  listFetch: () => Promise<RequestListResponse>
+  sessionName?: string | null
+  scope?: number | 'all'
+}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
   })
@@ -182,12 +187,16 @@ function setup(options: { listFetch: () => Promise<RequestListResponse> }) {
   const rendered = renderHook(
     () => {
       const list = useInfiniteQuery({
-        queryKey: requestsQueryKey(SESSION, EMPTY_FILTERS),
+        queryKey: requestsQueryKey(options.scope ?? SESSION, EMPTY_FILTERS),
         queryFn: options.listFetch,
         initialPageParam: undefined as number | undefined,
         getNextPageParam: () => undefined,
       })
-      const live = useLiveHistory({ scope: SESSION, filters: EMPTY_FILTERS })
+      const live = useLiveHistory({
+        scope: options.scope ?? SESSION,
+        sessionName: options.sessionName,
+        filters: EMPTY_FILTERS,
+      })
       return { list, live }
     },
     { wrapper },
@@ -196,9 +205,9 @@ function setup(options: { listFetch: () => Promise<RequestListResponse> }) {
   return { queryClient, rendered }
 }
 
-function cachedRowIds(queryClient: QueryClient): number[] {
+function cachedRowIds(queryClient: QueryClient, scope: number | 'all' = SESSION): number[] {
   const data = queryClient.getQueryData<{ pages: RequestListResponse[] }>(
-    requestsQueryKey(SESSION, EMPTY_FILTERS),
+    requestsQueryKey(scope, EMPTY_FILTERS),
   )
   return (data?.pages ?? []).flatMap((p) => p.rows).map((r) => r.id)
 }
@@ -285,6 +294,28 @@ describe('useLiveHistory', () => {
     await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(1))
     expect(rendered.result.current.live.inFlight[0].seq).toBe(1)
 
+    rendered.unmount()
+  })
+
+  it('scopes named in-flight rows by exact session name before the writer resolves an id', async () => {
+    const { rendered } = setup({ listFetch: async () => listPage([]), sessionName: 'run-42' })
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+
+    act(() => {
+      FakeEventSource.latest().emit(
+        'started',
+        { ...startedEvent(1, summary(1)), sessionId: null, sessionName: 'run-42' },
+        1,
+      )
+      FakeEventSource.latest().emit(
+        'started',
+        { ...startedEvent(2, summary(2)), sessionId: null, sessionName: 'run-43' },
+        2,
+      )
+    })
+
+    await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(1))
+    expect(rendered.result.current.live.inFlight[0].seq).toBe(1)
     rendered.unmount()
   })
 
@@ -505,6 +536,36 @@ describe('useLiveHistory', () => {
 
     await settle()
     expect(cachedRowIds(queryClient)).toEqual([])
+
+    rendered.unmount()
+  })
+
+  it('session clear drops only matching cached and buffered completions', async () => {
+    const deleted = summary(1, { sessionId: SESSION })
+    const survivor = summary(2, { sessionId: SESSION + 1 })
+    let resolveFetch: ((value: RequestListResponse) => void) | undefined
+    let fetches = 0
+    const listFetch = () => {
+      fetches++
+      return fetches === 1
+        ? new Promise<RequestListResponse>((resolve) => { resolveFetch = resolve })
+        : Promise.resolve(listPage([survivor]))
+    }
+
+    const { queryClient, rendered } = setup({ listFetch, scope: 'all' })
+    await waitFor(() => expect(resolveFetch).toBeDefined())
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+
+    act(() => {
+      FakeEventSource.latest().emit('completed', { seq: 1, row: deleted }, 1)
+      FakeEventSource.latest().emit('completed', { seq: 2, row: survivor }, 2)
+      FakeEventSource.latest().emit('cleared', { sessionId: SESSION }, 3)
+    })
+
+    await waitFor(() => expect(cachedRowIds(queryClient, 'all')).toEqual([2]))
+    await act(async () => { resolveFetch!(listPage([deleted, survivor])) })
+    await settle()
+    expect(cachedRowIds(queryClient, 'all')).toEqual([2])
 
     rendered.unmount()
   })

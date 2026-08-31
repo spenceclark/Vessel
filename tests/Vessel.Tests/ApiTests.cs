@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Vessel.Config;
+using Vessel.Storage;
 using Xunit;
 
 namespace Vessel.Tests;
@@ -431,6 +432,16 @@ public class ApiTests
         Assert.NotEqual(firstSessionId, secondSessionId);
         Assert.Equal("second", created.GetProperty("name").GetString());
 
+        // Review finding: Reset makes the old marker non-current while this request still
+        // holds its start-time id. Neither explicit delete nor clear's empty-marker pruning
+        // may remove that FK target before the request finishes.
+        using HttpResponseMessage protectedDelete = await client.DeleteAsync(
+            $"{vessel.BaseUrl}/vessel/api/sessions/{firstSessionId}", CT);
+        Assert.Equal(HttpStatusCode.Conflict, protectedDelete.StatusCode);
+        using HttpResponseMessage clear = await client.DeleteAsync(
+            $"{vessel.BaseUrl}/vessel/api/requests?scope=all", CT);
+        Assert.Equal(HttpStatusCode.OK, clear.StatusCode);
+
         using HttpResponseMessage inFlightResp = await inFlight;
         Assert.Equal(HttpStatusCode.OK, inFlightResp.StatusCode);
 
@@ -444,6 +455,96 @@ public class ApiTests
         JsonElement sessions = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/sessions", CT);
         Assert.Equal(2, sessions.GetArrayLength());
         Assert.Equal(secondSessionId, sessions[0].GetProperty("id").GetInt64()); // newest-first
+        Assert.True(sessions[0].GetProperty("isCurrent").GetBoolean());
+        Assert.False(sessions[1].GetProperty("isCurrent").GetBoolean());
+    }
+
+    [Fact]
+    public async Task NamedSessionHeader_AssignsConcurrentRequestsPerName_WithoutChangingCurrentSession()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        JsonElement initialSessions = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/sessions", CT);
+        long currentSessionId = initialSessions[0].GetProperty("id").GetInt64();
+
+        async Task Send(string name, string marker)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{vessel.BaseUrl}/api/chat?{marker}");
+            request.Headers.TryAddWithoutValidation("X-Vessel-Session", name);
+            using HttpResponseMessage response = await client.SendAsync(request, CT);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        await Task.WhenAll(Send("run-42", "agent-a"), Send("run-43", "agent-b"));
+        await CaptureDb.WaitUntil(vessel.DbPath, rows => rows.Count, count => count >= 2);
+
+        JsonElement sessions = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/sessions", CT);
+        JsonElement run42 = sessions.EnumerateArray().Single(s => s.GetProperty("name").GetString() == "run-42");
+        JsonElement run43 = sessions.EnumerateArray().Single(s => s.GetProperty("name").GetString() == "run-43");
+        Assert.Equal(1, run42.GetProperty("requestCount").GetInt64());
+        Assert.Equal(1, run43.GetProperty("requestCount").GetInt64());
+        Assert.Equal(JsonValueKind.String, run42.GetProperty("lastRequestAt").ValueKind);
+        Assert.False(run42.GetProperty("isCurrent").GetBoolean());
+        Assert.False(run43.GetProperty("isCurrent").GetBoolean());
+        Assert.True(sessions.EnumerateArray().Single(s => s.GetProperty("id").GetInt64() == currentSessionId)
+            .GetProperty("isCurrent").GetBoolean());
+
+        IReadOnlyList<CapturedRow> rows = CaptureDb.Query(vessel.DbPath);
+        Assert.Equal(run42.GetProperty("id").GetInt64(), rows.Single(r => r.Path.Contains("agent-a")).SessionId);
+        Assert.Equal(run43.GetProperty("id").GetInt64(), rows.Single(r => r.Path.Contains("agent-b")).SessionId);
+
+        JsonElement run42Stats = await GetJson(
+            client, $"{vessel.BaseUrl}/vessel/api/stats?session={run42.GetProperty("id").GetInt64()}", CT);
+        JsonElement run43Stats = await GetJson(
+            client, $"{vessel.BaseUrl}/vessel/api/stats?session={run43.GetProperty("id").GetInt64()}", CT);
+        JsonElement currentStats = await GetJson(
+            client, $"{vessel.BaseUrl}/vessel/api/stats?session={currentSessionId}", CT);
+        Assert.Equal(1, run42Stats.GetProperty("total").GetInt64());
+        Assert.Equal(1, run43Stats.GetProperty("total").GetInt64());
+        Assert.Equal(0, currentStats.GetProperty("total").GetInt64());
+
+        // First sight creates; later requests with the exact same name reuse that marker.
+        await Send("run-42", "agent-c");
+        await CaptureDb.WaitUntil(vessel.DbPath, rs => rs.Count, count => count >= 3);
+        JsonElement afterReuse = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/sessions", CT);
+        Assert.Equal(3, afterReuse.GetArrayLength());
+        Assert.Equal(2, afterReuse.EnumerateArray().Single(s => s.GetProperty("name").GetString() == "run-42")
+            .GetProperty("requestCount").GetInt64());
+        JsonElement reusedStats = await GetJson(
+            client, $"{vessel.BaseUrl}/vessel/api/stats?session={run42.GetProperty("id").GetInt64()}", CT);
+        Assert.Equal(2, reusedStats.GetProperty("total").GetInt64());
+
+        using HttpResponseMessage headerless = await client.GetAsync($"{vessel.BaseUrl}/api/chat?headerless", CT);
+        Assert.Equal(HttpStatusCode.OK, headerless.StatusCode);
+        await CaptureDb.WaitUntil(vessel.DbPath, rs => rs.Count, count => count >= 4);
+        JsonElement currentAfterHeaderless = await GetJson(
+            client, $"{vessel.BaseUrl}/vessel/api/stats?session={currentSessionId}", CT);
+        Assert.Equal(1, currentAfterHeaderless.GetProperty("total").GetInt64());
+    }
+
+    [Fact]
+    public async Task SessionNames_AreBoundedAtTheProxyAndResetApi()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+        string overlong = new('x', SessionLimits.MaxNameLength + 1);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{vessel.BaseUrl}/api/chat?overlong-session");
+        request.Headers.TryAddWithoutValidation("X-Vessel-Session", overlong);
+        using HttpResponseMessage response = await client.SendAsync(request, CT);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        CapturedRow row = await CaptureDb.WaitForRow(vessel.DbPath, captured => captured.Path.Contains("overlong-session"));
+
+        JsonElement sessions = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/sessions", CT);
+        JsonElement current = sessions.EnumerateArray().Single(session => session.GetProperty("isCurrent").GetBoolean());
+        Assert.Equal(current.GetProperty("id").GetInt64(), row.SessionId);
+        Assert.DoesNotContain(sessions.EnumerateArray(), session => session.GetProperty("name").GetString() == overlong);
+
+        using HttpResponseMessage reset = await client.PostAsJsonAsync(
+            $"{vessel.BaseUrl}/vessel/api/sessions", new { name = overlong }, CT);
+        Assert.Equal(HttpStatusCode.BadRequest, reset.StatusCode);
+        Assert.Equal("invalid_request", reset.Headers.GetValues("X-Vessel-Error").Single());
     }
 
     // C1 (phase-4 carry-in): a non-numeric or overflowing id must 404, not 500.

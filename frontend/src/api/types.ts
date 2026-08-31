@@ -71,6 +71,9 @@ export interface SessionInfo {
   id: number
   startedAt: string
   name: string | null
+  isCurrent: boolean
+  requestCount: number
+  lastRequestAt: string | null
 }
 
 export interface StatusBackend {
@@ -174,6 +177,26 @@ export interface ClearResponse {
   deleted: number
 }
 
+/** #41 — optional predicate on an ordered clear frame; absent for all/before clears. */
+export interface ClearedEvent {
+  sessionId?: number
+}
+
+export type RequestClearScope = { all: true } | { before: string }
+
+/**
+ * #29 — mirrors `SessionLimits.MaxMarkers` (src/Vessel/Storage/Summary.cs): `GET /sessions`
+ * returns the current marker plus at most this many rows. A response *at* the limit may
+ * therefore be truncated, so a session missing from it is not evidence that it was deleted.
+ */
+export const SESSION_LIST_LIMIT = 500
+
+export interface SessionDeleteSummary {
+  sessionsDeleted: number
+  requestsDeleted: number
+  failures: { sessionId: number; message: string }[]
+}
+
 /**
  * R11/F2/J0/K0b — the recovery snapshot: lifecycle truth as of one position in the event log.
  * `active` is the server's in-flight set — each entry carrying the metadata its `started` frame
@@ -205,7 +228,8 @@ export interface ActiveRequestsResponse {
 export interface ActiveDescriptor {
   seq: number
   startedAt: string
-  sessionId: number
+  sessionId: number | null
+  sessionName: string | null
   method: string
   path: string
   backend: string
@@ -250,8 +274,9 @@ export interface ConfigGetResponse {
 export interface StartedEvent {
   seq: number
   startedAt: string
-  /** D05 — known at request start, so in-flight rows can be scoped to the viewed session. */
-  sessionId: number
+  /** D05/#29 — known for headerless traffic; null until writer resolution for a named request. */
+  sessionId: number | null
+  sessionName: string | null
   method: string
   path: string
   backend: string
@@ -286,9 +311,9 @@ export interface HelloEvent {
 
 /**
  * H0a/R23/J0 — the in-band clear notification, ordered on the SSE stream against completions:
- * history was deleted at this frame's position. Its payload is deliberately **empty** and the
- * server retains nothing about the clear — a client that receives the frame drops the rows and
- * the completion buffer it holds at that position and refetches; a client that missed it
+ * history was deleted at this frame's position. All/before clears carry `{}`; #41's session
+ * deletion carries `{sessionId}` so a client can remove exactly that session's cached rows and
+ * completion buffer at that position. The server retains no clear history; a client that missed it
  * recovers by snapshot, whose refetch reads a database that already reflects every clear. The
  * retired I0a payload (`{version, scope, beforeTs, boundaryId}`) asked the client to decide
  * which rows a past deletion had removed, which no client-side predicate can do correctly

@@ -449,19 +449,32 @@ public sealed class SqliteReadStore(string dbPath)
             tokensIn, tokensOut, tokensCachedRead, tokensCachedWrite, tokensEstimated);
     }
 
-    /// <summary>D3 — newest-first.</summary>
+    /// <summary>D3/#29 — newest-first, bounded, always retaining current in the result.</summary>
     public SessionInfo[] ListSessions()
     {
         using SqliteConnection connection = Open();
         using SqliteCommand command = connection.CreateCommand();
-        command.CommandText = "SELECT id, started_at, name FROM sessions ORDER BY id DESC";
+        command.CommandText =
+            """
+            SELECT s.id, s.started_at, s.name, s.is_current,
+                   COUNT(r.id), MAX(r.started_at)
+            FROM sessions s
+            LEFT JOIN requests r ON r.session_id = s.id
+            WHERE s.is_current = 1 OR s.id IN (
+                SELECT id FROM sessions WHERE is_current = 0 ORDER BY id DESC LIMIT $other_limit
+            )
+            GROUP BY s.id
+            ORDER BY s.id DESC
+            """;
+        command.Parameters.AddWithValue("$other_limit", SessionLimits.MaxMarkers - 1);
 
         var sessions = new List<SessionInfo>();
         using SqliteDataReader reader = command.ExecuteReader();
         while (reader.Read())
         {
             sessions.Add(new SessionInfo(
-                reader.GetInt64(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2)));
+                reader.GetInt64(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.GetBoolean(3), reader.GetInt64(4), reader.IsDBNull(5) ? null : reader.GetString(5)));
         }
 
         return sessions.ToArray();

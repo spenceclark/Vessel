@@ -39,6 +39,10 @@ public sealed class CaptureWriterService(
 
     private int _consecutiveFailures;
 
+    // #29 — true while named captures are being reattributed to the current session, so the
+    // warning is logged once per run of drops instead of once per request on a capped database.
+    private bool _sessionNameDropped;
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         store.Initialize();
@@ -211,6 +215,9 @@ public sealed class CaptureWriterService(
                 case ClearCommand command:
                     RunClear(command);
                     break;
+                case DeleteSessionCommand command:
+                    RunDeleteSession(command);
+                    break;
             }
         }
 
@@ -252,11 +259,19 @@ public sealed class CaptureWriterService(
             var enriched = new List<EnrichedRecord>(captures.Count);
             foreach (CaptureRecord record in captures)
             {
-                enriched.Add(enricher.Enrich(record));
+                CaptureRecord resolved = record;
+                if (record.SessionName is not null)
+                {
+                    NamedSessionResolution resolution = store.ResolveNamedSession(record.SessionName);
+                    resolved = record with { SessionId = resolution.Session.Id };
+                    ReportNamedSessionResolution(record.SessionName, resolution);
+                }
+
+                enriched.Add(enricher.Enrich(resolved));
             }
 
             IReadOnlyList<long> ids = store.InsertBatch(enriched);
-            store.EnforceRetention();
+            store.EnforceRetention(ActiveSessionIds());
             _consecutiveFailures = 0;
 
             for (int i = 0; i < enriched.Count; i++)
@@ -313,7 +328,7 @@ public sealed class CaptureWriterService(
     {
         try
         {
-            int deleted = store.Clear(command.BeforeIso);
+            int deleted = store.Clear(command.BeforeIso, ActiveSessionIds());
 
             // R23/H0a — publish the in-band `cleared` event at clear-commit time, on the writer
             // thread, so its SSE id orders after every `completed` this clear could have
@@ -330,6 +345,62 @@ public sealed class CaptureWriterService(
             command.Completion.TrySetException(ex);
         }
     }
+
+    /// <summary>#41 — runs a session-scoped clear on the writer thread; never throws out.</summary>
+    private void RunDeleteSession(DeleteSessionCommand command)
+    {
+        try
+        {
+            SessionDeleteResult result = store.DeleteSession(command.SessionId, ActiveSessionIds());
+            if (result.Status == SessionDeleteStatus.Deleted)
+            {
+                // The predicate lets connected clients remove only this session's buffered
+                // and cached rows while preserving the same ordered clear/refetch machinery.
+                events.Cleared(command.SessionId);
+            }
+
+            command.Completion.TrySetResult(result);
+        }
+        catch (Exception ex)
+        {
+            command.Completion.TrySetException(ex);
+        }
+    }
+
+    /// <summary>
+    /// #29 — a named capture that could not get its own marker is recorded in the current
+    /// session instead. The `started` frame already told clients the name, so the fallback
+    /// is logged rather than applied silently; the flag keeps a capped database from
+    /// warning once per request, and clears as soon as a name resolves normally again.
+    /// </summary>
+    private void ReportNamedSessionResolution(string name, NamedSessionResolution resolution)
+    {
+        if (!resolution.NameDropped)
+        {
+            _sessionNameDropped = false;
+            return;
+        }
+
+        if (_sessionNameDropped)
+        {
+            return;
+        }
+
+        _sessionNameDropped = true;
+        logger.LogWarning(
+            "session name {SessionName} could not be given its own marker (at most {MaxMarkers} markers, "
+            + "{MaxNameLength} characters); these captures are recorded in the current session {SessionId} instead",
+            name, SessionLimits.MaxMarkers, SessionLimits.MaxNameLength, resolution.Session.Id);
+    }
+
+    /// <summary>
+    /// Session ids captured by headerless requests at start time remain FK targets until
+    /// those requests finish, even if Reset makes their marker non-current meanwhile.
+    /// </summary>
+    private HashSet<long> ActiveSessionIds() => events.GetActiveRequests().Active
+        .Where(active => active.SessionId.HasValue)
+        .Select(active => active.SessionId!.Value)
+        .ToHashSet();
 
     private static Summary ToSummary(long id, EnrichedRecord enriched)
     {

@@ -27,3 +27,11 @@ public sealed record CreateSessionCommand(string? Name, TaskCompletionSource<Ses
 /// <c>cleared</c> SSE event, not on a boundary in this ack).
 /// </summary>
 public sealed record ClearCommand(string? BeforeIso, TaskCompletionSource<int> Completion) : CaptureWork;
+
+/// <summary>
+/// #41 — scoped clear for one session. Rows, FTS entries, and the non-current marker are
+/// deleted together on the writer thread.
+/// </summary>
+public sealed record DeleteSessionCommand(
+    long SessionId,
+    TaskCompletionSource<SessionDeleteResult> Completion) : CaptureWork;
