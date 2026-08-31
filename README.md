@@ -82,8 +82,8 @@ curl http://127.0.0.1:4550/api/chat -H "X-Vessel-Session: run-42" -d '...'
 ```
 
 Session names are limited to 128 characters, and named sessions are capped at 500
-markers: at that cap, requests for unseen names are captured in the current session,
-while existing named sessions continue to work. (Reset-created markers are not subject
+markers: at that cap, requests for unseen names are captured in the current session (Vessel
+logs a warning when this happens), while existing named sessions continue to work. (Reset-created markers are not subject
 to this cap.)
 
 Both compose: `/b/ollama/t/planner/api/chat`. Routing precedence is `/b/{backend}/…`,

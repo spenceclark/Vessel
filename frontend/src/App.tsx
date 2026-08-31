@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
 import { REQUEST_DETAIL_QUERY_ROOT, REQUESTS_QUERY_ROOT } from '@/api/queryKeys'
-import { EMPTY_FILTERS, type RequestClearScope, type RequestDetail, type RequestFilters, type SessionDeleteSummary, type SessionInfo, type SessionScope } from '@/api/types'
+import { EMPTY_FILTERS, SESSION_LIST_LIMIT, type RequestClearScope, type RequestDetail, type RequestFilters, type SessionDeleteSummary, type SessionInfo, type SessionScope } from '@/api/types'
 import { useLiveHistory } from '@/api/useLiveHistory'
 import { CaptureHealthBanner } from '@/components/CaptureHealthBanner'
 import { BindAddressBanner } from '@/components/BindAddressBanner'
@@ -64,6 +64,10 @@ export default function App() {
   useEffect(() => {
     if (typeof scope !== 'number' || !sessionsQuery.data) return
     if (sessionsQuery.data.some((session) => session.id === scope)) return
+    // #29 — the listing is server-bounded, so absence only means "deleted" when the response
+    // came back short. At the limit the viewed session may simply have fallen outside the
+    // newest-N window, and yanking the scope would make a live session unreachable here.
+    if (sessionsQuery.data.length >= SESSION_LIST_LIMIT) return
     const current = sessionsQuery.data.find((session) => session.isCurrent)
     // oxlint-disable-next-line react/set-state-in-effect -- synchronizes server-owned deletion into the local view.
     setScope(current?.id ?? 'all')

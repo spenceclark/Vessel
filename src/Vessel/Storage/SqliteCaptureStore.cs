@@ -316,7 +316,7 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     }
 
     /// <summary>#29 — exact, case-sensitive name lookup-or-create on the single writer.</summary>
-    public SessionInfo ResolveNamedSession(string name)
+    public NamedSessionResolution ResolveNamedSession(string name)
     {
         using (SqliteCommand select = Connected().CreateCommand())
         {
@@ -326,22 +326,26 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
             using SqliteDataReader reader = select.ExecuteReader();
             if (reader.Read())
             {
-                return new SessionInfo(
-                    reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
-                    reader.GetBoolean(3), 0, null);
+                return new NamedSessionResolution(
+                    new SessionInfo(
+                        reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
+                        reader.GetBoolean(3), 0, null),
+                    NameDropped: false);
             }
         }
 
         // Per-request names are untrusted cardinality. Existing markers remain usable at
         // the cap; unseen names fall back to current so capture continues without growing
-        // the marker table or the polled session payload without bound.
+        // the marker table or the polled session payload without bound. The fallback is
+        // reported, not silent: the writer logs it so a capture landing in a session its
+        // caller never named is traceable.
         if (name.Length > SessionLimits.MaxNameLength
             || ExecuteScalar("SELECT COUNT(*) FROM sessions") >= SessionLimits.MaxMarkers)
         {
-            return EnsureInitialSession();
+            return new NamedSessionResolution(EnsureInitialSession(), NameDropped: true);
         }
 
-        return InsertSession(name, isCurrent: false);
+        return new NamedSessionResolution(InsertSession(name, isCurrent: false), NameDropped: false);
     }
 
     private SessionInfo InsertSession(string? name, bool isCurrent, SqliteTransaction? transaction = null)

@@ -120,7 +120,9 @@ session switch: concurrent clients can use different names without interfering, 
 headerless requests continue to use the Reset-driven current session. Blank or
 whitespace-only values, and names longer than 128 characters, behave as if the header
 were absent. At the 500-marker cap, an unseen name also falls back to current; existing
-names continue to resolve. Replay deliberately remains headerless and therefore lands
+names continue to resolve. The writer logs a warning on that fallback (once per run of
+drops, not per request) so a capture landing in a session its caller never named is
+traceable rather than silent. Replay deliberately remains headerless and therefore lands
 in the current session.
 
 ### 3.4 Forward-as-is

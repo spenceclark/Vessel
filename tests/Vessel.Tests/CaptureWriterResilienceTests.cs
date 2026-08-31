@@ -85,8 +85,11 @@ public class CaptureWriterResilienceTests : IDisposable
         public SessionInfo CreateSession(string? name) =>
             new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name, true, 0, null);
 
-        public SessionInfo ResolveNamedSession(string name) =>
-            new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name, false, 0, null);
+        public NamedSessionResolution ResolveNamedSession(string name) =>
+            new(
+                new SessionInfo(
+                    Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name, false, 0, null),
+                NameDropped: false);
 
         public int Clear(string? beforeIso, IReadOnlySet<long>? protectedSessionIds = null) => 0;
 
@@ -399,8 +402,11 @@ public class CaptureWriterResilienceTests : IDisposable
         public SessionInfo CreateSession(string? name) =>
             new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name, true, 0, null);
 
-        public SessionInfo ResolveNamedSession(string name) =>
-            new(Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name, false, 0, null);
+        public NamedSessionResolution ResolveNamedSession(string name) =>
+            new(
+                new SessionInfo(
+                    Interlocked.Increment(ref _nextSessionId), "2026-01-01T00:00:00.0000000Z", name, false, 0, null),
+                NameDropped: false);
 
         public int Clear(string? beforeIso, IReadOnlySet<long>? protectedSessionIds = null)
         {

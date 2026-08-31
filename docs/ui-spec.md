@@ -188,7 +188,10 @@ The app stops being full-bleed. It becomes **panels floating on a canvas**:
 - **Session picker, bounded.** All sessions and the Reset-driven current marker are
   pinned. Below them, show the newest 15 non-current markers; a type-ahead input filters
   the bounded `GET /sessions` result (at most 500 markers, with current guaranteed) so
-  recent runs remain reachable without an unbounded menu. Each row shows name + id,
+  recent runs remain reachable without an unbounded menu. Because that result is bounded,
+  a viewed session missing from it only counts as deleted when the response came back
+  short of the cap — at the cap it may simply be outside the window, and the scope is left
+  alone rather than reset to current. Each row shows name + id,
   request count, and relative time of its latest request
   (falling back to marker creation for an empty current session). It uses the existing
   `Popover` and `Input` primitives and closes after selection.

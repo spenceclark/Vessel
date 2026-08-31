@@ -184,6 +184,13 @@ export interface ClearedEvent {
 
 export type RequestClearScope = { all: true } | { before: string }
 
+/**
+ * #29 — mirrors `SessionLimits.MaxMarkers` (src/Vessel/Storage/Summary.cs): `GET /sessions`
+ * returns the current marker plus at most this many rows. A response *at* the limit may
+ * therefore be truncated, so a session missing from it is not evidence that it was deleted.
+ */
+export const SESSION_LIST_LIMIT = 500
+
 export interface SessionDeleteSummary {
   sessionsDeleted: number
   requestsDeleted: number

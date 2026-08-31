@@ -39,6 +39,10 @@ public sealed class CaptureWriterService(
 
     private int _consecutiveFailures;
 
+    // #29 — true while named captures are being reattributed to the current session, so the
+    // warning is logged once per run of drops instead of once per request on a capped database.
+    private bool _sessionNameDropped;
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         store.Initialize();
@@ -255,9 +259,14 @@ public sealed class CaptureWriterService(
             var enriched = new List<EnrichedRecord>(captures.Count);
             foreach (CaptureRecord record in captures)
             {
-                CaptureRecord resolved = record.SessionName is null
-                    ? record
-                    : record with { SessionId = store.ResolveNamedSession(record.SessionName).Id };
+                CaptureRecord resolved = record;
+                if (record.SessionName is not null)
+                {
+                    NamedSessionResolution resolution = store.ResolveNamedSession(record.SessionName);
+                    resolved = record with { SessionId = resolution.Session.Id };
+                    ReportNamedSessionResolution(record.SessionName, resolution);
+                }
+
                 enriched.Add(enricher.Enrich(resolved));
             }
 
@@ -356,6 +365,32 @@ public sealed class CaptureWriterService(
         {
             command.Completion.TrySetException(ex);
         }
+    }
+
+    /// <summary>
+    /// #29 — a named capture that could not get its own marker is recorded in the current
+    /// session instead. The `started` frame already told clients the name, so the fallback
+    /// is logged rather than applied silently; the flag keeps a capped database from
+    /// warning once per request, and clears as soon as a name resolves normally again.
+    /// </summary>
+    private void ReportNamedSessionResolution(string name, NamedSessionResolution resolution)
+    {
+        if (!resolution.NameDropped)
+        {
+            _sessionNameDropped = false;
+            return;
+        }
+
+        if (_sessionNameDropped)
+        {
+            return;
+        }
+
+        _sessionNameDropped = true;
+        logger.LogWarning(
+            "session name {SessionName} could not be given its own marker (at most {MaxMarkers} markers, "
+            + "{MaxNameLength} characters); these captures are recorded in the current session {SessionId} instead",
+            name, SessionLimits.MaxMarkers, SessionLimits.MaxNameLength, resolution.Session.Id);
     }
 
     /// <summary>

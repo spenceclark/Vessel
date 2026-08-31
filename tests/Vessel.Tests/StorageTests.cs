@@ -90,8 +90,8 @@ public class StorageTests
             {
                 store.Initialize();
                 currentId = store.EnsureInitialSession().Id;
-                namedId = store.ResolveNamedSession("run-42").Id;
-                Assert.Equal(namedId, store.ResolveNamedSession("run-42").Id);
+                namedId = store.ResolveNamedSession("run-42").Session.Id;
+                Assert.Equal(namedId, store.ResolveNamedSession("run-42").Session.Id);
                 Assert.NotEqual(currentId, namedId);
             }
 
@@ -99,7 +99,7 @@ public class StorageTests
             {
                 store.Initialize();
                 Assert.Equal(currentId, store.EnsureInitialSession().Id);
-                Assert.Equal(namedId, store.ResolveNamedSession("run-42").Id);
+                Assert.Equal(namedId, store.ResolveNamedSession("run-42").Session.Id);
             }
 
             using var connection = new SqliteConnection($"Data Source={Path.Combine(dir, "vessel.db")};Pooling=False");
@@ -127,7 +127,7 @@ public class StorageTests
                 store.ResolveNamedSession("empty-run");
                 store.EnforceRetention();
 
-                long clearedId = store.ResolveNamedSession("cleared-run").Id;
+                long clearedId = store.ResolveNamedSession("cleared-run").Session.Id;
                 EnrichedRecord row = MinimalRecord("/cleared");
                 row = row with
                 {
@@ -180,9 +180,17 @@ public class StorageTests
                     store.ResolveNamedSession($"run-{i}");
                 }
 
+                // The fallback to current is reported, not silent — the writer logs on
+                // NameDropped so a capture landing in an unnamed session is traceable.
                 long currentId = store.EnsureInitialSession().Id;
-                Assert.Equal(currentId, store.ResolveNamedSession("one-too-many").Id);
-                Assert.Equal(currentId, store.ResolveNamedSession(new string('x', SessionLimits.MaxNameLength + 1)).Id);
+                Assert.Equal(
+                    new NamedSessionResolution(store.EnsureInitialSession(), NameDropped: true),
+                    store.ResolveNamedSession("one-too-many"));
+                Assert.Equal(
+                    new NamedSessionResolution(store.EnsureInitialSession(), NameDropped: true),
+                    store.ResolveNamedSession(new string('x', SessionLimits.MaxNameLength + 1)));
+                Assert.False(store.ResolveNamedSession("run-2").NameDropped);
+                Assert.Equal(currentId, store.ResolveNamedSession("one-too-many").Session.Id);
                 listedCurrentId = store.CreateSession("newest current beyond list cap").Id;
             }
 
@@ -209,8 +217,8 @@ public class StorageTests
             {
                 store.Initialize();
                 long currentId = store.EnsureInitialSession().Id;
-                long deletedSessionId = store.ResolveNamedSession("delete-me").Id;
-                long keptSessionId = store.ResolveNamedSession("keep-me").Id;
+                long deletedSessionId = store.ResolveNamedSession("delete-me").Session.Id;
+                long keptSessionId = store.ResolveNamedSession("keep-me").Session.Id;
 
                 EnrichedRecord deletedBase = MinimalRecord("/deleted");
                 EnrichedRecord deletedRow = deletedBase with

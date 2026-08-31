@@ -3,11 +3,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, ApiError } from '@/api/client'
-import type { SessionDeleteSummary, SessionInfo, SessionScope } from '@/api/types'
+import { SESSION_LIST_LIMIT, type SessionDeleteSummary, type SessionInfo, type SessionScope } from '@/api/types'
 import App from './App'
 
 interface MockStatsProps {
   scope: SessionScope | null
+  onScopeChange: (scope: SessionScope) => void
   onReset: () => Promise<void>
   onDeleteSessions: (sessionIds: number[]) => Promise<SessionDeleteSummary>
 }
@@ -18,11 +19,12 @@ vi.mock('@/api/useLiveHistory', () => ({
   }),
 }))
 vi.mock('@/components/StatsBar', () => ({
-  StatsBar: ({ scope, onReset, onDeleteSessions }: MockStatsProps) => {
+  StatsBar: ({ scope, onScopeChange, onReset, onDeleteSessions }: MockStatsProps) => {
     const [result, setResult] = useState<SessionDeleteSummary | null>(null)
     return (
       <>
         <div data-testid="scope">{String(scope)}</div>
+        <button type="button" onClick={() => onScopeChange(3)}>Scope test</button>
         <button type="button" onClick={() => void onReset()}>Reset test</button>
         <button type="button" onClick={() => void onDeleteSessions([2, 3]).then(setResult)}>Bulk delete test</button>
         {result && <div data-testid="delete-result">{JSON.stringify(result)}</div>}
@@ -79,6 +81,34 @@ describe('App session coordination review regressions', () => {
 
     resolveRefetch!([next, { ...current, isCurrent: false }])
     await waitFor(() => expect(screen.getByTestId('scope').textContent).toBe('2'))
+  })
+
+  it('keeps the viewed session when a full page means the bounded list may be truncated', async () => {
+    // GET /sessions returns current plus at most SESSION_LIST_LIMIT - 1 other markers, so a
+    // session outside that window is absent from the listing without having been deleted.
+    vi.spyOn(api, 'listSessions').mockResolvedValue([
+      ...Array.from({ length: SESSION_LIST_LIMIT - 1 }, (_, index): SessionInfo => ({
+        ...current, id: 1000 + index, name: `run-${1000 + index}`, isCurrent: false,
+      })),
+      current,
+    ])
+
+    renderApp()
+    await waitFor(() => expect(screen.getByTestId('scope').textContent).toBe('1'))
+    fireEvent.click(screen.getByRole('button', { name: 'Scope test' }))
+
+    await waitFor(() => expect(screen.getByTestId('scope').textContent).toBe('3'))
+    expect(screen.getByTestId('scope').textContent).toBe('3')
+  })
+
+  it('returns to current when a short list proves the viewed session was deleted', async () => {
+    vi.spyOn(api, 'listSessions').mockResolvedValue([current])
+
+    renderApp()
+    await waitFor(() => expect(screen.getByTestId('scope').textContent).toBe('1'))
+    fireEvent.click(screen.getByRole('button', { name: 'Scope test' }))
+
+    await waitFor(() => expect(screen.getByTestId('scope').textContent).toBe('1'))
   })
 
   it('attempts every bulk deletion and reports prior successes with failures', async () => {

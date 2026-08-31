@@ -27,7 +27,7 @@ public interface ICaptureStore
     /// sight. Called only by the capture writer, so lookup-or-create needs no second lock.
     /// It does not change the Reset-driven current session.
     /// </summary>
-    SessionInfo ResolveNamedSession(string name);
+    NamedSessionResolution ResolveNamedSession(string name);
 
     /// <summary>
     /// D6 — deletes <c>requests</c> rows (and their FTS rows) matching
@@ -59,3 +59,12 @@ public enum SessionDeleteStatus
 }
 
 public sealed record SessionDeleteResult(SessionDeleteStatus Status, int Deleted);
+
+/// <summary>
+/// #29 — the outcome of resolving one per-request session name. <c>NameDropped</c> is true
+/// when the name could not be given a marker of its own — it is over-length, or the
+/// <see cref="SessionLimits.MaxMarkers"/> cap is reached — and the capture fell back to the
+/// current session instead, so the writer can report the reattribution rather than applying
+/// it silently.
+/// </summary>
+public sealed record NamedSessionResolution(SessionInfo Session, bool NameDropped);
