@@ -8,8 +8,9 @@ namespace Vessel.Storage;
 /// <summary>
 /// D2 — the UI API's read side: a separate read-only connection per call
 /// (<c>Mode=ReadOnly</c>, pooled), never the writer's exclusive connection. WAL makes this
-/// safe concurrently with the single writer. All queries are indexed (<c>id</c> cursor,
-/// <c>session_id</c>); no query scans bodies.
+/// safe concurrently with the single writer. Ordinary UI queries are indexed (<c>id</c>
+/// cursor, <c>session_id</c>) and never scan bodies; explicit #24 bulk export is the
+/// deliberate exception and reads at most one body-bearing row into memory at a time.
 /// </summary>
 public sealed class SqliteReadStore(string dbPath)
 {
@@ -22,6 +23,7 @@ public sealed class SqliteReadStore(string dbPath)
         """;
 
     private const int SummaryColumnCount = 25;
+    private const int ExportIdPageSize = 256;
 
     /// <summary>
     /// The most recently persisted capture for each backend, by insertion order. This is
@@ -74,100 +76,10 @@ public sealed class SqliteReadStore(string dbPath)
     {
         using SqliteConnection connection = Open();
         using SqliteCommand command = connection.CreateCommand();
-
-        string? ftsQuery = SanitizeFtsQuery(q);
-
-        var where = new List<string>();
-        if (before is not null)
-        {
-            where.Add("requests.id < $before");
-        }
-
-        if (sessionId is not null)
-        {
-            where.Add("requests.session_id = $session");
-        }
-
-        if (backend is not null)
-        {
-            where.Add("requests.backend = $backend COLLATE NOCASE");
-        }
-
-        if (model is not null)
-        {
-            where.Add("requests.model = $model");
-        }
-
-        if (format is not null)
-        {
-            where.Add("requests.format = $format");
-        }
-
-        if (tag is not null)
-        {
-            where.Add("EXISTS (SELECT 1 FROM json_each(COALESCE(requests.tags, '[]')) WHERE json_each.value = $tag)");
-        }
-
-        if (status == "ok")
-        {
-            where.Add("(requests.error IS NULL AND (requests.status_code < 400 OR requests.status_code IS NULL))");
-        }
-        else if (status == "error")
-        {
-            where.Add("(requests.error IS NOT NULL OR requests.status_code >= 400)");
-        }
-
-        if (warned)
-        {
-            where.Add("requests.warnings IS NOT NULL");
-        }
-
-        if (ftsQuery is not null)
-        {
-            where.Add("requests_fts MATCH $q");
-        }
-
-        string fromClause = ftsQuery is not null
-            ? "FROM requests JOIN requests_fts ON requests_fts.rowid = requests.id"
-            : "FROM requests";
-        string whereClause = where.Count == 0 ? "" : "WHERE " + string.Join(" AND ", where);
+        var query = new RequestQuery(sessionId, q, backend, model, format, tag, status, warned);
+        string filteredFrom = ConfigureFilteredCommand(command, query, before);
         string columns = includePreview ? SummaryColumns + ", requests.prompt_preview" : SummaryColumns;
-        command.CommandText = $"SELECT {columns} {fromClause} {whereClause} ORDER BY requests.id DESC LIMIT $limit";
-
-        if (before is long beforeVal)
-        {
-            command.Parameters.AddWithValue("$before", beforeVal);
-        }
-
-        if (sessionId is long sessionVal)
-        {
-            command.Parameters.AddWithValue("$session", sessionVal);
-        }
-
-        if (backend is not null)
-        {
-            command.Parameters.AddWithValue("$backend", backend);
-        }
-
-        if (model is not null)
-        {
-            command.Parameters.AddWithValue("$model", model);
-        }
-
-        if (format is not null)
-        {
-            command.Parameters.AddWithValue("$format", format);
-        }
-
-        if (tag is not null)
-        {
-            command.Parameters.AddWithValue("$tag", tag);
-        }
-
-        if (ftsQuery is not null)
-        {
-            command.Parameters.AddWithValue("$q", ftsQuery);
-        }
+        command.CommandText = $"SELECT {columns} {filteredFrom} ORDER BY requests.id DESC LIMIT $limit";
 
         // Fetch one extra row so "is there a next page" doesn't require a second query.
         command.Parameters.AddWithValue("$limit", limit + 1);
@@ -189,6 +101,124 @@ public sealed class SqliteReadStore(string dbPath)
         }
 
         return new RequestListResponse(rows.ToArray(), nextBefore);
+    }
+
+    /// <summary>#24 — count over exactly the list/export predicate.</summary>
+    public long CountRequests(RequestQuery query)
+    {
+        using SqliteConnection connection = Open();
+        using SqliteCommand command = connection.CreateCommand();
+        string filteredFrom = ConfigureFilteredCommand(command, query);
+        command.CommandText = $"SELECT COUNT(*) {filteredFrom}";
+        return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// #24 — newest-first export cursor. Matching ids are fetched in small pages, then each
+    /// row is fully materialized on its own short-lived read connection before it is yielded.
+    /// This avoids pinning a WAL snapshot while the response waits on a slow client. Bodies
+    /// are read only for the requested tier and at most one body-bearing row is held at once.
+    /// </summary>
+    public IEnumerable<ExportRow> EnumerateExport(
+        RequestQuery query, ExportBodies bodies, long maxDecodedBytes)
+    {
+        long? before = null;
+        while (true)
+        {
+            long[] ids = ReadExportIds(query, before);
+            if (ids.Length == 0)
+            {
+                yield break;
+            }
+
+            foreach (long id in ids)
+            {
+                ExportRow? row = ReadExportRow(id, bodies, maxDecodedBytes);
+                if (row is not null)
+                {
+                    yield return row;
+                }
+            }
+
+            before = ids[^1];
+        }
+    }
+
+    private long[] ReadExportIds(RequestQuery query, long? before)
+    {
+        using SqliteConnection connection = Open();
+        using SqliteCommand command = connection.CreateCommand();
+        string filteredFrom = ConfigureFilteredCommand(command, query, before);
+        command.CommandText =
+            $"SELECT requests.id {filteredFrom} ORDER BY requests.id DESC LIMIT $limit";
+        command.Parameters.AddWithValue("$limit", ExportIdPageSize);
+
+        var ids = new List<long>(ExportIdPageSize);
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            ids.Add(reader.GetInt64(0));
+        }
+
+        return ids.ToArray();
+    }
+
+    private ExportRow? ReadExportRow(long id, ExportBodies bodies, long maxDecodedBytes)
+    {
+        using SqliteConnection connection = Open();
+        using SqliteCommand command = connection.CreateCommand();
+        string payloadColumns = bodies == ExportBodies.None
+            ? ""
+            : ", request_headers, response_headers, request_body, response_body, response_raw";
+        command.CommandText =
+            $"SELECT {SummaryColumns}{payloadColumns} FROM requests WHERE id = $id";
+        command.Parameters.AddWithValue("$id", id);
+
+        using SqliteDataReader reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            // Retention or clear can remove a row between the id page and this lookup.
+            return null;
+        }
+
+        Summary summary = ReadSummary(reader);
+        if (bodies == ExportBodies.None)
+        {
+            return new ExportRow(summary, null, null, null, null, null, null, null);
+        }
+
+        JsonNode? requestHeaders = JsonNode.Parse(reader.GetString(SummaryColumnCount));
+        JsonNode? responseHeaders = reader.IsDBNull(SummaryColumnCount + 1)
+            ? null
+            : JsonNode.Parse(reader.GetString(SummaryColumnCount + 1));
+        string? requestEncoding = ContentEncodingOf(requestHeaders);
+        string? responseEncoding = ContentEncodingOf(responseHeaders);
+        BodyPayload? requestBody = ToBodyPayload(
+            reader, SummaryColumnCount + 2, requestEncoding, maxDecodedBytes);
+        BodyPayload? responseBody = ToBodyPayload(
+            reader, SummaryColumnCount + 3, responseEncoding, maxDecodedBytes);
+        string? promptText = FlattenPrompt(summary.Format, requestBody?.Text);
+        string? responseText = FlattenResponse(summary.Format, responseBody?.Text);
+
+        if (bodies == ExportBodies.Text)
+        {
+            return new ExportRow(summary, promptText, responseText, null, null, null, null, null);
+        }
+
+        BodyPayload? responseRaw = ToBodyPayload(
+            reader, SummaryColumnCount + 4, responseEncoding, maxDecodedBytes);
+        return new ExportRow(
+            summary, promptText, responseText, requestHeaders, responseHeaders,
+            requestBody, responseBody, responseRaw);
+    }
+
+    public string? GetSessionName(long sessionId)
+    {
+        using SqliteConnection connection = Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT name FROM sessions WHERE id = $id";
+        command.Parameters.AddWithValue("$id", sessionId);
+        return command.ExecuteScalar() as string;
     }
 
     /// <summary>
@@ -281,6 +311,51 @@ public sealed class SqliteReadStore(string dbPath)
         }
 
         return string.Join(" ", tokens.Select(t => "\"" + t.Replace("\"", "\"\"") + "\""));
+    }
+
+    /// <summary>
+    /// Builds and parameterizes the one canonical list predicate. Paging, count, and export
+    /// all call this helper so "export what I'm looking at" cannot drift from the UI list.
+    /// </summary>
+    private static string ConfigureFilteredCommand(
+        SqliteCommand command, RequestQuery query, long? before = null)
+    {
+        string? ftsQuery = SanitizeFtsQuery(query.Q);
+        var where = new List<string>();
+        if (before is not null) where.Add("requests.id < $before");
+        if (query.SessionId is not null) where.Add("requests.session_id = $session");
+        if (query.Backend is not null) where.Add("requests.backend = $backend COLLATE NOCASE");
+        if (query.Model is not null) where.Add("requests.model = $model");
+        if (query.Format is not null) where.Add("requests.format = $format");
+        if (query.Tag is not null)
+        {
+            where.Add("EXISTS (SELECT 1 FROM json_each(COALESCE(requests.tags, '[]')) WHERE json_each.value = $tag)");
+        }
+
+        if (query.Status == "ok")
+        {
+            where.Add("(requests.error IS NULL AND (requests.status_code < 400 OR requests.status_code IS NULL))");
+        }
+        else if (query.Status == "error")
+        {
+            where.Add("(requests.error IS NOT NULL OR requests.status_code >= 400)");
+        }
+
+        if (query.Warned) where.Add("requests.warnings IS NOT NULL");
+        if (ftsQuery is not null) where.Add("requests_fts MATCH $q");
+
+        if (before is long beforeValue) command.Parameters.AddWithValue("$before", beforeValue);
+        if (query.SessionId is long session) command.Parameters.AddWithValue("$session", session);
+        if (query.Backend is not null) command.Parameters.AddWithValue("$backend", query.Backend);
+        if (query.Model is not null) command.Parameters.AddWithValue("$model", query.Model);
+        if (query.Format is not null) command.Parameters.AddWithValue("$format", query.Format);
+        if (query.Tag is not null) command.Parameters.AddWithValue("$tag", query.Tag);
+        if (ftsQuery is not null) command.Parameters.AddWithValue("$q", ftsQuery);
+
+        string from = ftsQuery is null
+            ? "FROM requests"
+            : "FROM requests JOIN requests_fts ON requests_fts.rowid = requests.id";
+        return where.Count == 0 ? from : from + " WHERE " + string.Join(" AND ", where);
     }
 
     /// <summary>D3 — full detail with bodies decompressed server-side, or null for an unknown id (caller writes 404).</summary>

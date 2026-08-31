@@ -218,6 +218,15 @@ The app stops being full-bleed. It becomes **panels floating on a canvas**:
   sorts first so it's never scrolled out of view by whichever tag the facet happened to
   list first. The list panel's row area additionally keeps a small guaranteed minimum
   height as a backstop, independent of the tag picker's own cap.
+- **Export is the visible list scope, not a second query builder.** The Export control
+  sits at the right end of the search row (search left, action right), above the filter
+  flow, and opens the existing compact `Popover`. This panel-edge position distinguishes
+  the action from filters such as Warnings only and Clear filters. It offers
+  CSV/JSONL and a body tier (`None`, `Flattened text`, or JSONL-only `Full decoded`),
+  defaulting to JSONL + no bodies. The popover shows the exact matching row count before
+  download as a scope sanity-check. The selected session and every active list filter are
+  carried to the streamed download; there is no date-range UI because sessions are the
+  run boundary.
 - **Detail panel**: tab strip as panel header, content scrolls. Empty state: centered
   mark (muted) + one line ("Select a request").
 

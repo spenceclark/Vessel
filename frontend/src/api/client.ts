@@ -4,6 +4,9 @@ import type {
   ConfigApplyResult,
   ConfigGetResponse,
   FacetsResponse,
+  ExportBodies,
+  ExportCountResponse,
+  ExportFormat,
   RequestDetail,
   RequestFilters,
   RequestListResponse,
@@ -79,6 +82,19 @@ function applyFilterParams(params: URLSearchParams, filters?: RequestFilters) {
   if (filters.warnedOnly) params.set('warned', '1')
 }
 
+function applyExportScope(params: URLSearchParams, session: SessionScope, filters: RequestFilters) {
+  if (session !== 'all') params.set('session', String(session))
+  if (filters.q) params.set('q', filters.q)
+  if (filters.backend) params.set('backend', filters.backend)
+  if (filters.model) params.set('model', filters.model)
+  // `format` selects CSV/JSONL on /export, so the request-format facet uses the
+  // unambiguous alias accepted by that endpoint.
+  if (filters.format) params.set('requestFormat', filters.format)
+  if (filters.tag) params.set('tag', filters.tag)
+  if (filters.status !== 'all') params.set('status', filters.status)
+  if (filters.warnedOnly) params.set('warned', '1')
+}
+
 export const api = {
   getStatus: () => request<StatusPayload>('/status'),
 
@@ -122,6 +138,19 @@ export const api = {
 
   getFacets: (session?: SessionScope) =>
     request<FacetsResponse>(`/requests/facets${session !== undefined && session !== 'all' ? `?session=${session}` : ''}`),
+
+  getExportCount: (session: SessionScope, filters: RequestFilters) => {
+    const params = new URLSearchParams()
+    applyExportScope(params, session, filters)
+    const qs = params.toString()
+    return request<ExportCountResponse>(`/export/count${qs ? `?${qs}` : ''}`)
+  },
+
+  exportUrl: (session: SessionScope, filters: RequestFilters, format: ExportFormat, bodies: ExportBodies) => {
+    const params = new URLSearchParams({ format, bodies })
+    applyExportScope(params, session, filters)
+    return `${BASE}/export?${params.toString()}`
+  },
 
   deleteRequests: (scope: { all: true } | { before: string }) => {
     const qs = 'all' in scope ? 'scope=all' : `before=${encodeURIComponent(scope.before)}`

@@ -138,6 +138,8 @@ public static class VesselApp
         app.MapGet("/vessel/api/active", (RequestDelegate)ActiveRequestsEndpoint.Handle);
         app.MapGet("/vessel/api/requests", (RequestDelegate)RequestsEndpoints.List);
         app.MapDelete("/vessel/api/requests", (RequestDelegate)RequestsEndpoints.Delete);
+        app.MapGet("/vessel/api/export", (RequestDelegate)ExportEndpoint.Export);
+        app.MapGet("/vessel/api/export/count", (RequestDelegate)ExportEndpoint.Count);
         app.MapGet("/vessel/api/requests/facets", (RequestDelegate)FacetsEndpoint.Handle);
         app.MapGet("/vessel/api/requests/{id:long}", (RequestDelegate)RequestsEndpoints.Detail);
         app.MapGet("/vessel/api/requests/{id:long}/replays", (RequestDelegate)RequestsEndpoints.Replays);
