@@ -416,6 +416,8 @@ Everything Vessel-owned lives under `/vessel/` (impossible to collide with `/v1/
 | `GET /vessel/api/requests/{id}` | full detail, bodies decompressed |
 | `POST /vessel/api/requests/{id}/replay` | re-send captured request; body may override `backend` and/or `model`; result is a new request row with `replay_of` set |
 | `GET /vessel/api/requests/{id}/replays` | direct replay children, for Compare entry points |
+| `GET /vessel/api/export` | streamed CSV/JSONL export of the current session + list-filter scope; `bodies=none\|text\|full` (`full` is JSONL-only). CSV carries a UTF-8 BOM for Windows Excel; JSONL is BOM-less. Because `format` selects the file format here, the capture-format filter is named `requestFormat`. |
+| `GET /vessel/api/export/count` | exact row count for the same session + list-filter predicate, used as the export scope sanity-check |
 | `GET /vessel/api/sessions` · `POST /vessel/api/sessions` | newest-first list capped at 500 with current guaranteed (`isCurrent`, request count, last-request time) / reset (create + activate marker, optional name ≤128 chars) |
 | `DELETE /vessel/api/sessions/{id}` | delete one non-current session marker with all request + FTS rows as a writer-scoped clear |
 | `GET /vessel/api/stats?session=` | totals, failures, avg latency / tok/s / ttft, token totals in/out/cached (accepted scope, post-Phase-4 addition — phase-3.md D3) |
@@ -616,7 +618,10 @@ into the list. TanStack Virtual for the history list (10k rows must scroll smoot
   avg TTFT), newest-first session picker, Reset Session, backend health dots.
 - **History list** (left) — reverse-chronological, virtualized, live. Row: path, model,
   duration, tok/s, tags, warning badge. Filter bar: free text (FTS), backend, model, tag,
-  status, warnings-only.
+  status and warnings-only. Export sits at the search row's right edge and opens a
+  popover. Export is "what I'm looking at": it
+  carries the selected session and every active filter, shows the exact matching count,
+  and downloads a server-streamed CSV or JSONL file without a date-range concept.
 - **Detail pane** (right) — tabs:
   - *Overview*: metrics incl. TTFT, Vessel overhead, cache read/write tokens, rate-limit
     headers (`x-ratelimit-*`, `anthropic-ratelimit-*`) when present, warnings, cost estimate.

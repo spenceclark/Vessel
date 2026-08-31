@@ -150,6 +150,14 @@ export interface RequestFilters {
   warnedOnly: boolean
 }
 
+export type ExportFormat = 'csv' | 'jsonl'
+
+export type ExportBodies = 'none' | 'text' | 'full'
+
+export interface ExportCountResponse {
+  count: number
+}
+
 export const EMPTY_FILTERS: RequestFilters = {
   q: '',
   backend: null,

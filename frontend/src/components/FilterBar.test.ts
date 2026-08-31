@@ -1,7 +1,10 @@
-import { createElement } from 'react'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
-import { TagPicker } from './FilterBar'
+import { createElement, type ReactNode } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { api } from '@/api/client'
+import { EMPTY_FILTERS } from '@/api/types'
+import { FilterBar, TagPicker } from './FilterBar'
 
 /**
  * R12 — the review's failing case: 100 distinct tags in an unbounded wrapping row could
@@ -11,7 +14,35 @@ import { TagPicker } from './FilterBar'
  * "+N more" count and active-first ordering — at the review's own 0/1/100 tag counts.
  */
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+})
+
+describe('FilterBar action placement (#24 follow-up)', () => {
+  it('places Export at the right edge of the search row, outside the filter flow', () => {
+    vi.spyOn(api, 'getFacets').mockResolvedValue({ backends: [], models: [], tags: [], formats: [] })
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    })
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children)
+    render(createElement(FilterBar, {
+      scope: 1,
+      filters: EMPTY_FILTERS,
+      onFiltersChange: () => {},
+    }), { wrapper })
+
+    const searchRow = screen.getByTestId('search-export-row')
+    const filterRow = screen.getByTestId('filter-controls-row')
+    expect(screen.getByTestId('search-input-slot').classList.contains('flex-1')).toBe(true)
+    expect(within(searchRow).getByPlaceholderText('Search prompts & responses…')).toBeTruthy()
+    expect(within(searchRow).getByRole('button', { name: 'Export' })).toBeTruthy()
+    expect(within(searchRow).queryByRole('button', { name: 'Warnings only' })).toBeNull()
+    expect(within(filterRow).getByRole('button', { name: 'Warnings only' })).toBeTruthy()
+    expect(within(filterRow).queryByRole('button', { name: 'Export' })).toBeNull()
+  })
+})
 
 describe('TagPicker (R12)', () => {
   it('renders nothing extra for zero tags', () => {

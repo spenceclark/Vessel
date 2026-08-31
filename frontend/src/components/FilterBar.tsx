@@ -5,6 +5,7 @@ import { api } from '@/api/client'
 import { EMPTY_FILTERS, filtersActive, type RequestFilters, type SessionScope } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { ExportControl } from '@/components/ExportControl'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { tagChipClass } from '@/lib/tags'
@@ -15,8 +16,9 @@ const SELECT_CLASS = 'h-7 rounded-control border border-border bg-surface-2 px-1
 /**
  * D3 — the list panel's own header: debounced free-text search, backend/model/format
  * dropdowns from facets (hidden when a facet has ≤1 value), a tag chip picker, a status
- * toggle, and a warnings-only toggle. Filter state lives in the parent (App) so
- * RequestList's query key can include it.
+ * toggle, and a warnings-only toggle. Export is the search row's right-edge action, not
+ * part of the filter flow. Filter state lives in the parent (App) so RequestList's query
+ * key can include it.
  */
 export function FilterBar({
   scope,
@@ -57,16 +59,21 @@ export function FilterBar({
 
   return (
     <div className="flex flex-col gap-2 border-b border-border px-3 py-2.5">
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          type="text"
-          value={qInput}
-          onChange={(e) => setQInput(e.target.value)}
-          placeholder="Search prompts & responses…"
-          icon={<Search strokeWidth={1.75} />}
-          className="min-w-[200px] flex-1"
-        />
+      <div data-testid="search-export-row" className="flex items-center gap-2">
+        <div data-testid="search-input-slot" className="min-w-[200px] flex-1">
+          <Input
+            type="text"
+            value={qInput}
+            onChange={(e) => setQInput(e.target.value)}
+            placeholder="Search prompts & responses…"
+            icon={<Search strokeWidth={1.75} />}
+          />
+        </div>
 
+        <ExportControl scope={scope} filters={filters} />
+      </div>
+
+      <div data-testid="filter-controls-row" className="flex flex-wrap items-center gap-2">
         {facets && facets.backends.length > 1 && (
           <select
             className={SELECT_CLASS}

@@ -217,7 +217,7 @@ Tracked as GitHub issues (label
 [`phase-7`](https://github.com/spenceclark/Vessel/labels/phase-7)) — full scope,
 decisions, and acceptance live there:
 
-- Export to CSV/JSONL · context-growth chart (charts need ui-spec §2 tokens added
+- ~~Export to CSV/JSONL (issue #24)~~ **implemented** · context-growth chart (charts need ui-spec §2 tokens added
   first) · additional reporting · cost estimates (§9 `pricing`) · replay dialect
   fix-ups (`max_tokens → max_completion_tokens`, surfaced in Compare) · ~~named sessions
   (`X-Vessel-Session`, per-request assignment + session picker)~~ **implemented**

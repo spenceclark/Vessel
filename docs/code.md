@@ -97,7 +97,9 @@ Any adapter exception falls the row back to `raw` + `parse_error` with bytes int
 **Storage/** — `SqliteCaptureStore` (the writer's store: migrations, batched inserts,
 retention, sessions, clear) and `SqliteReadStore` (the API's read side: per-call pooled
 read-only connections, WAL-concurrent with the writer; list/detail/facets/stats/
-sessions queries plus backend-health seeds). Bodies are zstd-compressed at rest
+sessions/export queries plus backend-health seeds). List, export count, and export use
+one canonical filter builder; export holds one reader and materializes one row at a time.
+Bodies are zstd-compressed at rest
 (`BodyCompression`); full-text search is FTS5 over flattened prompt/response text.
 `ICaptureStore` is the seam that lets writer resilience be tested without SQLite.
 
@@ -316,6 +318,8 @@ marking (e.g. `not_found`, `invalid_request`, `forbidden_host`, `upstream_unreac
 | `POST /vessel/api/requests/{id}/replay` | Re-send captured request; body may override `backend`/`model`; runs through the normal proxy pipeline, result linked via `replay_of` |
 | `DELETE /vessel/api/requests` | Clear: `scope=all` or `before={ISO timestamp}`; runs on the writer thread; ack count is UX only |
 | `GET /vessel/api/requests/facets` | Distinct backend/model/tag/format values for the filter bar |
+| `GET /vessel/api/export` | Stream matching rows as `format=csv\|jsonl`; accepts the list scope/filter params (`requestFormat` carries the capture-format filter) and `bodies=none\|text\|full`. CSV supports `none`/`text` and starts with a UTF-8 BOM for Windows Excel; JSONL stays BOM-less, and `full` adds redacted headers and decoded bodies. |
+| `GET /vessel/api/export/count` | Exact count over the same canonical list predicate for the export popover |
 | `GET /vessel/api/stats?session=` | Totals, failures, avg latency/tok/s/TTFT, token sums; `session` = id, `current`, or `all` |
 | `GET /vessel/api/sessions` / `POST` | List at most 500 sessions newest-first with current guaranteed / reset with an optional name of at most 128 characters |
 | `DELETE /vessel/api/sessions/{id}` | Delete a non-current session marker and all its request/FTS rows atomically on the writer |
@@ -329,8 +333,10 @@ marking (e.g. `not_found`, `invalid_request`, `forbidden_host`, `upstream_unreac
 not mapped in code yet — it belongs to the Ollama-panel work still ahead. The UI's
 Ollama-panel references are likewise future-phase.)
 
-**Read-side semantics** (`SqliteReadStore`): every query is indexed — id cursor for
-pagination, session index for scoping — and no query scans bodies. FTS queries are
+**Read-side semantics** (`SqliteReadStore`): ordinary UI queries are indexed — id cursor
+for pagination, session index for scoping — and do not scan bodies. Explicit export with
+`bodies=text|full` is the deliberate bulk-read exception and decodes one row at a time.
+FTS queries are
 sanitized so hostile input can't throw a syntax error, and the FTS join only happens
 when the query sanitizes to something (rows with no flattened text — raw fallback —
 would otherwise silently vanish from unfiltered lists). Detail bodies are decoded for
@@ -391,7 +397,7 @@ taking down the app.
 
 **Chrome:** `StatsBar` (selected-session totals + searchable bounded session picker +
 count-confirmed single-session deletion + reset),
-`FilterBar` (text + facet filters),
+`FilterBar` (text + facet filters + count-confirmed streamed export),
 `DetailPane`/`InFlightDetailPane` (metrics incl. TTFT and Vessel overhead, headers,
 request/response views with raw and raw-stream toggles, replay dialog), `CompareView`
 (side-by-side diff), `ConfigPanel`/`ThemePanel`/`DataPanel`, plus `BindAddressBanner`,
