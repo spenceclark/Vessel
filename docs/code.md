@@ -98,7 +98,8 @@ Any adapter exception falls the row back to `raw` + `parse_error` with bytes int
 retention, sessions, clear) and `SqliteReadStore` (the API's read side: per-call pooled
 read-only connections, WAL-concurrent with the writer; list/detail/facets/stats/
 sessions/export queries plus backend-health seeds). List, export count, and export use
-one canonical filter builder; export holds one reader and materializes one row at a time.
+one canonical filter builder; export pages matching ids with short-lived readers, then
+materializes each row on its own read connection before yielding it to response I/O.
 Bodies are zstd-compressed at rest
 (`BodyCompression`); full-text search is FTS5 over flattened prompt/response text.
 `ICaptureStore` is the seam that lets writer resilience be tested without SQLite.
@@ -336,6 +337,8 @@ Ollama-panel references are likewise future-phase.)
 **Read-side semantics** (`SqliteReadStore`): ordinary UI queries are indexed — id cursor
 for pagination, session index for scoping — and do not scan bodies. Explicit export with
 `bodies=text|full` is the deliberate bulk-read exception and decodes one row at a time.
+Export pages matching ids, then closes each per-row reader before yielding to the response,
+so client backpressure cannot pin a SQLite WAL snapshot.
 FTS queries are
 sanitized so hostile input can't throw a syntax error, and the FTS join only happens
 when the query sanitizes to something (rows with no flattened text — raw fallback —

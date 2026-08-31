@@ -23,6 +23,7 @@ public sealed class SqliteReadStore(string dbPath)
         """;
 
     private const int SummaryColumnCount = 25;
+    private const int ExportIdPageSize = 256;
 
     /// <summary>
     /// The most recently persisted capture for each backend, by insertion order. This is
@@ -113,56 +114,102 @@ public sealed class SqliteReadStore(string dbPath)
     }
 
     /// <summary>
-    /// #24 — newest-first export cursor. The iterator owns one read connection and reader,
-    /// and materializes only the current row. Bodies are read only for the requested tier.
+    /// #24 — newest-first export cursor. Matching ids are fetched in small pages, then each
+    /// row is fully materialized on its own short-lived read connection before it is yielded.
+    /// This avoids pinning a WAL snapshot while the response waits on a slow client. Bodies
+    /// are read only for the requested tier and at most one body-bearing row is held at once.
     /// </summary>
     public IEnumerable<ExportRow> EnumerateExport(
         RequestQuery query, ExportBodies bodies, long maxDecodedBytes)
     {
+        long? before = null;
+        while (true)
+        {
+            long[] ids = ReadExportIds(query, before);
+            if (ids.Length == 0)
+            {
+                yield break;
+            }
+
+            foreach (long id in ids)
+            {
+                ExportRow? row = ReadExportRow(id, bodies, maxDecodedBytes);
+                if (row is not null)
+                {
+                    yield return row;
+                }
+            }
+
+            before = ids[^1];
+        }
+    }
+
+    private long[] ReadExportIds(RequestQuery query, long? before)
+    {
         using SqliteConnection connection = Open();
         using SqliteCommand command = connection.CreateCommand();
-        string filteredFrom = ConfigureFilteredCommand(command, query);
+        string filteredFrom = ConfigureFilteredCommand(command, query, before);
+        command.CommandText =
+            $"SELECT requests.id {filteredFrom} ORDER BY requests.id DESC LIMIT $limit";
+        command.Parameters.AddWithValue("$limit", ExportIdPageSize);
+
+        var ids = new List<long>(ExportIdPageSize);
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            ids.Add(reader.GetInt64(0));
+        }
+
+        return ids.ToArray();
+    }
+
+    private ExportRow? ReadExportRow(long id, ExportBodies bodies, long maxDecodedBytes)
+    {
+        using SqliteConnection connection = Open();
+        using SqliteCommand command = connection.CreateCommand();
         string payloadColumns = bodies == ExportBodies.None
             ? ""
             : ", request_headers, response_headers, request_body, response_body, response_raw";
         command.CommandText =
-            $"SELECT {SummaryColumns}{payloadColumns} {filteredFrom} ORDER BY requests.id DESC";
+            $"SELECT {SummaryColumns}{payloadColumns} FROM requests WHERE id = $id";
+        command.Parameters.AddWithValue("$id", id);
 
         using SqliteDataReader reader = command.ExecuteReader();
-        while (reader.Read())
+        if (!reader.Read())
         {
-            Summary summary = ReadSummary(reader);
-            if (bodies == ExportBodies.None)
-            {
-                yield return new ExportRow(summary, null, null, null, null, null, null, null);
-                continue;
-            }
-
-            JsonNode? requestHeaders = JsonNode.Parse(reader.GetString(SummaryColumnCount));
-            JsonNode? responseHeaders = reader.IsDBNull(SummaryColumnCount + 1)
-                ? null
-                : JsonNode.Parse(reader.GetString(SummaryColumnCount + 1));
-            string? requestEncoding = ContentEncodingOf(requestHeaders);
-            string? responseEncoding = ContentEncodingOf(responseHeaders);
-            BodyPayload? requestBody = ToBodyPayload(
-                reader, SummaryColumnCount + 2, requestEncoding, maxDecodedBytes);
-            BodyPayload? responseBody = ToBodyPayload(
-                reader, SummaryColumnCount + 3, responseEncoding, maxDecodedBytes);
-            string? promptText = FlattenPrompt(summary.Format, requestBody?.Text);
-            string? responseText = FlattenResponse(summary.Format, responseBody?.Text);
-
-            if (bodies == ExportBodies.Text)
-            {
-                yield return new ExportRow(summary, promptText, responseText, null, null, null, null, null);
-                continue;
-            }
-
-            BodyPayload? responseRaw = ToBodyPayload(
-                reader, SummaryColumnCount + 4, responseEncoding, maxDecodedBytes);
-            yield return new ExportRow(
-                summary, promptText, responseText, requestHeaders, responseHeaders,
-                requestBody, responseBody, responseRaw);
+            // Retention or clear can remove a row between the id page and this lookup.
+            return null;
         }
+
+        Summary summary = ReadSummary(reader);
+        if (bodies == ExportBodies.None)
+        {
+            return new ExportRow(summary, null, null, null, null, null, null, null);
+        }
+
+        JsonNode? requestHeaders = JsonNode.Parse(reader.GetString(SummaryColumnCount));
+        JsonNode? responseHeaders = reader.IsDBNull(SummaryColumnCount + 1)
+            ? null
+            : JsonNode.Parse(reader.GetString(SummaryColumnCount + 1));
+        string? requestEncoding = ContentEncodingOf(requestHeaders);
+        string? responseEncoding = ContentEncodingOf(responseHeaders);
+        BodyPayload? requestBody = ToBodyPayload(
+            reader, SummaryColumnCount + 2, requestEncoding, maxDecodedBytes);
+        BodyPayload? responseBody = ToBodyPayload(
+            reader, SummaryColumnCount + 3, responseEncoding, maxDecodedBytes);
+        string? promptText = FlattenPrompt(summary.Format, requestBody?.Text);
+        string? responseText = FlattenResponse(summary.Format, responseBody?.Text);
+
+        if (bodies == ExportBodies.Text)
+        {
+            return new ExportRow(summary, promptText, responseText, null, null, null, null, null);
+        }
+
+        BodyPayload? responseRaw = ToBodyPayload(
+            reader, SummaryColumnCount + 4, responseEncoding, maxDecodedBytes);
+        return new ExportRow(
+            summary, promptText, responseText, requestHeaders, responseHeaders,
+            requestBody, responseBody, responseRaw);
     }
 
     public string? GetSessionName(long sessionId)

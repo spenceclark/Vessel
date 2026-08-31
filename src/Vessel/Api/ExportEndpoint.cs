@@ -179,10 +179,17 @@ public static class ExportEndpoint
         return string.Join(',', allFields.Select(EscapeCsv)) + "\r\n";
     }
 
-    private static string EscapeCsv(string value) =>
-        value.IndexOfAny([',', '"', '\r', '\n']) < 0
+    private static string EscapeCsv(string value)
+    {
+        if (value.Length > 0 && value[0] is '=' or '+' or '-' or '@' or '\t' or '\r')
+        {
+            value = "'" + value;
+        }
+
+        return value.IndexOfAny([',', '"', '\r', '\n']) < 0
             ? value
             : '"' + value.Replace("\"", "\"\"") + '"';
+    }
 
     private static string Invariant<T>(T? value) where T : struct, IFormattable =>
         value?.ToString(null, CultureInfo.InvariantCulture) ?? "";

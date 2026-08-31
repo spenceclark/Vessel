@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
+using Vessel.Storage;
 using Xunit;
 
 namespace Vessel.Tests;
@@ -112,6 +114,44 @@ public class ExportTests
     }
 
     [Fact]
+    public async Task Csv_NeutralizesSpreadsheetFormulaPrefixes()
+    {
+        await using var fx = new VesselFixture();
+        await fx.InitializeAsync();
+        const string model = "=2+3";
+        await SendChat(fx, "csv-formula", "csv-formula", model);
+        await CaptureDb.WaitForRow(fx.DbPath, row => row.Model == model);
+
+        using HttpResponseMessage response = await fx.Client.GetAsync(
+            $"{fx.VesselBaseUrl}/vessel/api/export?format=csv&bodies=none&model={Uri.EscapeDataString(model)}", CT);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        string csv = await response.Content.ReadAsStringAsync(CT);
+        Assert.Contains(",'=2+3,", csv);
+        Assert.DoesNotContain(",=2+3,", csv);
+    }
+
+    [Fact]
+    public async Task ExportIterator_DoesNotHoldWalSnapshotWhileCallerIsPaused()
+    {
+        await using var fx = new VesselFixture();
+        await fx.InitializeAsync();
+        await SendChat(fx, "wal-export", "wal-export-first", "wal-model");
+        await CaptureDb.WaitForRow(fx.DbPath, row => row.Path.Contains("wal-export-first"));
+
+        var store = new SqliteReadStore(fx.DbPath);
+        using IEnumerator<ExportRow> rows = store.EnumerateExport(
+            new RequestQuery(Model: "wal-model"), ExportBodies.None, 1024).GetEnumerator();
+        Assert.True(rows.MoveNext());
+
+        // Commit a newer WAL frame while response backpressure is simulated by leaving
+        // the export iterator paused on its yielded row.
+        await SendChat(fx, "wal-export", "wal-export-second", "other-model");
+        await CaptureDb.WaitForRow(fx.DbPath, row => row.Path.Contains("wal-export-second"));
+
+        Assert.Equal(0, CheckpointBusy(fx.DbPath));
+    }
+
+    [Fact]
     public async Task Jsonl_IsUtf8WithoutBom()
     {
         await using var fx = new VesselFixture();
@@ -174,5 +214,22 @@ public class ExportTests
         string line = Assert.Single(body.Split('\n', StringSplitOptions.RemoveEmptyEntries));
         using JsonDocument doc = JsonDocument.Parse(line);
         return doc.RootElement.Clone();
+    }
+
+    private static int CheckpointBusy(string dbPath)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+            DefaultTimeout = 1,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+        using SqliteDataReader reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        return reader.GetInt32(0);
     }
 }
