@@ -17,3 +17,4 @@ respective package distributions.
 | class-variance-authority | Apache-2.0 |
 | clsx / react-markdown / remark-gfm | MIT |
 | lucide-react | ISC |
+| d3-scale / d3-shape | ISC |

@@ -108,6 +108,8 @@ function renderStatsBar(
       onDataCleared,
       onDeleteSessions,
       connected: true,
+      view: 'history',
+      onViewChange: () => {},
     }),
     { wrapper },
   )

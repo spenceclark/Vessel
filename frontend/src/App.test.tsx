@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, ApiError } from '@/api/client'
-import { SESSION_LIST_LIMIT, type SessionDeleteSummary, type SessionInfo, type SessionScope } from '@/api/types'
+import { EMPTY_FILTERS, SESSION_LIST_LIMIT, type RequestFilters, type SessionDeleteSummary, type SessionInfo, type SessionScope } from '@/api/types'
 import App from './App'
 
 interface MockStatsProps {
@@ -11,6 +11,11 @@ interface MockStatsProps {
   onScopeChange: (scope: SessionScope) => void
   onReset: () => Promise<void>
   onDeleteSessions: (sessionIds: number[]) => Promise<SessionDeleteSummary>
+}
+
+interface MockFilterBarProps {
+  filters: RequestFilters
+  onFiltersChange: (next: RequestFilters) => void
 }
 
 vi.mock('@/api/useLiveHistory', () => ({
@@ -34,7 +39,14 @@ vi.mock('@/components/StatsBar', () => ({
 }))
 vi.mock('@/components/CaptureHealthBanner', () => ({ CaptureHealthBanner: () => null }))
 vi.mock('@/components/BindAddressBanner', () => ({ BindAddressBanner: () => null }))
-vi.mock('@/components/FilterBar', () => ({ FilterBar: () => null }))
+vi.mock('@/components/FilterBar', () => ({
+  FilterBar: ({ filters, onFiltersChange }: MockFilterBarProps) => (
+    <>
+      <div data-testid="filters">{JSON.stringify(filters)}</div>
+      <button type="button" onClick={() => onFiltersChange({ ...filters, tag: 'planner' })}>Filter test</button>
+    </>
+  ),
+}))
 vi.mock('@/components/RequestList', () => ({ RequestList: () => null }))
 vi.mock('@/components/DetailPane', () => ({ DetailPane: () => null }))
 vi.mock('@/components/InFlightDetailPane', () => ({ InFlightDetailPane: () => null }))
@@ -109,6 +121,29 @@ describe('App session coordination review regressions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Scope test' }))
 
     await waitFor(() => expect(screen.getByTestId('scope').textContent).toBe('1'))
+  })
+
+  // Live-use feedback — a filter set for one session's traffic rarely still applies to
+  // another's; carrying it across an explicit session change read as a stale leftover.
+  // Uses the same bounded session list as "keeps the viewed session..." below, so scope
+  // 3 actually sticks (not bounced back to current) and the scope change is unambiguous.
+  it('resets filters when the session scope changes', async () => {
+    vi.spyOn(api, 'listSessions').mockResolvedValue([
+      ...Array.from({ length: SESSION_LIST_LIMIT - 1 }, (_, index): SessionInfo => ({
+        ...current, id: 1000 + index, name: `run-${1000 + index}`, isCurrent: false,
+      })),
+      current,
+    ])
+
+    renderApp()
+    await waitFor(() => expect(screen.getByTestId('scope').textContent).toBe('1'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter test' }))
+    expect(JSON.parse(screen.getByTestId('filters').textContent!)).toEqual({ ...EMPTY_FILTERS, tag: 'planner' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Scope test' })) // -> scope 3
+    await waitFor(() => expect(screen.getByTestId('scope').textContent).toBe('3'))
+    expect(JSON.parse(screen.getByTestId('filters').textContent!)).toEqual(EMPTY_FILTERS)
   })
 
   it('attempts every bulk deletion and reports prior successes with failures', async () => {

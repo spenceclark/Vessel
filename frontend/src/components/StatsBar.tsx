@@ -15,7 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import { formatCompactTokenCount, formatMs, formatTokPerSec } from '@/lib/format'
 
-/** §5 — the header panel: mark + wordmark, stat group, session toggle / Reset / gear / backend indicator. */
+/** §5 — the header panel: mark + wordmark, view toggle, stat group, session toggle / Reset / gear / backend indicator. */
 export function StatsBar({
   scope,
   sessions,
@@ -24,6 +24,8 @@ export function StatsBar({
   onDataCleared,
   onDeleteSessions,
   connected,
+  view,
+  onViewChange,
 }: {
   scope: SessionScope | null
   sessions: SessionInfo[]
@@ -33,6 +35,9 @@ export function StatsBar({
   onDeleteSessions: (sessionIds: number[]) => Promise<SessionDeleteSummary>
   /** D8 (review §4 risk) — the SSE connection state `useEvents` already tracked but no one displayed. */
   connected: boolean
+  /** Phase 7 D10 — which main-area view the header toggles. */
+  view: 'history' | 'reports'
+  onViewChange: (view: 'history' | 'reports') => void
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [resetting, setResetting] = useState(false)
@@ -92,7 +97,11 @@ export function StatsBar({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-panel border border-border bg-surface px-4 py-3 shadow-panel">
+    // gap-x-3 (not the panel-to-panel gap-x-6): these are individual header controls,
+    // not separate panels, and §4's own "between controls 8" rule is the right budget —
+    // the header wraps to a second line past ~1550px of stats + controls otherwise
+    // (found live: 9 stats + the view toggle overflows at the app's own 1600px max-width).
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-panel border border-border bg-surface px-4 py-3 shadow-panel">
       <div className="flex items-center gap-2">
         <Mark size={22} />
         <span className="text-lg text-text" style={{ fontWeight: 650, letterSpacing: '-0.02em' }}>
@@ -100,7 +109,22 @@ export function StatsBar({
         </span>
       </div>
 
-      <div className="flex items-center gap-4" aria-live="polite">
+      {/* Phase 7 D10 — the History / Reports view toggle (§6 segmented control). The
+          header stays shared across both views, so scope, stats and session controls
+          carry over — which the reports read. Tighter padding than the default
+          TabsTrigger: this control competes for space with up to 9 stat groups on the
+          same line, per the header-width finding above. */}
+      <Tabs value={view} onValueChange={(v) => onViewChange(v as 'history' | 'reports')}>
+        <TabsList aria-label="View">
+          <TabsTrigger value="history" className="px-2 text-xs">History</TabsTrigger>
+          <TabsTrigger value="reports" className="px-2 text-xs">Reports</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {/* §4 "between controls 8": the generous panel-to-panel gap-4 here was what a
+          9-stat session (both cached columns present) needed to not overflow the header's
+          own max-width alongside the view toggle above. */}
+      <div className="flex items-center gap-2" aria-live="polite">
         <Stat label="Requests" value={stats ? String(stats.total) : '—'} />
         <Divider />
         <Stat label="Failed" value={stats ? String(stats.failed) : '—'} danger={!!stats && stats.failed > 0} />

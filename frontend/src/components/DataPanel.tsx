@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/api/client'
+import { AGGREGATE_QUERY_ROOT, SERIES_QUERY_ROOT } from '@/api/queryKeys'
 import type { RequestClearScope, SessionDeleteSummary, SessionInfo } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -80,6 +81,9 @@ export function DataPanel({
         queryClient.invalidateQueries({ queryKey: ['requests'] }),
         queryClient.invalidateQueries({ queryKey: ['stats'] }),
         queryClient.invalidateQueries({ queryKey: ['facets'] }),
+        // Phase 7 D14 — chart roots are aggregates over the same rows.
+        queryClient.invalidateQueries({ queryKey: SERIES_QUERY_ROOT }),
+        queryClient.invalidateQueries({ queryKey: AGGREGATE_QUERY_ROOT }),
       ])
       reset()
     } catch (err) {

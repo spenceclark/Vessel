@@ -314,11 +314,25 @@ public sealed class SqliteReadStore(string dbPath)
     }
 
     /// <summary>
-    /// Builds and parameterizes the one canonical list predicate. Paging, count, and export
-    /// all call this helper so "export what I'm looking at" cannot drift from the UI list.
+    /// Builds and parameterizes the one canonical list predicate. Paging, count, export,
+    /// and the Phase 7 chart queries all call this helper so "export what I'm looking at"
+    /// cannot drift from the UI list, and a report can never drift from the list either.
     /// </summary>
+    /// <param name="fanOut">
+    /// Phase 7 D3 (generalized #25/#26) — joins <c>json_each</c> over the tags or warnings
+    /// column so a request contributes one row per tag/warning code (grouping by that
+    /// dimension). The TVF argument references <c>requests</c>, so the join must follow
+    /// <c>requests</c> in the FROM clause — SQLite resolves TVF arguments against tables
+    /// appearing earlier only. <c>LEFT JOIN … ON TRUE</c> keeps a request with none of that
+    /// column's values as a null-key row instead of dropping it.
+    /// </param>
+    /// <param name="extraWhere">
+    /// Phase 7 D1 — additional predicates (the series metric exclusion) joined into the same
+    /// AND, so a chart's count and its points reconcile against one shared clause list.
+    /// </param>
     private static string ConfigureFilteredCommand(
-        SqliteCommand command, RequestQuery query, long? before = null)
+        SqliteCommand command, RequestQuery query, long? before = null,
+        FanOutColumn fanOut = FanOutColumn.None, IEnumerable<string>? extraWhere = null)
     {
         string? ftsQuery = SanitizeFtsQuery(query.Q);
         var where = new List<string>();
@@ -343,6 +357,7 @@ public sealed class SqliteReadStore(string dbPath)
 
         if (query.Warned) where.Add("requests.warnings IS NOT NULL");
         if (ftsQuery is not null) where.Add("requests_fts MATCH $q");
+        if (extraWhere is not null) where.AddRange(extraWhere);
 
         if (before is long beforeValue) command.Parameters.AddWithValue("$before", beforeValue);
         if (query.SessionId is long session) command.Parameters.AddWithValue("$session", session);
@@ -352,9 +367,19 @@ public sealed class SqliteReadStore(string dbPath)
         if (query.Tag is not null) command.Parameters.AddWithValue("$tag", query.Tag);
         if (ftsQuery is not null) command.Parameters.AddWithValue("$q", ftsQuery);
 
-        string from = ftsQuery is null
-            ? "FROM requests"
-            : "FROM requests JOIN requests_fts ON requests_fts.rowid = requests.id";
+        string from = "FROM requests";
+        if (ftsQuery is not null) from += " JOIN requests_fts ON requests_fts.rowid = requests.id";
+        string? fanOutSourceColumn = fanOut switch
+        {
+            FanOutColumn.Tags => "requests.tags",
+            FanOutColumn.Warnings => "requests.warnings",
+            _ => null,
+        };
+        if (fanOutSourceColumn is not null)
+        {
+            from += $" LEFT JOIN json_each(COALESCE({fanOutSourceColumn}, '[]')) AS fan_each ON TRUE";
+        }
+
         return where.Count == 0 ? from : from + " WHERE " + string.Join(" AND ", where);
     }
 
@@ -523,6 +548,349 @@ public sealed class SqliteReadStore(string dbPath)
             total, failed, avgDuration, avgTokPerSec, avgTtft, sessionId, sessionStartedAt,
             tokensIn, tokensOut, tokensCachedRead, tokensCachedWrite, tokensEstimated);
     }
+
+    /// <summary>
+    /// Phase 7 D1 — the context-growth series (#25). One point per captured request (one per
+    /// request × tag when grouping by tag — a request with several tags appears in each),
+    /// capped to the newest <see cref="ChartLimits.MaxPoints"/> **requests** (not fanned-out
+    /// rows — a multi-tag request must not let its extra rows each burn a slot of the
+    /// window, or the window would silently cover fewer real requests than advertised) and
+    /// returned oldest-first by id: insertion order is the true chronology; <c>started_at</c>
+    /// can tie or skew. Null-metric rows are excluded by predicate, so the count and the
+    /// returned points reconcile exactly — a raw capture with no token counts is not a
+    /// silent gap. The count runs only when the cap was hit; the common case pays for no
+    /// second scan.
+    /// </summary>
+    public SeriesResponse GetSeries(SeriesQuery query)
+    {
+        bool byTag = query.GroupBy == SeriesGroupBy.Tag;
+        FanOutColumn fanOut = byTag ? FanOutColumn.Tags : FanOutColumn.None;
+        string metricColumn = MetricColumn(query.Metric);
+        string metricPredicate = MetricNotNullPredicate(query.Metric);
+        string keyExpression = query.GroupBy switch
+        {
+            SeriesGroupBy.Tag => "fan_each.value",
+            SeriesGroupBy.Model => "requests.model",
+            SeriesGroupBy.Backend => "requests.backend",
+            _ => "NULL",
+        };
+
+        using SqliteConnection connection = Open();
+        using SqliteCommand command = connection.CreateCommand();
+        string filteredFrom = ConfigureFilteredCommand(
+            command, query.Scope, fanOut: fanOut, extraWhere: [metricPredicate]);
+        // DENSE_RANK over requests.id ranks *distinct requests* (rows fanned out from the
+        // same request via the tag join share one rank), so filtering on the rank — not a
+        // plain row LIMIT — caps the result to the newest MaxPoints distinct requests
+        // regardless of how many tags each one carries.
+        command.CommandText =
+            $"""
+
+            WITH ranked AS (
+                SELECT requests.id AS id, requests.started_at AS started_at,
+                       requests.tokens_estimated AS tokens_estimated,
+                       {metricColumn} AS metric_value, {keyExpression} AS series_key,
+                       DENSE_RANK() OVER (ORDER BY requests.id DESC) AS request_rank
+                {filteredFrom}
+            )
+            SELECT id, started_at, tokens_estimated, metric_value, series_key
+            FROM ranked
+            WHERE request_rank <= $maxPointsPlusOne
+            ORDER BY id DESC
+            """;
+        command.Parameters.AddWithValue("$maxPointsPlusOne", ChartLimits.MaxPoints + 1);
+
+        var points = new List<(long Id, string StartedAt, bool Estimated, long Value, string? Key)>();
+        using (SqliteDataReader reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                points.Add((
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.GetInt64(2) != 0,
+                    reader.GetInt64(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4)));
+            }
+        }
+
+        // request_rank <= MaxPoints+1 fetches the (MaxPoints+1)-th distinct request's rows
+        // purely to learn the cap was hit; every row for that oldest overflow request is
+        // dropped together here, never just one of its fanned-out rows.
+        int distinctRequests = points.Select(p => p.Id).Distinct().Count();
+        bool truncated = distinctRequests > ChartLimits.MaxPoints;
+        if (truncated)
+        {
+            var newestIds = new HashSet<long>(
+                points.Select(p => p.Id).Distinct().OrderByDescending(id => id).Take(ChartLimits.MaxPoints));
+            points = points.Where(p => newestIds.Contains(p.Id)).ToList();
+            distinctRequests = ChartLimits.MaxPoints;
+        }
+
+        points.Reverse();
+
+        long totalMatching = 0;
+        if (truncated)
+        {
+            totalMatching = CountMatchingRequests(connection, query.Scope, metricPredicate, fanOut);
+        }
+
+        // Group in insertion (oldest-first) order, then rank series by total metric value,
+        // dropping the remainder past MaxSeries — never merging into an "(other)" line,
+        // which would sum unrelated requests at arbitrary timestamps and draw a curve that
+        // never happened. estimated describes the drawn points (the newest window), not
+        // rows the cap dropped.
+        // One series can carry the null key (untagged / model-less), which cannot be a
+        // Dictionary key (notnull constraint), so it lives in its own slot beside the map.
+        var groups = new Dictionary<string, List<(long Id, string StartedAt, long Value)>>(StringComparer.Ordinal);
+        List<(long Id, string StartedAt, long Value)>? nullGroup = null;
+        var order = new List<(string? Key, List<(long Id, string StartedAt, long Value)> Points)>();
+        bool estimated = false;
+
+        List<(long Id, string StartedAt, long Value)> GetOrAdd(string? key)
+        {
+            if (key is null)
+            {
+                if (nullGroup is null)
+                {
+                    nullGroup = [];
+                    order.Add((null, nullGroup));
+                }
+
+                return nullGroup;
+            }
+
+            if (!groups.TryGetValue(key, out var group))
+            {
+                group = [];
+                groups[key] = group;
+                order.Add((key, group));
+            }
+
+            return group;
+        }
+
+        foreach (var (id, startedAt, isEstimated, value, key) in points)
+        {
+            GetOrAdd(key).Add((id, startedAt, value));
+            estimated |= isEstimated;
+        }
+
+        var ranked = order
+            .Select(g => (g.Key, g.Points, Total: g.Points.Sum(p => p.Value)))
+            .OrderByDescending(g => g.Total)
+            .ThenBy(g => g.Key, SeriesKeyOrder.Instance)
+            .ToArray();
+
+        return new SeriesResponse(
+            Metric: MetricName(query.Metric),
+            GroupBy: GroupByName(query.GroupBy),
+            Series: ranked
+                .Take(ChartLimits.MaxSeries)
+                .Select(g => new SeriesGroup(
+                    g.Key, g.Points.Select(p => new SeriesPoint(p.Id, p.StartedAt, p.Value)).ToArray()))
+                .ToArray(),
+            Returned: distinctRequests,
+            TotalMatching: totalMatching,
+            Truncated: truncated,
+            OmittedSeries: Math.Max(0, ranked.Length - ChartLimits.MaxSeries),
+            Estimated: estimated);
+    }
+
+    /// <summary>
+    /// Phase 7 D2 — the aggregate report (#26): one grouped row per distinct key over the
+    /// canonical list scope, sorted by tokens in+out desc, then requests desc, then key asc
+    /// — a total order, so the chart is stable across refetches — capped at
+    /// <see cref="ChartLimits.MaxGroups"/> with <see cref="AggregateResponse.TotalGroups"/>
+    /// reporting the full count. No "(other)" rollup: combining averages of averages is
+    /// arithmetically wrong, and a correct remainder needs a second anti-join query for a
+    /// row nobody asked for. <c>by=tag</c>/<c>by=warning</c> fan out through <c>json_each</c>,
+    /// so a multi-valued request is counted once per value and the rows can sum past the
+    /// session total (disclosed in the UI). Groups are read in full — distinct keys over a
+    /// table capped at 10 000 rows, narrow columns only — so totalGroups needs no second scan.
+    /// </summary>
+    public AggregateResponse GetAggregate(AggregateQuery query)
+    {
+        string keyExpression = query.By switch
+        {
+            AggregateDimension.Model => "requests.model",
+            AggregateDimension.Tag => "fan_each.value",
+            AggregateDimension.Backend => "requests.backend",
+            AggregateDimension.Format => "requests.format",
+            AggregateDimension.Warning => "fan_each.value",
+            _ => throw new ArgumentOutOfRangeException(nameof(query)),
+        };
+        FanOutColumn fanOut = query.By switch
+        {
+            AggregateDimension.Tag => FanOutColumn.Tags,
+            AggregateDimension.Warning => FanOutColumn.Warnings,
+            _ => FanOutColumn.None,
+        };
+
+        using SqliteConnection connection = Open();
+        using SqliteCommand command = connection.CreateCommand();
+        string filteredFrom = ConfigureFilteredCommand(command, query.Scope, fanOut: fanOut);
+        command.CommandText =
+            $"""
+
+            SELECT {keyExpression},
+                   COUNT(*),
+                   COALESCE(SUM(CASE WHEN requests.error IS NOT NULL OR requests.status_code >= 400 THEN 1 ELSE 0 END), 0),
+                   COALESCE(SUM(requests.tokens_in), 0),
+                   COALESCE(SUM(requests.tokens_out), 0),
+                   COALESCE(SUM(requests.tokens_cached_read), 0),
+                   COALESCE(SUM(requests.tokens_cached_write), 0),
+                   AVG(requests.duration_ms),
+                   AVG(CASE WHEN requests.streamed = 1 THEN requests.ttft_ms ELSE NULL END),
+                   AVG(requests.tok_per_sec),
+                   COALESCE(MAX(requests.tokens_estimated), 0)
+            {filteredFrom}
+            GROUP BY {keyExpression}
+            """;
+
+        // #26 live-use feedback — nearest-rank p50/p95 duration per group. A single extra
+        // query (not a SQL window function): SQLite has no bundled PERCENTILE_CONT, and the
+        // group's non-null durations are bounded by the same ≤10 000-row retention cap the
+        // rest of this store already treats as a full-scan budget, so grouping and sorting
+        // in C# is simpler to verify than emulating percentiles in SQL.
+        var durationsByKey = new Dictionary<string, List<double>>(StringComparer.Ordinal);
+        List<double>? nullKeyDurations = null;
+        using (SqliteCommand percentileCommand = connection.CreateCommand())
+        {
+            string percentileFrom = ConfigureFilteredCommand(
+                percentileCommand, query.Scope, fanOut: fanOut,
+                extraWhere: ["requests.duration_ms IS NOT NULL"]);
+            percentileCommand.CommandText = $"SELECT {keyExpression}, requests.duration_ms {percentileFrom}";
+            using SqliteDataReader reader = percentileCommand.ExecuteReader();
+            while (reader.Read())
+            {
+                double duration = reader.GetDouble(1);
+                if (reader.IsDBNull(0))
+                {
+                    (nullKeyDurations ??= []).Add(duration);
+                    continue;
+                }
+
+                string key = reader.GetString(0);
+                if (!durationsByKey.TryGetValue(key, out List<double>? list))
+                {
+                    list = [];
+                    durationsByKey[key] = list;
+                }
+
+                list.Add(duration);
+            }
+        }
+
+        nullKeyDurations?.Sort();
+        foreach (List<double> list in durationsByKey.Values) list.Sort();
+
+        double? Percentile(string? key, double p)
+        {
+            List<double>? list = key is null ? nullKeyDurations : durationsByKey.GetValueOrDefault(key);
+            if (list is null || list.Count == 0) return null;
+            int index = Math.Clamp((int)Math.Ceiling(p * list.Count) - 1, 0, list.Count - 1);
+            return list[index];
+        }
+
+        var rows = new List<AggregateRow>();
+        using (SqliteDataReader reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                string? key = reader.IsDBNull(0) ? null : reader.GetString(0);
+                rows.Add(new AggregateRow(
+                    Key: key,
+                    Requests: reader.GetInt64(1),
+                    Failed: reader.GetInt64(2),
+                    TokensIn: reader.GetInt64(3),
+                    TokensOut: reader.GetInt64(4),
+                    TokensCachedRead: reader.GetInt64(5),
+                    TokensCachedWrite: reader.GetInt64(6),
+                    AvgDurationMs: reader.IsDBNull(7) ? null : reader.GetDouble(7),
+                    AvgTtftMs: reader.IsDBNull(8) ? null : reader.GetDouble(8),
+                    AvgTokPerSec: reader.IsDBNull(9) ? null : reader.GetDouble(9),
+                    TokensEstimated: reader.GetInt64(10) != 0,
+                    P50DurationMs: Percentile(key, 0.50),
+                    P95DurationMs: Percentile(key, 0.95)));
+            }
+        }
+
+        rows.Sort((a, b) =>
+        {
+            int cmp = (b.TokensIn + b.TokensOut).CompareTo(a.TokensIn + a.TokensOut);
+            if (cmp != 0) return cmp;
+            cmp = b.Requests.CompareTo(a.Requests);
+            return cmp != 0 ? cmp : SeriesKeyOrder.Instance.Compare(a.Key, b.Key);
+        });
+
+        return new AggregateResponse(
+            By: DimensionName(query.By),
+            Rows: rows.Take(ChartLimits.MaxGroups).ToArray(),
+            TotalGroups: rows.Count);
+    }
+
+    /// <summary>
+    /// Phase 7 D1 — the canonical count predicate (<see cref="CountRequests"/>' builder)
+    /// plus the series metric exclusion, so a truncated chart's totalMatching counts the
+    /// same rows its points came from. When fanning out the count is over the fan-out join
+    /// but of request rows (<c>COUNT(DISTINCT requests.id)</c>) — the UI discloses
+    /// "N requests", and a multi-tag request is one request.
+    /// </summary>
+    private static long CountMatchingRequests(
+        SqliteConnection connection, RequestQuery query, string extraPredicate, FanOutColumn fanOut)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        string filteredFrom = ConfigureFilteredCommand(
+            command, query, fanOut: fanOut, extraWhere: [extraPredicate]);
+        command.CommandText =
+            $"SELECT COUNT({(fanOut != FanOutColumn.None ? "DISTINCT requests.id" : "*")}) {filteredFrom}";
+        return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static string MetricColumn(SeriesMetric metric) => metric switch
+    {
+        SeriesMetric.TokensIn => "requests.tokens_in",
+        SeriesMetric.TokensOut => "requests.tokens_out",
+        // A row carrying either count contributes its total; both-null rows are the gap.
+        SeriesMetric.TokensTotal => "COALESCE(requests.tokens_in, 0) + COALESCE(requests.tokens_out, 0)",
+        _ => throw new ArgumentOutOfRangeException(nameof(metric)),
+    };
+
+    private static string MetricNotNullPredicate(SeriesMetric metric) => metric switch
+    {
+        SeriesMetric.TokensIn => "requests.tokens_in IS NOT NULL",
+        SeriesMetric.TokensOut => "requests.tokens_out IS NOT NULL",
+        SeriesMetric.TokensTotal => "(requests.tokens_in IS NOT NULL OR requests.tokens_out IS NOT NULL)",
+        _ => throw new ArgumentOutOfRangeException(nameof(metric)),
+    };
+
+    private static string MetricName(SeriesMetric metric) => metric switch
+    {
+        SeriesMetric.TokensIn => "tokens_in",
+        SeriesMetric.TokensOut => "tokens_out",
+        SeriesMetric.TokensTotal => "tokens_total",
+        _ => throw new ArgumentOutOfRangeException(nameof(metric)),
+    };
+
+    private static string GroupByName(SeriesGroupBy groupBy) => groupBy switch
+    {
+        SeriesGroupBy.None => "none",
+        SeriesGroupBy.Tag => "tag",
+        SeriesGroupBy.Model => "model",
+        SeriesGroupBy.Backend => "backend",
+        _ => throw new ArgumentOutOfRangeException(nameof(groupBy)),
+    };
+
+    private static string DimensionName(AggregateDimension by) => by switch
+    {
+        AggregateDimension.Model => "model",
+        AggregateDimension.Tag => "tag",
+        AggregateDimension.Backend => "backend",
+        AggregateDimension.Format => "format",
+        AggregateDimension.Warning => "warning",
+        _ => throw new ArgumentOutOfRangeException(nameof(by)),
+    };
 
     /// <summary>D3/#29 — newest-first, bounded, always retaining current in the result.</summary>
     public SessionInfo[] ListSessions()

@@ -1,5 +1,7 @@
 import type {
   ActiveRequestsResponse,
+  AggregateDimensionName,
+  AggregateResponse,
   ClearResponse,
   ConfigApplyResult,
   ConfigGetResponse,
@@ -10,6 +12,9 @@ import type {
   RequestDetail,
   RequestFilters,
   RequestListResponse,
+  SeriesGroupByName,
+  SeriesMetricName,
+  SeriesResponse,
   SessionInfo,
   SessionScope,
   StatsResponse,
@@ -155,6 +160,37 @@ export const api = {
   deleteRequests: (scope: { all: true } | { before: string }) => {
     const qs = 'all' in scope ? 'scope=all' : `before=${encodeURIComponent(scope.before)}`
     return request<ClearResponse>(`/requests?${qs}`, { method: 'DELETE' })
+  },
+
+  /**
+   * Phase 7 D1 — the context-growth series. The capture-format filter keeps its plain
+   * `format` name here (the `requestFormat` alias is /export-only), and `session`
+   * keeps /requests' semantics: `all` means unscoped, and there is no `current` alias.
+   */
+  getSeries: ({
+    metric = 'tokens_in',
+    groupBy = 'none',
+    session,
+    filters,
+  }: { metric?: SeriesMetricName; groupBy?: SeriesGroupByName; session?: SessionScope; filters?: RequestFilters } = {}) => {
+    const params = new URLSearchParams({ metric, groupBy })
+    if (session !== undefined && session !== 'all') params.set('session', String(session))
+    applyFilterParams(params, filters)
+    const qs = params.toString()
+    return request<SeriesResponse>(`/series${qs ? `?${qs}` : ''}`)
+  },
+
+  /** Phase 7 D2 — the canned aggregate reports; `by` has no default server-side. */
+  getAggregate: ({
+    by,
+    session,
+    filters,
+  }: { by: AggregateDimensionName; session?: SessionScope; filters?: RequestFilters }) => {
+    const params = new URLSearchParams({ by })
+    if (session !== undefined && session !== 'all') params.set('session', String(session))
+    applyFilterParams(params, filters)
+    const qs = params.toString()
+    return request<AggregateResponse>(`/aggregate${qs ? `?${qs}` : ''}`)
   },
 
   deleteSession: (sessionId: number) =>

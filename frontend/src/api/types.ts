@@ -185,6 +185,65 @@ export interface ClearResponse {
   deleted: number
 }
 
+// Phase 7 — chart read endpoints (phase-7-charts.md D1/D2).
+
+export type SeriesMetricName = 'tokens_in' | 'tokens_out' | 'tokens_total'
+
+export type SeriesGroupByName = 'none' | 'tag' | 'model' | 'backend'
+
+export type AggregateDimensionName = 'model' | 'tag' | 'backend' | 'format' | 'warning'
+
+/** D1 — one chart point: the request's id (so a click can select it), ISO started_at, value. */
+export interface SeriesPoint {
+  id: number
+  t: string
+  v: number
+}
+
+/** D1 — one named series; `key: null` renders as "(none)" (untagged / model-less). */
+export interface SeriesGroup {
+  key: string | null
+  points: SeriesPoint[]
+}
+
+export interface SeriesResponse {
+  metric: SeriesMetricName
+  groupBy: SeriesGroupByName
+  series: SeriesGroup[]
+  returned: number
+  /** Computed only when the point cap was hit; otherwise 0. */
+  totalMatching: number
+  truncated: boolean
+  /** Series dropped (never merged) past the six-series ramp cap. */
+  omittedSeries: number
+  /** Any drawn row had estimated token counts — the whole chart is approximate. */
+  estimated: boolean
+}
+
+export interface AggregateRow {
+  key: string | null
+  requests: number
+  failed: number
+  tokensIn: number
+  tokensOut: number
+  tokensCachedRead: number
+  tokensCachedWrite: number
+  avgDurationMs: number | null
+  /** Streamed rows only, mirroring /stats. */
+  avgTtftMs: number | null
+  avgTokPerSec: number | null
+  tokensEstimated: boolean
+  /** #26 live-use feedback — nearest-rank percentiles over the group's non-null durations. */
+  p50DurationMs: number | null
+  p95DurationMs: number | null
+}
+
+export interface AggregateResponse {
+  by: AggregateDimensionName
+  rows: AggregateRow[]
+  totalGroups: number
+}
+
 /** #41 — optional predicate on an ordered clear frame; absent for all/before clears. */
 export interface ClearedEvent {
   sessionId?: number

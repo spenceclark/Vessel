@@ -77,16 +77,19 @@ of red-adjacent data (errors, warnings) and must stay restful.
 | `--danger` | `#f87171` | `#dc2626` | errors, failed, destructive buttons |
 | `--warn` | `#fbbf24` | `#b45309` | warning badges |
 | `--info` | `#7dd3fc` | `#0369a1` | informational badges (estimated tokens, usage-injected) |
-| `--tag-blue` | `#60a5fa` | `#2563eb` | tag pill color 1 of 6 (picked by hash, §9.1) |
-| `--tag-indigo` | `#818cf8` | `#4f46e5` | tag pill color 2 of 6 |
-| `--tag-violet` | `#a78bfa` | `#7c3aed` | tag pill color 3 of 6 |
-| `--tag-pink` | `#f472b6` | `#db2777` | tag pill color 4 of 6 |
-| `--tag-fuchsia` | `#e879f9` | `#a21caf` | tag pill color 5 of 6 |
-| `--tag-steel` | `#94a3b8` | `#475569` | tag pill color 6 of 6 |
+| `--tag-blue` | `#60a5fa` | `#2563eb` | categorical 1 of 6 — tag pill (hash-picked, §9.1) and `--chart-1` |
+| `--tag-indigo` | `#818cf8` | `#4f46e5` | categorical 2 of 6 — tag pill and `--chart-2` |
+| `--tag-violet` | `#a78bfa` | `#7c3aed` | categorical 3 of 6 — tag pill and `--chart-3` |
+| `--tag-pink` | `#f472b6` | `#db2777` | categorical 4 of 6 — tag pill and `--chart-4` |
+| `--tag-fuchsia` | `#e879f9` | `#a21caf` | categorical 5 of 6 — tag pill and `--chart-5` |
+| `--tag-steel` | `#94a3b8` | `#475569` | categorical 6 of 6 — tag pill and `--chart-6` |
 
-The tag ramp deliberately excludes red, amber, green, cyan-sky, and teal — those hues
+The `--tag-*` group is the **categorical ramp**, shared by tag pills and chart series
+(§2.3): a tag's pill in a row and that tag's line in a chart are the same color. The
+ramp deliberately excludes red, amber, green, cyan-sky, and teal — those hues
 are claimed by `--danger`/`--warn`/`--ok`/`--info`/`--accent`, and a tag pill must
-never be mistakable for a status at a glance. (An earlier `--tag-orange` violated
+never be mistakable for a status at a glance. The exclusion earns its keep twice: those
+hues stay free for status meaning *inside* charts too. (An earlier `--tag-orange` violated
 this — it rendered warn-adjacent next to real warning badges in live traffic and was
 replaced by fuchsia + steel.)
 
@@ -101,8 +104,59 @@ Tinted fills (badge backgrounds, hover washes) are **derived**, never new hexes:
 - `--danger` text on `--surface` must stay ≥ 4.5:1 contrast in both themes (the
   values above do); don't lighten tokens ad hoc — change the token or don't.
 - The accent is for *interaction and identity*, not data. Metrics are neutral;
-  status uses the semantic trio; charts (Phase 5) get their own tokens added here
-  first.
+  status uses the semantic trio; charts use §2.3's tokens and forms.
+
+### 2.3 Chart tokens & forms
+
+Charts (Phase 7) get their own tokens. No new hex values enter the palette: the chart
+chrome is derived from existing tokens at §2.1's sanctioned percentages, and the series
+ramp *is* the categorical ramp above.
+
+| Token | Value (both themes) | Use |
+|---|---|---|
+| `--chart-grid` | `color-mix(in srgb, var(--border-strong) 30%, transparent)` | gridlines — deliberately weaker than a panel border, so a chart never reads as a table |
+| `--chart-axis` | `var(--text-muted)` | axis lines, ticks, tick labels |
+| `--chart-1` … `--chart-6` | `--tag-blue`, `--tag-indigo`, `--tag-violet`, `--tag-pink`, `--tag-fuchsia`, `--tag-steel`, in that order | the categorical series ramp |
+
+(In `@theme` these land under the `--color-chart-*` names per §9.1's namespacing rule;
+the `var()` references resolve per theme at runtime, so both themes need no duplicates.)
+
+Form rules that go with the tokens:
+
+- **Chart form vocabulary:** time series → a **line** (multi-series) or **area + line**
+  (single series only; overlapping fills are unreadable); an **unrelated** series of
+  discrete events (no real connecting order between consecutive points — #25 live-use
+  feedback: an ungrouped multi-agent context-growth series is exactly this) → **scatter**,
+  points only, never a connecting line, which would draw a trend that isn't real;
+  categorical comparison → **horizontal bar**, optionally grouped (two measures) or
+  two-part stacked (ok/failed); anything else → a table. **No pie or donut, no dual
+  y-axes, no 3D, no gradients.**
+- **Series fills are derived, never new colors:** `color-mix(in srgb, <series> 20%,
+  transparent)` — the same 10/14/20/30 rule as badge tints.
+- **Six series maximum** — the ramp size, and the readability ceiling. Past that the
+  server ranks and the chart states what it omitted.
+- **Legend interaction (#25 live-use feedback, round 2):** a data-driven (per-key) legend
+  entry is a toggle — click **isolates** that series (hides every other one; clicking it
+  again restores all), shift-click **hides** just that one entry, independent of the
+  others. A fixed-measure legend (e.g. tokens-in/tokens-out on a bar chart) stays
+  non-interactive text.
+- **Small multiples**, when one overlaid chart would bury a meaningful series under a
+  noisier one ("meaningful alone, meaningless together" — #25 live-use feedback): a
+  same-form grid of one mini-chart per series, sharing one axis domain across all of them
+  so relative scale stays comparable, laid out in the same 2-column card grid other
+  report cards use. Offered as a toggle alongside the overlaid form, never a replacement
+  for it — some scopes read better overlaid.
+- **Accessibility (§8.7):** every chart is a `<figure>` carrying an `aria-label` that
+  summarizes it in one sentence, plus a visually-hidden `<table>` of the same data. The
+  legend is always text, never color alone.
+- **Motion (§7):** charts render statically. No entrance or transition animation on
+  geometry; only the 150ms opacity transitions already allowed, for hover emphasis.
+- **Numbers (§8.6):** every axis tick, tooltip value and table cell formats through
+  `lib/format.ts`. Tick labels are `xs`, `--chart-axis`, `tabular-nums`.
+- SVG is sized in real pixels (`width`/`height` from the measured box), not scaled
+  through a `viewBox` — scaling distorts stroke widths and text and loses §8.8's dense
+  devtool look. Every color is a `var(--color-…)` in a `stroke`/`fill` attribute; no JS
+  color values anywhere, which is what makes a theme flip free.
 
 ---
 
@@ -229,6 +283,32 @@ The app stops being full-bleed. It becomes **panels floating on a canvas**:
   run boundary.
 - **Detail panel**: tab strip as panel header, content scrolls. Empty state: centered
   mark (muted) + one line ("Select a request").
+- **History / Reports toggle (Phase 7).** A segmented control (§6 Tabs) in the header
+  panel switches the app's one screen between `history` (list + detail, the default
+  layout above) and `reports`. Reports replaces the list+detail row with one full-width,
+  internally-scrolling panel (`--surface`, radius-panel, shadow-panel) — the viewport
+  still never scrolls. The header stays shared, so the session picker, stat strip and
+  every other header control carry over, which the reports need: they are projections of
+  the same session scope and filters the list reads. Because the FilterBar is not on
+  screen in Reports, the active filters render as visible, individually-clearable chips
+  at the top of the reports panel (with a Clear filters action) — a silently-filtered
+  chart is a lie. With no active filters the bar shows the session name alone.
+- **Degenerate groupings (#26 live-use feedback).** A report card whose fetched dimension
+  has exactly one group (e.g. one model in a single-backend scope) has nothing beside it
+  to compare against, so a one-bar chart carries no information. Two responses, decided by
+  whether the card's numbers exist anywhere else on screen:
+  - If the header stats bar already carries the same total verbatim (Tokens/Requests by
+    model or tag, Avg tok/s by model — all mirror a header stat once collapsed to one
+    group), the card **isn't rendered at all**. A degenerate version of it would only
+    restate the header.
+  - If it carries something the header doesn't (Duration by tag's p50/p95, Cache
+    efficiency's cached-% ratio, Warnings by type's code breakdown), it renders as a
+    **stat panel**: the group's own name once, then its numbers as `--surface-3` tiles
+    (one level deeper than the card's own `--surface-2`, per the depth model) — xs
+    uppercase label over a mono value, the same visual language as the header's own `Stat`
+    component at a size that doesn't compete with it (`text-stat` stays header-only, §3).
+    Never plain prose — round 3 feedback was explicit that a bare sentence read as an
+    afterthought next to the bar-chart cards around it.
 
 ### 5.1 Row anatomy (list)
 
@@ -361,7 +441,9 @@ than signal. On narrow viewports, response panels stack.
 4. **No inline `style=` except dynamic values** (virtualizer transforms, measured
    sizes). If it's static, it's a class.
 5. **Dependencies:** UI libraries beyond the current set (react-markdown, TanStack,
-   lucide) require updating this doc first. Icons are lucide only — 14px in rows and
+   lucide, d3-scale, d3-shape) require updating this doc first. `d3-scale`/`d3-shape`
+   (Phase 7, charts) supply **chart math only** — scales, ticks, path generation; all
+   rendering is our own SVG under §2.3. Icons are lucide only — 14px in rows and
    chips, 16px in buttons and tabs, `stroke-width={1.75}`, always with an
    `aria-label` when the icon stands alone.
 6. **Numbers:** format via `lib/format.ts` only — durations `1.19s`/`984ms`, rates

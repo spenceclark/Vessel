@@ -141,6 +141,8 @@ public static class VesselApp
         app.MapGet("/vessel/api/export", (RequestDelegate)ExportEndpoint.Export);
         app.MapGet("/vessel/api/export/count", (RequestDelegate)ExportEndpoint.Count);
         app.MapGet("/vessel/api/requests/facets", (RequestDelegate)FacetsEndpoint.Handle);
+        app.MapGet("/vessel/api/series", (RequestDelegate)SeriesEndpoint.Handle);
+        app.MapGet("/vessel/api/aggregate", (RequestDelegate)AggregateEndpoint.Handle);
         app.MapGet("/vessel/api/requests/{id:long}", (RequestDelegate)RequestsEndpoints.Detail);
         app.MapGet("/vessel/api/requests/{id:long}/replays", (RequestDelegate)RequestsEndpoints.Replays);
         app.MapPost("/vessel/api/requests/{id:long}/replay", (RequestDelegate)ReplayEndpoint.Handle);

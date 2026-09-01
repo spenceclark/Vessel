@@ -14,7 +14,7 @@ import {
   type Summary,
 } from './types'
 import { api } from './client'
-import { REQUESTS_QUERY_ROOT, requestsQueryKey } from './queryKeys'
+import { AGGREGATE_QUERY_ROOT, REQUESTS_QUERY_ROOT, SERIES_QUERY_ROOT, requestsQueryKey } from './queryKeys'
 import { useEvents, type InFlightRequest } from './useEvents'
 
 /**
@@ -258,6 +258,10 @@ export function useLiveHistory({
       queryClient.refetchQueries({ queryKey: REQUESTS_QUERY_ROOT }),
       queryClient.invalidateQueries({ queryKey: ['stats'] }),
       queryClient.invalidateQueries({ queryKey: ['facets'] }),
+      // Phase 7 D14 — chart roots are aggregates over the same rows; a clear invalidates
+      // them alongside stats so an open Reports view cannot keep pre-clear curves.
+      queryClient.invalidateQueries({ queryKey: SERIES_QUERY_ROOT }),
+      queryClient.invalidateQueries({ queryKey: AGGREGATE_QUERY_ROOT }),
     ])
   }, [queryClient])
 

@@ -418,6 +418,8 @@ Everything Vessel-owned lives under `/vessel/` (impossible to collide with `/v1/
 | `GET /vessel/api/requests/{id}/replays` | direct replay children, for Compare entry points |
 | `GET /vessel/api/export` | streamed CSV/JSONL export of the current session + list-filter scope; `bodies=none\|text\|full` (`full` is JSONL-only). CSV carries a UTF-8 BOM for Windows Excel; JSONL is BOM-less. Because `format` selects the file format here, the capture-format filter is named `requestFormat`. |
 | `GET /vessel/api/export/count` | exact row count for the same session + list-filter predicate, used as the export scope sanity-check |
+| `GET /vessel/api/series` | token series over time for the charts: `metric=tokens_in\|tokens_out\|tokens_total`, `groupBy=none\|tag\|model\|backend`, over the canonical list scope (plain `format`). Newest points first, capped at 5,000 with `truncated` + both counts disclosed; tag grouping joins `json_each` so multi-tag requests appear per tag; six-series cap reports `omittedSeries` instead of merging; null-metric rows are excluded by the same predicate so counts reconcile (phase-7) |
+| `GET /vessel/api/aggregate` | grouped totals `by=model\|tag\|backend\|format\|warning` (required, 400 without it; `warning` fans out over the warnings JSON array like `tag`): requests/failed, token sums, avg duration/TTFT/tok/s and nearest-rank `p50`/`p95` duration per group; top 50 ranked by tokens then requests, `totalGroups` discloses the cut (phase-7, #26 live-use feedback) |
 | `GET /vessel/api/sessions` · `POST /vessel/api/sessions` | newest-first list capped at 500 with current guaranteed (`isCurrent`, request count, last-request time) / reset (create + activate marker, optional name ≤128 chars) |
 | `DELETE /vessel/api/sessions/{id}` | delete one non-current session marker with all request + FTS rows as a writer-scoped clear |
 | `GET /vessel/api/stats?session=` | totals, failures, avg latency / tok/s / ttft, token totals in/out/cached (accepted scope, post-Phase-4 addition — phase-3.md D3) |
@@ -614,8 +616,10 @@ into the list. TanStack Virtual for the history list (10k rows must scroll smoot
 
 ### Views
 
-- **Header bar** — selected-session stats (requests, failures, avg latency, avg tok/s,
-  avg TTFT), newest-first session picker, Reset Session, backend health dots.
+- **Header bar** — a History | Reports toggle, then the selected-session stats (requests,
+  failures, avg latency, avg tok/s, avg TTFT), newest-first session picker, Reset Session,
+  backend health dots. The header is shared across both views, so scope and session
+  controls carry into Reports.
 - **History list** (left) — reverse-chronological, virtualized, live. Row: path, model,
   duration, tok/s, tags, warning badge. Filter bar: free text (FTS), backend, model, tag,
   status and warnings-only. Export sits at the search row's right edge and opens a
@@ -630,6 +634,13 @@ into the list. TanStack Virtual for the history list (10k rows must scroll smoot
   - *Headers*: request/response, redacted values marked.
   - Actions: **Replay** (backend/model picker), **Copy as curl**, **Diff** (pick a second
     request → side-by-side message diff).
+- **Reports view** (toggle) — a full-width, internally-scrolling panel replacing the
+  list+detail row: a context-growth line chart (tokens-in per request, groupable
+  none/tag/model) above a two-column grid of bar cards (tokens by model/tag grouped
+  in-vs-out, requests by model stacked ok/failed, avg tok/s by model). Points are
+  time-plotted; caps, tag fan-out, ranked-out series and estimated counts are disclosed on
+  the cards, never silently applied. Active list filters travel into Reports as clearable
+  chips, and clicking a chart point jumps to that request in History (phase-7).
 - **Ollama panel** (when an Ollama backend exists) — `ollama ps` (loaded models, VRAM),
   server.log viewer (later phase).
 

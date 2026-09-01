@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
-import { REQUEST_DETAIL_QUERY_ROOT, REQUESTS_QUERY_ROOT } from '@/api/queryKeys'
+import { AGGREGATE_QUERY_ROOT, REQUEST_DETAIL_QUERY_ROOT, REQUESTS_QUERY_ROOT, SERIES_QUERY_ROOT } from '@/api/queryKeys'
 import { EMPTY_FILTERS, SESSION_LIST_LIMIT, type RequestClearScope, type RequestDetail, type RequestFilters, type SessionDeleteSummary, type SessionInfo, type SessionScope } from '@/api/types'
 import { useLiveHistory } from '@/api/useLiveHistory'
 import { CaptureHealthBanner } from '@/components/CaptureHealthBanner'
@@ -12,6 +12,7 @@ import { RequestList } from '@/components/RequestList'
 import { DetailPane } from '@/components/DetailPane'
 import { InFlightDetailPane } from '@/components/InFlightDetailPane'
 import { CompareView } from '@/components/CompareView'
+import { ReportsView } from '@/components/reports/ReportsView'
 
 /**
  * ui-spec.md §9.1 — selection spans both a completed row (by DB id) and an in-flight
@@ -24,12 +25,14 @@ export type Selection =
   | { kind: 'inflight'; seq: number }
   | { kind: 'compare'; originalId: number; replayId: number }
 
-/** D6/D3 — one screen: StatsBar / FilterBar / RequestList / DetailPane. No router. */
+/** D6/D3 — one screen: StatsBar / FilterBar / RequestList / DetailPane, plus phase 7's Reports view behind the header toggle. No router. */
 export default function App() {
   const queryClient = useQueryClient()
   const [scope, setScope] = useState<SessionScope | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
   const [filters, setFilters] = useState<RequestFilters>(EMPTY_FILTERS)
+  // Phase 7 D10 — history (list + detail) or reports; the header stays shared.
+  const [view, setView] = useState<'history' | 'reports'>('history')
 
   const sessionsQuery = useQuery({
     queryKey: ['sessions'],
@@ -73,6 +76,17 @@ export default function App() {
     setScope(current?.id ?? 'all')
     setSelection(null)
   }, [sessionsQuery.data, scope])
+
+  // Live-use feedback — filters are scoped to whatever session is being viewed; a tag
+  // filter that made sense for one session's traffic rarely still applies to another's,
+  // so carrying it across an explicit session change reads as a leftover, not a choice.
+  // Resets on every scope change however it happens (picker, Reset session, or one of the
+  // server-driven corrections above) — a no-op on the very first assignment, since
+  // filters start empty already.
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- resets filters to match a newly selected session scope, not a per-render sync.
+    setFilters(EMPTY_FILTERS)
+  }, [scope])
 
   // R10/R11/D05 — live history (in-flight map, completion merging, reconciliation) is one
   // model, owned by one hook. App only supplies scope/filters and handles selection.
@@ -179,10 +193,22 @@ export default function App() {
       queryClient.invalidateQueries({ queryKey: ['stats'] }),
       queryClient.invalidateQueries({ queryKey: ['facets'] }),
       queryClient.invalidateQueries({ queryKey: ['sessions'] }),
+      // Phase 7 D14 — the chart roots are aggregates over the same rows; every ['stats']
+      // invalidation site sweeps them too.
+      queryClient.invalidateQueries({ queryKey: SERIES_QUERY_ROOT }),
+      queryClient.invalidateQueries({ queryKey: AGGREGATE_QUERY_ROOT }),
     ])
 
     return { sessionsDeleted: deletedIds.length, requestsDeleted, failures }
   }, [handleSessionsDeleted, queryClient])
+
+  // D11 — the Reports scope bar renders the session name alone when nothing is filtered.
+  const scopeLabel =
+    scope === 'all'
+      ? 'All sessions'
+      : typeof scope === 'number'
+        ? (selectedSessionName ?? `Session #${scope}`)
+        : 'Session'
 
   return (
     <div className="h-screen overflow-hidden bg-canvas">
@@ -197,7 +223,24 @@ export default function App() {
           onDataCleared={handleDataCleared}
           onDeleteSessions={handleDeleteSessions}
           connected={connected}
+          view={view}
+          onViewChange={setView}
         />
+        {view === 'reports' && scope !== null ? (
+          <ReportsView
+            scope={scope}
+            filters={filters}
+            onFiltersChange={setFilters}
+            sessionLabel={scopeLabel}
+            enabled
+            onSelectRequest={(id) => {
+              // D13 — jump to the request: switch views, then select. DetailPane fetches by
+              // id, so the pane is correct even when the row is not in a loaded page.
+              setView('history')
+              setSelection({ kind: 'row', id })
+            }}
+          />
+        ) : (
         <div className="flex min-h-0 flex-1 gap-3">
           <div className="flex w-[420px] shrink-0 flex-col overflow-hidden rounded-panel border border-border bg-surface shadow-panel">
             <FilterBar scope={scope} filters={filters} onFiltersChange={setFilters} />
@@ -227,6 +270,7 @@ export default function App() {
             )}
           </div>
         </div>
+        )}
       </div>
     </div>
   )
