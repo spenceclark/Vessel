@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { memo, type ReactNode } from 'react'
 import { Mark } from '@/components/ui/Mark'
 import { cn } from '@/lib/utils'
 import { useChartSize } from './useChartSize'
@@ -17,6 +17,42 @@ export interface Tick {
   position: number
   label: string
 }
+
+/**
+ * Split out and memoized: LineChart's hover state changes on every pointermove, which
+ * would otherwise re-run this (up to MaxPoints × MaxSeries rows) on every mouse move even
+ * though the chart's data hasn't changed. `table`/`label` are stable across hover-only
+ * re-renders, so the default shallow-prop comparison skips this entirely in that case.
+ */
+const ChartAccessibleTable = memo(function ChartAccessibleTable({
+  label,
+  table,
+}: {
+  label: string
+  table: ChartTable
+}) {
+  return (
+    <table className="sr-only">
+      <caption>{label}</caption>
+      <thead>
+        <tr>
+          {table.columns.map((column) => (
+            <th key={column} scope="col">{column}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {table.rows.map((row, index) => (
+          <tr key={index}>
+            {row.map((cell, cellIndex) => (
+              <td key={cellIndex}>{cell ?? '—'}</td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+})
 
 /**
  * Phase 7 D6 — the shared chart chrome: container measurement, margins, gridlines and
@@ -107,25 +143,7 @@ export function ChartFrame({
         </div>
       )}
       {/* §8.7 — the same data the chart draws, for screen readers; the legend is text, never color alone. */}
-      <table className="sr-only">
-        <caption>{label}</caption>
-        <thead>
-          <tr>
-            {table.columns.map((column) => (
-              <th key={column} scope="col">{column}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {table.rows.map((row, index) => (
-            <tr key={index}>
-              {row.map((cell, cellIndex) => (
-                <td key={cellIndex}>{cell ?? '—'}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <ChartAccessibleTable label={label} table={table} />
     </figure>
   )
 }

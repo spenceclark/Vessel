@@ -42,6 +42,16 @@ describe('ReportScopeBar (phase 7 D11)', () => {
     expect(onFiltersChange).toHaveBeenCalledWith({ ...FILTERED, model: null })
   })
 
+  it('renders a chip for the format filter and clears just that one', () => {
+    const onFiltersChange = vi.fn()
+    const withFormat: RequestFilters = { ...EMPTY_FILTERS, format: 'anthropic' }
+    render(<ReportScopeBar sessionLabel="run-42" filters={withFormat} onFiltersChange={onFiltersChange} />)
+
+    expect(screen.getByText('format: anthropic')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filter format: anthropic' }))
+    expect(onFiltersChange).toHaveBeenCalledWith({ ...withFormat, format: null })
+  })
+
   it('Clear filters resets the same filters state App owns', () => {
     const onFiltersChange = vi.fn()
     render(<ReportScopeBar sessionLabel="run-42" filters={FILTERED} onFiltersChange={onFiltersChange} />)

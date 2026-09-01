@@ -248,4 +248,97 @@ describe('ContextGrowthCard (phase 7 #25)', () => {
     expect(screen.queryByRole('tab', { name: 'Grid' })).toBeNull()
     expect(screen.queryByRole('heading', { level: 4 })).toBeNull() // no mini-chart titles left
   })
+
+  // Review — a refetch (any filter/scope change, same groupBy) makes `data` momentarily
+  // undefined again before the new response lands, which used to reset viewMode to
+  // 'overlay' during that one blip even though the settled response still supports Grid.
+  it('keeps the Grid pick through a refetch that transiently has no data yet', async () => {
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    const twoSeries = seriesResponse({
+      groupBy: 'tag',
+      series: [
+        { key: 'a', points: [{ id: 1, t: '2026-08-31T09:00:00Z', v: 10 }] },
+        { key: 'b', points: [{ id: 2, t: '2026-08-31T09:00:00Z', v: 20 }] },
+      ],
+    })
+    let resolveRefetch: ((value: SeriesResponse) => void) | undefined
+    vi.spyOn(api, 'getSeries')
+      .mockResolvedValueOnce(seriesResponse()) // initial mount, groupBy=none
+      .mockResolvedValueOnce(twoSeries) // after clicking the Tag tab
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRefetch = resolve })) // after the filter change
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } })
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children)
+    const { rerender } = render(
+      createElement(ContextGrowthCard, {
+        scope: 42, filters: EMPTY_FILTERS, enabled: true, hasTags: false, onSelectRequest: vi.fn(),
+      }),
+      { wrapper },
+    )
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Tag' }))
+    await screen.findByRole('tab', { name: 'Grid' })
+    fireEvent.click(screen.getByRole('tab', { name: 'Grid' }))
+    expect(await screen.findAllByRole('figure')).toHaveLength(2)
+
+    // A different filter value is a different queryKey — a real refetch, not a background
+    // re-run of the same one — so `data` genuinely goes back to undefined in between.
+    rerender(
+      createElement(ContextGrowthCard, {
+        scope: 42, filters: { ...EMPTY_FILTERS, tag: 'planner' }, enabled: true, hasTags: false, onSelectRequest: vi.fn(),
+      }),
+    )
+    await waitFor(() => expect(resolveRefetch).toBeDefined())
+
+    resolveRefetch!(twoSeries)
+    await waitFor(() => expect(screen.getAllByRole('figure')).toHaveLength(2))
+    expect(screen.getByRole('tab', { name: 'Grid' }).getAttribute('aria-selected')).toBe('true')
+  })
+
+  // Review — a manual groupBy is a per-session decision (D15 reads as "for the scope being
+  // viewed"), not a permanent override: switching to a different session should let the
+  // Tag default re-apply rather than carrying e.g. a Model pick over from an unrelated one.
+  it('lets a new scope re-default groupBy instead of carrying over a manual pick', async () => {
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    vi.spyOn(api, 'getSeries').mockResolvedValue(seriesResponse({ groupBy: 'model' }))
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } })
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children)
+    const { rerender } = render(
+      createElement(ContextGrowthCard, {
+        scope: 42, filters: EMPTY_FILTERS, enabled: true, hasTags: false, onSelectRequest: vi.fn(),
+      }),
+      { wrapper },
+    )
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Model' }))
+    await screen.findByRole('tab', { name: 'Model', selected: true })
+
+    // A different session — hasTags now true for it — should be free to default to Tag
+    // again rather than staying pinned to the previous session's manual Model pick.
+    rerender(
+      createElement(ContextGrowthCard, {
+        scope: 99, filters: EMPTY_FILTERS, enabled: true, hasTags: true, onSelectRequest: vi.fn(),
+      }),
+    )
+    await screen.findByRole('tab', { name: 'Tag', selected: true })
+  })
+
+  it('distinguishes a failed fetch from a genuinely empty scope', async () => {
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    vi.spyOn(api, 'getSeries').mockRejectedValue(new Error('network error'))
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } })
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children)
+    render(
+      createElement(ContextGrowthCard, {
+        scope: 42, filters: EMPTY_FILTERS, enabled: true, hasTags: false, onSelectRequest: vi.fn(),
+      }),
+      { wrapper },
+    )
+
+    await screen.findByText('Could not load this chart.')
+    expect(screen.queryByText('No requests with token counts in this scope.')).toBeNull()
+  })
 })

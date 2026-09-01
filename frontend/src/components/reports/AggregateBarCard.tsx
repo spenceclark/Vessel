@@ -1,6 +1,6 @@
 import type { AggregateDimensionName, AggregateResponse, AggregateRow } from '@/api/types'
 import { CHART_RAMP } from '@/lib/chartColors'
-import { formatCompactTokenCount, formatMs } from '@/lib/format'
+import { formatCompactTokenCount, formatMs, formatTokPerSec } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { BarChart } from '@/components/ui/chart/BarChart'
 import { ChartLegend } from '@/components/ui/chart/ChartLegend'
@@ -86,9 +86,11 @@ const PROJECTIONS: Record<AggregateProjection, Projection> = {
     // D12/D13 — "—" for groups with no measured rate, never 0: null draws no bar and the
     // sr-only table shows an em-dash.
     values: (rows) => rows.map((row) => [row.avgTokPerSec]),
-    formatValue: () => (v) => v.toFixed(1),
+    // §8.6 — routes through lib/format.ts like every other projection (duration's formatMs
+    // does the same, baking "ms"/"s" into the axis/legend/stat value alike).
+    formatValue: () => formatTokPerSec,
     legend: false,
-    statFields: (row, fmt) => [{ label: 'Avg tok/s', value: row.avgTokPerSec != null ? fmt(row.avgTokPerSec) : '—' }],
+    statFields: (row) => [{ label: 'Avg tok/s', value: formatTokPerSec(row.avgTokPerSec) }],
   },
   // #26 live-use feedback — "the money chart for live-API users (prompt-cache misses are
   // silent cost)". Reuses whatever `by=` query the card is given (tokensIn/tokensCachedRead

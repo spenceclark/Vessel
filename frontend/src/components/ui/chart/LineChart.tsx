@@ -30,8 +30,13 @@ function seriesFill(colorVar: string): string {
   return `color-mix(in srgb, ${colorVar} 20%, transparent)`
 }
 
-/** Ten-line binary search over time-sorted points (D5: no d3-array dependency). */
-function nearestPointByTime(points: SeriesPoint[], time: number): SeriesPoint {
+/**
+ * Ten-line binary search over time-sorted points (D5: no d3-array dependency). A series
+ * with zero points is a documented legal shape (D1) — returns null rather than indexing
+ * into an empty array.
+ */
+function nearestPointByTime(points: SeriesPoint[], time: number): SeriesPoint | null {
+  if (points.length === 0) return null
   let lo = 0
   let hi = points.length - 1
   while (hi - lo > 1) {
@@ -96,13 +101,29 @@ export function LineChart({
     () => rawSeries.map((s) => ({ ...s, points: [...s.points].sort((a, b) => Date.parse(a.t) - Date.parse(b.t)) })),
     [rawSeries],
   )
-  const [hidden, setHidden] = useState<ReadonlySet<number>>(() => new Set())
-  const [hover, setHover] = useState<{ x: number; y: number; seriesIndex: number; point: SeriesPoint } | null>(null)
+  // Keyed by series key (not position): a refetch re-ranks series by total value, so the
+  // same index can mean a different series from one render to the next — an index-keyed
+  // hidden/hover would silently dim or crosshair the wrong one.
+  const [hidden, setHidden] = useState<ReadonlySet<string | null>>(() => new Set())
+  const [hover, setHover] = useState<{ x: number; y: number; seriesKey: string | null; point: SeriesPoint } | null>(
+    null,
+  )
 
   const empty = series.length === 0 || series.every((s) => s.points.length === 0)
-  const visible = series
-    .map((s, index) => ({ series: s, color: colors[index]!, index }))
-    .filter(({ index }) => !hidden.has(index))
+  // Memoized so a hover-only re-render (every pointermove) doesn't reallocate this array —
+  // it, and the sr-only table derived from it, only need to change when the data or the
+  // hidden set actually does.
+  const visible = useMemo(
+    () =>
+      series
+        .map((s, index) => ({ series: s, color: colors[index]!, index }))
+        .filter(({ series: s }) => !hidden.has(s.key)),
+    [series, colors, hidden],
+  )
+  const colorByKey = useMemo(() => new Map(series.map((s, index) => [s.key, colors[index]!])), [series, colors])
+  // A refetch can drop the hovered series entirely (regrouping, or it fell out of the
+  // ranked/truncated window) — guard the lookup rather than indexing into stale state.
+  const hoverColor = hover ? colorByKey.get(hover.seriesKey) : undefined
 
   const plot = plotArea(containerSize.width, height)
 
@@ -119,8 +140,12 @@ export function LineChart({
     const x = scaleTime()
       .domain(min === max ? [min - 1_000, max + 1_000] : [min, max])
       .range([0, plot.width])
+    // A zero-width domain (every drawn value is exactly 0) divides by zero in d3's
+    // interpolation, mapping every point to NaN instead of the axis floor — pad it the
+    // same way the single-point time domain above does.
+    const rawMax = yDomainMax ?? Math.max(...values, 0)
     const y = scaleLinear()
-      .domain([0, yDomainMax ?? Math.max(...values, 0)])
+      .domain([0, rawMax > 0 ? rawMax : 1])
       .range([plot.height, 0])
       .nice()
     // Time ticks use d3's own adaptive formatter (§2.3 rule doesn't cover time-axis
@@ -143,16 +168,21 @@ export function LineChart({
     ? area<SeriesPoint>().x((p) => xScale!(Date.parse(p.t))).y0(plot.height).y1((p) => yScale(p.v))
     : null
 
-  // The sr-only table carries the rows the chart draws (§8.7) — the visible series.
-  const table: ChartTable = {
-    columns: ['Series', 'Time', 'Value'],
-    rows: visible.flatMap(({ series: s }) =>
-      s.points.map((p) => [seriesLabel(s.key), formatTime(p.t), formatValue(p.v)]),
-    ),
-  }
+  // The sr-only table carries the rows the chart draws (§8.7) — the visible series. Memoized
+  // on the same deps as `visible` so a hover-only re-render reuses the same array instead of
+  // rebuilding (and re-diffing) it on every pointermove.
+  const table: ChartTable = useMemo(
+    () => ({
+      columns: ['Series', 'Time', 'Value'],
+      rows: visible.flatMap(({ series: s }) =>
+        s.points.map((p) => [seriesLabel(s.key), formatTime(p.t), formatValue(p.v)]),
+      ),
+    }),
+    [visible, formatTime, formatValue],
+  )
 
   function handleMove(event: React.PointerEvent<Element>) {
-    if (!xScale || !yScale || visible.length === 0) return
+    if (!xScale || !yScale) return
     // `currentTarget` is the hit-rect *inside* ChartFrame's <g transform="translate(margins)">,
     // so its own bounding rect already sits at the plot origin — no extra margin subtraction.
     const rect = event.currentTarget.getBoundingClientRect()
@@ -163,11 +193,13 @@ export function LineChart({
     }
 
     const time = xScale.invert(px).getTime()
-    let best: { index: number; point: SeriesPoint; distance: number } | null = null
-    for (const { series: s, index } of visible) {
+    let best: { key: string | null; point: SeriesPoint; distance: number } | null = null
+    for (const { series: s } of visible) {
+      // A visible series can legally have zero points (D1) — skip it rather than crash.
       const point = nearestPointByTime(s.points, time)
+      if (point === null) continue
       const distance = Math.abs(xScale(Date.parse(point.t)) - px)
-      if (best === null || distance < best.distance) best = { index, point, distance }
+      if (best === null || distance < best.distance) best = { key: s.key, point, distance }
     }
     if (best === null) {
       setHover(null)
@@ -177,7 +209,7 @@ export function LineChart({
     setHover({
       x: xScale(Date.parse(best.point.t)),
       y: yScale(best.point.v),
-      seriesIndex: best.index,
+      seriesKey: best.key,
       point: best.point,
     })
   }
@@ -187,17 +219,18 @@ export function LineChart({
   // the plain single-entry hide/show toggle, for pulling one noisy series out without
   // losing the rest.
   function handleLegendToggle(index: number, mode: 'isolate' | 'hide') {
+    const key = series[index]!.key
     setHidden((previous) => {
       if (mode === 'hide') {
         const next = new Set(previous)
-        if (next.has(index)) next.delete(index)
-        else next.add(index)
+        if (next.has(key)) next.delete(key)
+        else next.add(key)
         return next
       }
 
-      const isolatedToThis = previous.size === series.length - 1 && !previous.has(index)
+      const isolatedToThis = previous.size === series.length - 1 && !previous.has(key)
       if (isolatedToThis) return new Set()
-      return new Set(series.map((_, i) => i).filter((i) => i !== index))
+      return new Set(series.map((s) => s.key).filter((k) => k !== key))
     })
   }
 
@@ -212,16 +245,17 @@ export function LineChart({
         xTicks={xTicks}
         yTicks={yTicks}
         overlay={
-          hover && (
+          hover &&
+          hoverColor !== undefined && (
             <ChartTooltip
               x={Math.min(hover.x + DEFAULT_MARGINS.left + 12, Math.max(0, containerSize.width - 180))}
               y={Math.min(hover.y + 10, Math.max(0, height - 76))}
               title={formatTime(hover.point.t)}
               rows={[
                 {
-                  label: seriesLabel(series[hover.seriesIndex]!.key),
+                  label: seriesLabel(hover.seriesKey),
                   value: formatValue(hover.point.v),
-                  colorVar: colors[hover.seriesIndex],
+                  colorVar: hoverColor,
                 },
               ]}
             />
@@ -264,7 +298,7 @@ export function LineChart({
                     />
                   )),
                 )}
-              {hover && (
+              {hover && hoverColor !== undefined && (
                 <>
                   <line
                     x1={hover.x}
@@ -277,7 +311,7 @@ export function LineChart({
                     cx={hover.x}
                     cy={hover.y}
                     r={3.5}
-                    fill={colors[hover.seriesIndex]}
+                    fill={hoverColor}
                     stroke="var(--color-surface)"
                     strokeWidth={1.5}
                   />
@@ -303,7 +337,7 @@ export function LineChart({
             entries={series.map((s, index) => ({
               label: seriesLabel(s.key),
               colorVar: colors[index]!,
-              dimmed: hidden.has(index),
+              dimmed: hidden.has(s.key),
             }))}
             onToggle={handleLegendToggle}
           />

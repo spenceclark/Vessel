@@ -65,6 +65,17 @@ export function ContextGrowthCard({
   const [viewMode, setViewMode] = useState<ViewMode>('overlay')
   const userChangedGroupBy = useRef(false)
 
+  // Review — a manual groupBy pick is scoped to the session it was made in: D15's default
+  // ("Tag whenever the current scope has tagged traffic") reads as a per-scope decision,
+  // so switching sessions starts the choice over rather than carrying e.g. a Model pick
+  // made for one session into an unrelated one. Declared before the hasTags-default effect
+  // below so both land in the same commit when a scope change already knows hasTags.
+  useEffect(() => {
+    userChangedGroupBy.current = false
+    // oxlint-disable-next-line react/set-state-in-effect -- resets this card's own groupBy choice to match a newly selected scope, not a per-render sync.
+    setGroupBy('none')
+  }, [scope])
+
   // #25 round 1 — default to Tag once the scope is known to carry tagged traffic, but
   // never fight a groupBy the user picked themselves (including picking None back).
   useEffect(() => {
@@ -91,9 +102,13 @@ export function ContextGrowthCard({
   // vanished but a stale Grid selection kept rendering small multiples anyway).
   const canGrid = groupBy !== 'none' && series.length > 1
   useEffect(() => {
+    // A queryKey change (scope/filters/groupBy) makes `data` momentarily undefined again —
+    // `series` and so `canGrid` follow it down to empty/false for that one blip even when
+    // the settled response would also support Grid. Only correct viewMode once a response
+    // has actually landed, so a mid-refetch blip can't discard the user's Grid pick.
     // oxlint-disable-next-line react/set-state-in-effect -- synchronizes viewMode with canGrid, which the render path already keys off directly; this only needs to correct the state itself so a later flip back to a multi-series scope doesn't inherit a stale 'grid'.
-    if (!canGrid) setViewMode('overlay')
-  }, [canGrid])
+    if (data !== undefined && !canGrid) setViewMode('overlay')
+  }, [data, canGrid])
   const colors = assignSeriesColors(series.map((s) => s.key), groupBy === 'tag')
   const peak = Math.max(0, ...series.flatMap((s) => s.points.map((p) => p.v)))
   const estimated = data?.estimated ?? false
@@ -155,7 +170,13 @@ export function ContextGrowthCard({
             formatTime={formatTime}
             onSelectPoint={onSelectRequest}
             renderMode={groupBy === 'none' ? 'scatter' : 'line'}
-            emptyText={query.isLoading ? 'Loading…' : 'No requests with token counts in this scope.'}
+            emptyText={
+              query.isLoading
+                ? 'Loading…'
+                : query.isError
+                  ? 'Could not load this chart.'
+                  : 'No requests with token counts in this scope.'
+            }
           />
         )}
       </div>
@@ -168,7 +189,7 @@ export function ContextGrowthCard({
           {groupBy === 'tag' && 'A request with several tags appears in each.'}
           {groupBy === 'tag' && data.omittedSeries > 0 && ' '}
           {data.omittedSeries > 0 &&
-            `${data.omittedSeries} more ${data.omittedSeries === 1 ? 'series' : 'series'} not shown, ranked out by total tokens.`}
+            `${data.omittedSeries} more series not shown, ranked out by total tokens.`}
         </p>
       )}
 

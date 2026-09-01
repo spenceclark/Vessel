@@ -15,6 +15,7 @@ import { LineChart } from './LineChart'
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 class ResizeObserverStub {
@@ -241,6 +242,44 @@ describe('LineChart (phase 7 D5/D6)', () => {
   // #25 live-use feedback — the ungrouped view draws unrelated interleaved requests;
   // connecting them with a line manufactures a trend that isn't real. Scatter mode must
   // draw only points, never a connecting line or area fill.
+  it('does not crash hovering when a visible series has zero points', () => {
+    // D1: an empty points array is a legal series shape (e.g. a group with no requests in
+    // the drawn window). The nearest-point search and hover loop must skip it, not index
+    // into an empty array.
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    renderChart({
+      series: [
+        { key: 'a', points: [point(1, '2026-08-31T09:00:00Z', 10)] },
+        { key: 'b', points: [] },
+      ],
+      colors: [CHART_RAMP[0]!, CHART_RAMP[1]!],
+    })
+
+    const overlay = document.querySelector('svg rect[fill="transparent"]')! as SVGRectElement
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({
+      left: 46, top: 10, right: 786, bottom: 250, width: 740, height: 240, x: 46, y: 10,
+      toJSON: () => '',
+    })
+    expect(() => fireEvent.pointerMove(overlay, { clientX: 400, clientY: 10 })).not.toThrow()
+    expect(screen.getByRole('tooltip').textContent).toContain('10')
+  })
+
+  it('renders a zero-only series without collapsing the y-scale to NaN', () => {
+    // A zero-width [0, 0] domain divides by zero in d3's linear scale, mapping every point
+    // to NaN instead of the axis floor.
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    renderChart({
+      series: [{ key: null, points: [point(1, '2026-08-31T09:00:00Z', 0), point(2, '2026-08-31T09:01:00Z', 0)] }],
+      renderMode: 'scatter',
+    })
+
+    const circles = screen.getByRole('figure').querySelectorAll('circle')
+    expect(circles.length).toBeGreaterThan(0)
+    for (const circle of circles) {
+      expect(circle.getAttribute('cy')).not.toBe('NaN')
+    }
+  })
+
   it('scatter mode draws points only, never a line or area', () => {
     vi.stubGlobal('ResizeObserver', ResizeObserverStub)
     renderChart({
@@ -299,5 +338,42 @@ describe('LineChart (phase 7 D5/D6)', () => {
     expect(screen.getByRole('button', { name: 'a' }).getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByRole('button', { name: 'b' }).getAttribute('aria-pressed')).toBe('false')
     expect(screen.getByRole('button', { name: 'c' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  // Review regression — hidden state used to be keyed by array position, so a refetch that
+  // re-ranks series by total value (every real refetch, since ranking is by total metric
+  // value) would silently hide whichever series now landed on the old index instead of the
+  // one the user actually clicked.
+  it('keeps the same series hidden by key across a re-rank, not by its old position', () => {
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    const props = {
+      series: [
+        { key: 'a', points: [point(1, '2026-08-31T09:00:00Z', 10)] },
+        { key: 'b', points: [point(2, '2026-08-31T09:00:00Z', 20)] },
+      ],
+      colors: [CHART_RAMP[0]!, CHART_RAMP[1]!],
+      height: 240 as const,
+      label: 'Context growth',
+      formatValue: (v: number) => String(v),
+      formatTime: (iso: string) => iso,
+    }
+    const { rerender } = render(createElement(LineChart, props))
+
+    fireEvent.click(screen.getByRole('button', { name: 'b' }), { shiftKey: true })
+    expect(screen.getByRole('button', { name: 'b' }).getAttribute('aria-pressed')).toBe('false')
+
+    // "b" overtakes "a" in total value and a refetch re-ranks it to index 0.
+    rerender(
+      createElement(LineChart, {
+        ...props,
+        series: [
+          { key: 'b', points: [point(2, '2026-08-31T09:00:00Z', 20)] },
+          { key: 'a', points: [point(1, '2026-08-31T09:00:00Z', 10)] },
+        ],
+      }),
+    )
+
+    expect(screen.getByRole('button', { name: 'a' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'b' }).getAttribute('aria-pressed')).toBe('false')
   })
 })

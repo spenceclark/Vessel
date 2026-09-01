@@ -59,8 +59,11 @@ export function BarChart({
       .domain(indices)
       .range([0, plot.height])
       .padding(0.25)
+    // A zero-width domain (every measured value is exactly 0) divides by zero in d3's
+    // interpolation, mapping every bar to NaN width instead of zero-length.
+    const rawMax = mode === 'grouped' ? maxGrouped : maxStacked
     const x = scaleLinear()
-      .domain([0, mode === 'grouped' ? maxGrouped : maxStacked])
+      .domain([0, rawMax > 0 ? rawMax : 1])
       .range([0, plot.width])
       .nice()
     // §8.6/§2.3 — the value axis routes through the card's own formatValue so tick labels

@@ -49,6 +49,18 @@ export default function App() {
     ? selectedSession.name
     : null
 
+  // Live-use feedback — filters are scoped to whatever session is being viewed; a tag
+  // filter that made sense for one session's traffic rarely still applies to another's, so
+  // carrying it across an explicit session change reads as a leftover, not a choice. Every
+  // scope change — picker, Reset session, or one of the server-driven corrections below —
+  // goes through this so React batches both updates into the one render the scope change
+  // itself causes, rather than a separate effect landing filters one render later (during
+  // which child queries would key off the new scope with the old, stale filters).
+  const changeScope = useCallback((next: SessionScope) => {
+    setScope(next)
+    setFilters(EMPTY_FILTERS)
+  }, [])
+
   // Default view = the Reset-driven current session. Named sessions may be newer without
   // becoming current, so #29 makes that state explicit instead of inferring it from order.
   useEffect(() => {
@@ -57,9 +69,9 @@ export default function App() {
       ?? sessionsQuery.data?.[0]
     if (current) {
       // oxlint-disable-next-line react/set-state-in-effect -- this synchronizes the initial server-owned session into local view state exactly once.
-      setScope(current.id)
+      changeScope(current.id)
     }
-  }, [sessionsQuery.data, scope])
+  }, [sessionsQuery.data, scope, changeScope])
 
   // #41 — another tab or API client can delete the session this tab is viewing. Once the
   // invalidated session list confirms it is gone, return to current instead of leaving the
@@ -73,20 +85,9 @@ export default function App() {
     if (sessionsQuery.data.length >= SESSION_LIST_LIMIT) return
     const current = sessionsQuery.data.find((session) => session.isCurrent)
     // oxlint-disable-next-line react/set-state-in-effect -- synchronizes server-owned deletion into the local view.
-    setScope(current?.id ?? 'all')
+    changeScope(current?.id ?? 'all')
     setSelection(null)
-  }, [sessionsQuery.data, scope])
-
-  // Live-use feedback — filters are scoped to whatever session is being viewed; a tag
-  // filter that made sense for one session's traffic rarely still applies to another's,
-  // so carrying it across an explicit session change reads as a leftover, not a choice.
-  // Resets on every scope change however it happens (picker, Reset session, or one of the
-  // server-driven corrections above) — a no-op on the very first assignment, since
-  // filters start empty already.
-  useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect -- resets filters to match a newly selected session scope, not a per-render sync.
-    setFilters(EMPTY_FILTERS)
-  }, [scope])
+  }, [sessionsQuery.data, scope, changeScope])
 
   // R10/R11/D05 — live history (in-flight map, completion merging, reconciliation) is one
   // model, owned by one hook. App only supplies scope/filters and handles selection.
@@ -121,10 +122,10 @@ export default function App() {
         isCurrent: false,
       })),
     ])
-    setScope(session.id)
+    changeScope(session.id)
     setSelection(null)
     await queryClient.invalidateQueries({ queryKey: ['sessions'] })
-  }, [queryClient])
+  }, [queryClient, changeScope])
 
   // R14a — a clear (all/before) can delete the currently-selected row. Left alone, the
   // detail pane keeps showing whatever `['request', id]` last cached: stale at best, and
@@ -164,11 +165,10 @@ export default function App() {
       const cached = cachedDetails.find(([key]) => key[1] === selected.id)?.[1]
       return cached && !deleted.has(cached.sessionId ?? -1) ? selected : null
     })
-    setScope((currentScope) => {
-      if (typeof currentScope !== 'number' || !deleted.has(currentScope)) return currentScope
-      return sessionsQuery.data?.find((session) => session.isCurrent)?.id ?? 'all'
-    })
-  }, [queryClient, sessionsQuery.data])
+    if (typeof scope === 'number' && deleted.has(scope)) {
+      changeScope(sessionsQuery.data?.find((session) => session.isCurrent)?.id ?? 'all')
+    }
+  }, [queryClient, sessionsQuery.data, scope, changeScope])
 
   const handleDeleteSessions = useCallback(async (sessionIds: number[]): Promise<SessionDeleteSummary> => {
     const deletedIds: number[] = []
@@ -218,7 +218,7 @@ export default function App() {
         <StatsBar
           scope={scope}
           sessions={sessionsQuery.data ?? []}
-          onScopeChange={setScope}
+          onScopeChange={changeScope}
           onReset={handleReset}
           onDataCleared={handleDataCleared}
           onDeleteSessions={handleDeleteSessions}

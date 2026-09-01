@@ -32,7 +32,11 @@ export function ChartLegend({
             key={entry.label}
             type="button"
             aria-pressed={!entry.dimmed}
-            title="Click to isolate this series, Shift-click to hide just it"
+            title={
+              entry.dimmed
+                ? 'Click to isolate this series, Shift-click to show it again'
+                : 'Click to isolate this series, Shift-click to hide just it'
+            }
             onClick={(event) => onToggle(index, event.shiftKey ? 'hide' : 'isolate')}
             className={`inline-flex h-6 items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-xs transition-opacity hover:bg-surface-2 ${
               entry.dimmed ? 'opacity-40' : ''

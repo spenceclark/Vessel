@@ -30,6 +30,15 @@ import { ReportScopeBar } from '@/components/reports/ReportScopeBar'
  * something the header doesn't, so they stay — `AggregateBarCard` renders those as a
  * `StatPanel` instead of a one-bar chart.
  */
+function useAggregate(by: AggregateDimensionName, scope: SessionScope, filters: RequestFilters, enabled: boolean) {
+  return useQuery<AggregateResponse>({
+    queryKey: aggregateQueryKey(by, scope, filters),
+    queryFn: () => api.getAggregate({ by, session: scope, filters }),
+    enabled,
+    refetchInterval: 5_000,
+  })
+}
+
 export function ReportsView({
   scope,
   filters,
@@ -46,18 +55,9 @@ export function ReportsView({
   /** D13 — click a context-growth point: switch to history with that request selected. */
   onSelectRequest: (id: number) => void
 }) {
-  function useAggregate(by: AggregateDimensionName) {
-    return useQuery<AggregateResponse>({
-      queryKey: aggregateQueryKey(by, scope, filters),
-      queryFn: () => api.getAggregate({ by, session: scope, filters }),
-      enabled,
-      refetchInterval: 5_000,
-    })
-  }
-
-  const byModel = useAggregate('model')
-  const byTag = useAggregate('tag')
-  const byWarning = useAggregate('warning')
+  const byModel = useAggregate('model', scope, filters, enabled)
+  const byTag = useAggregate('tag', scope, filters, enabled)
+  const byWarning = useAggregate('warning', scope, filters, enabled)
 
   // #25 round 1 — undefined while byTag is still loading, so ContextGrowthCard's Tag
   // default doesn't flash on and off before the first fetch resolves.

@@ -576,7 +576,13 @@ public sealed class SqliteReadStore(string dbPath)
         };
 
         using SqliteConnection connection = Open();
+        // A second statement (the truncated-count query below) can follow the main one; an
+        // explicit transaction pins both to the same snapshot, so a concurrent write between
+        // them can never surface as a totalMatching that doesn't reconcile with the points
+        // actually returned.
+        using SqliteTransaction transaction = connection.BeginTransaction();
         using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
         string filteredFrom = ConfigureFilteredCommand(
             command, query.Scope, fanOut: fanOut, extraWhere: [metricPredicate]);
         // DENSE_RANK over requests.id ranks *distinct requests* (rows fanned out from the
@@ -632,8 +638,10 @@ public sealed class SqliteReadStore(string dbPath)
         long totalMatching = 0;
         if (truncated)
         {
-            totalMatching = CountMatchingRequests(connection, query.Scope, metricPredicate, fanOut);
+            totalMatching = CountMatchingRequests(connection, transaction, query.Scope, metricPredicate, fanOut);
         }
+
+        transaction.Commit();
 
         // Group in insertion (oldest-first) order, then rank series by total metric value,
         // dropping the remainder past MaxSeries — never merging into an "(other)" line,
@@ -728,7 +736,13 @@ public sealed class SqliteReadStore(string dbPath)
         };
 
         using SqliteConnection connection = Open();
+        // The main aggregate query and the percentile query below are two separate
+        // statements over the same scope; an explicit transaction pins both to one snapshot
+        // so a concurrent write between them can't produce totals and percentiles that don't
+        // agree with each other.
+        using SqliteTransaction transaction = connection.BeginTransaction();
         using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
         string filteredFrom = ConfigureFilteredCommand(command, query.Scope, fanOut: fanOut);
         command.CommandText =
             $"""
@@ -757,6 +771,7 @@ public sealed class SqliteReadStore(string dbPath)
         List<double>? nullKeyDurations = null;
         using (SqliteCommand percentileCommand = connection.CreateCommand())
         {
+            percentileCommand.Transaction = transaction;
             string percentileFrom = ConfigureFilteredCommand(
                 percentileCommand, query.Scope, fanOut: fanOut,
                 extraWhere: ["requests.duration_ms IS NOT NULL"]);
@@ -816,6 +831,8 @@ public sealed class SqliteReadStore(string dbPath)
             }
         }
 
+        transaction.Commit();
+
         rows.Sort((a, b) =>
         {
             int cmp = (b.TokensIn + b.TokensOut).CompareTo(a.TokensIn + a.TokensOut);
@@ -838,9 +855,10 @@ public sealed class SqliteReadStore(string dbPath)
     /// "N requests", and a multi-tag request is one request.
     /// </summary>
     private static long CountMatchingRequests(
-        SqliteConnection connection, RequestQuery query, string extraPredicate, FanOutColumn fanOut)
+        SqliteConnection connection, SqliteTransaction transaction, RequestQuery query, string extraPredicate, FanOutColumn fanOut)
     {
         using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
         string filteredFrom = ConfigureFilteredCommand(
             command, query, fanOut: fanOut, extraWhere: [extraPredicate]);
         command.CommandText =

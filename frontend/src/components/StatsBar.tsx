@@ -117,7 +117,10 @@ export function StatsBar({
       <Tabs value={view} onValueChange={(v) => onViewChange(v as 'history' | 'reports')}>
         <TabsList aria-label="View">
           <TabsTrigger value="history" className="px-2 text-xs">History</TabsTrigger>
-          <TabsTrigger value="reports" className="px-2 text-xs">Reports</TabsTrigger>
+          {/* Reports needs a resolved scope (App.tsx renders History as a fallback
+              otherwise) — disabled during the brief initial-load window keeps the toggle's
+              own selected state from lying about what's on screen. */}
+          <TabsTrigger value="reports" className="px-2 text-xs" disabled={scope === null}>Reports</TabsTrigger>
         </TabsList>
       </Tabs>
 
