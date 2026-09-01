@@ -218,8 +218,9 @@ Tracked as GitHub issues (label
 decisions, and acceptance live there:
 
 - ~~Export to CSV/JSONL (issue #24)~~ **implemented** · ~~context-growth chart (issue #25)~~
-  **implemented** · ~~additional reporting (issue #26)~~ **implemented** · cost estimates (§9 `pricing`) · replay dialect
-  fix-ups (`max_tokens → max_completion_tokens`, surfaced in Compare) · ~~named sessions
+  **implemented** · ~~additional reporting (issue #26)~~ **implemented** · cost estimates (§9 `pricing`) · ~~replay dialect
+  fix-ups (`max_tokens → max_completion_tokens`, surfaced in Compare, issue #28)~~ **implemented**
+  · ~~named sessions
   (`X-Vessel-Session`, per-request assignment + session picker)~~ **implemented**
   · ~~session deletion (writer-scoped rows + marker; picker count-confirm for one,
   typed-confirmation Data-panel multi-select for bulk)~~ **implemented**

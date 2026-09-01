@@ -89,6 +89,11 @@ public static class ReplayEndpoint
             return;
         }
 
+        if (TryApplyDialectFixup(detail.Format, backend.Type, backend.BaseUrl, body, out byte[] fixedUpBody, out string? fixupId))
+        {
+            body = fixedUpBody;
+        }
+
         if (!TryBuildAuth(detail, backend, out KeyValuePair<string, string>[] authHeaders, out string? missingEnv))
         {
             await VesselErrors.Write(
@@ -101,7 +106,7 @@ public static class ReplayEndpoint
         string? accept = Header(detail.RequestHeaders, "Accept");
         var plan = new ReplayPlan(
             id, backend.Name, detail.Method, detail.Path, body, contentType, accept, detail.Tags,
-            authHeaders, TimeSpan.FromSeconds(snapshot.Config.Timeouts.ActivitySeconds));
+            authHeaders, TimeSpan.FromSeconds(snapshot.Config.Timeouts.ActivitySeconds), fixupId);
         context.RequestServices.GetRequiredService<ReplayExecutor>().Start(plan);
         context.Response.StatusCode = StatusCodes.Status202Accepted;
         context.Response.ContentType = "application/json; charset=utf-8";
@@ -121,6 +126,69 @@ public static class ReplayEndpoint
             "raw" => sameBackend && !modelOverride,
             _ => false,
         };
+    }
+
+    /// <summary>
+    /// #28 — the "current" spelling is OpenAI's own Chat Completions API; every other
+    /// <c>openai-chat</c>-compatible target (Ollama, local/self-hosted OpenAI-compatible
+    /// servers, Gemini's compat endpoint, a same-backend <c>auto</c> target) is "legacy" and
+    /// keeps the old spelling, since most of them don't yet speak the new one. Type "openai"
+    /// alone isn't proof of that — only an exact, case-insensitive host match is.
+    /// </summary>
+    public static bool IsCurrentOpenAiDialect(string backendType, string baseUrl) =>
+        string.Equals(backendType, "openai", StringComparison.OrdinalIgnoreCase)
+        && Uri.TryCreate(baseUrl, UriKind.Absolute, out Uri? uri)
+        && string.Equals(uri.Host, "api.openai.com", StringComparison.OrdinalIgnoreCase);
+
+    public const string CurrentFixupId = "openai-chat:max_tokens->max_completion_tokens";
+    public const string LegacyFixupId = "openai-chat:max_completion_tokens->max_tokens";
+
+    /// <summary>
+    /// #28 — applies the one mechanical <c>openai-chat</c> parameter rename this replay's
+    /// target dialect calls for, if any. Renames, never copies: the composed replay carries
+    /// only the target spelling. A no-op (returns false) whenever the source member is
+    /// absent, the target member is already present, or the body isn't a JSON object —
+    /// callers keep the original bytes. <paramref name="fixupId"/> is the applied rule's id,
+    /// stamped onto <see cref="ProxyHandler.ReplayFixupsHeader"/> so Compare can render it
+    /// "(auto)" from a recorded fact rather than by guessing. Public, like
+    /// <see cref="ReplayExecutor.BuildTarget"/>, so this pure transform has a direct unit
+    /// test instead of one that has to dispatch a real replay to prove it.
+    /// </summary>
+    public static bool TryApplyDialectFixup(
+        string format, string backendType, string baseUrl, byte[] body,
+        out byte[] rewritten, out string? fixupId)
+    {
+        rewritten = body;
+        fixupId = null;
+        if (format != "openai-chat")
+        {
+            return false;
+        }
+
+        bool current = IsCurrentOpenAiDialect(backendType, baseUrl);
+        string source = current ? "max_tokens" : "max_completion_tokens";
+        string target = current ? "max_completion_tokens" : "max_tokens";
+
+        JsonObject? obj;
+        try
+        {
+            obj = JsonNode.Parse(body) as JsonObject;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        if (obj is null || !obj.TryGetPropertyValue(source, out JsonNode? value) || obj.ContainsKey(target))
+        {
+            return false;
+        }
+
+        obj.Remove(source);
+        obj[target] = value;
+        rewritten = Encoding.UTF8.GetBytes(obj.ToJsonString());
+        fixupId = current ? CurrentFixupId : LegacyFixupId;
+        return true;
     }
 
     private static bool TryGetBody(BodyPayload? payload, out byte[] body, out string? error)

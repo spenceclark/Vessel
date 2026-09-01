@@ -242,7 +242,12 @@ request through:
 Replay rides this same pipeline: `ReplayExecutor` posts the stored body to Vessel's
 own `/b/{backend}/…` route with an `X-Vessel-Replay-Of` header and `X-Vessel-Tags`,
 so the replayed request is captured, enriched, and linked (`replay_of`) exactly like
-any other traffic.
+any other traffic. For an `openai-chat` capture, `ReplayEndpoint` first applies the
+one mechanical dialect fix-up its target calls for (issue #28) — `max_tokens` ↔
+`max_completion_tokens`, renamed rather than copied, current-vs-legacy decided by an
+exact `api.openai.com` host match — and stamps the applied rule id on
+`X-Vessel-Replay-Fixups` so Compare's parameter diff can render it "(auto)" from that
+recorded fact instead of guessing from the before/after shape.
 
 ---
 

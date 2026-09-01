@@ -76,7 +76,7 @@ function CompareBody({ original, replay, onClose }: { original: RequestDetail; r
 function RequestPanel({ detail, view, params }: {
   detail: RequestDetail
   view: ReturnType<typeof renderRequest>
-  params: { name: string; before: string; after: string }[]
+  params: ParamDiffRow[]
 }) {
   return (
     <section className="mt-5 rounded-control border border-border">
@@ -84,7 +84,14 @@ function RequestPanel({ detail, view, params }: {
         <h3 className="text-xs font-[550] uppercase tracking-[0.06em] text-text-muted">Request</h3>
         {params.length === 0 ? <p className="mt-1 text-sm text-text-muted">No differing top-level parameters.</p> : (
           <dl className="mt-1 space-y-1 font-mono text-xs">
-            {params.map((param) => <div key={param.name} className="grid grid-cols-[minmax(80px,auto)_1fr] gap-2"><dt className="text-text-muted">{param.name}</dt><dd>{param.before} <span className="text-text-muted">→</span> {param.after}</dd></div>)}
+            {params.map((param) => (
+              <div key={param.name} className="grid grid-cols-[minmax(80px,auto)_1fr] gap-2">
+                <dt className="text-text-muted">{param.name}</dt>
+                <dd>{param.auto
+                  ? <>{param.before} <span className="text-text-muted">(auto)</span></>
+                  : <>{param.before} <span className="text-text-muted">→</span> {param.after}</>}</dd>
+              </div>
+            ))}
           </dl>
         )}
       </div>
@@ -108,16 +115,49 @@ function metric(label: string, before: number | null, after: number | null, form
   return { label, a: format(before), b: format(after), delta: before == null || after == null ? null : after - before, formatDelta: format }
 }
 
-function parameterDiff(original: RequestDetail, replay: RequestDetail): { name: string; before: string; after: string }[] {
+type ParamDiffRow = { name: string; before: string; after: string; auto?: boolean }
+
+/**
+ * #28 — the openai-chat dialect fix-ups ReplayEndpoint.cs may apply while composing a
+ * replay (rename, never copy). Ids are hand-mirrored from `ReplayEndpoint.CurrentFixupId`
+ * / `LegacyFixupId` — keep both sides in sync by hand, same as the rest of this file.
+ */
+const OPENAI_CHAT_RENAME_RULES: { id: string; from: string; to: string }[] = [
+  { id: 'openai-chat:max_tokens->max_completion_tokens', from: 'max_tokens', to: 'max_completion_tokens' },
+  { id: 'openai-chat:max_completion_tokens->max_tokens', from: 'max_completion_tokens', to: 'max_tokens' },
+]
+
+function parameterDiff(original: RequestDetail, replay: RequestDetail): ParamDiffRow[] {
   const a = parseObject(original.requestBody?.text)
   const b = parseObject(replay.requestBody?.text)
   if (!a || !b) return []
   const names = new Set([...Object.keys(a), ...Object.keys(b)])
-  return [...names].sort().flatMap((name) => {
-    const before = JSON.stringify(a[name])
-    const after = JSON.stringify(b[name])
-    return before === after ? [] : [{ name, before: before ?? 'undefined', after: after ?? 'undefined' }]
-  })
+  const rows = new Map<string, ParamDiffRow>()
+  for (const name of names) {
+    const before = JSON.stringify(a[name]) ?? 'undefined'
+    const after = JSON.stringify(b[name]) ?? 'undefined'
+    if (before !== after) rows.set(name, { name, before, after })
+  }
+
+  // The (auto) label must come from this recorded fact, not from pattern-matching the diff
+  // itself — a user-supplied difference that happens to look like a rename must not get it.
+  const appliedFixups = new Set((header(replay.requestHeaders, 'x-vessel-replay-fixups') ?? '').split(',').filter(Boolean))
+  for (const rule of OPENAI_CHAT_RENAME_RULES) {
+    if (!appliedFixups.has(rule.id)) continue
+    const from = rows.get(rule.from)
+    const to = rows.get(rule.to)
+    if (!from || !to || from.after !== 'undefined' || to.before !== 'undefined' || from.before !== to.after) continue
+    rows.delete(rule.from)
+    rows.delete(rule.to)
+    rows.set(rule.from, { name: `${rule.from} → ${rule.to}`, before: from.before, after: from.before, auto: true })
+  }
+
+  return [...rows.values()].sort((x, y) => x.name.localeCompare(y.name))
+}
+
+function header(headers: Record<string, string[]> | null, name: string): string | undefined {
+  if (!headers) return undefined
+  return Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1]?.[0]
 }
 
 function parseObject(text?: string): Record<string, unknown> | null {

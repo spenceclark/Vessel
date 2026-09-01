@@ -53,6 +53,10 @@ public sealed class ReplayExecutor(IServer server, ILogger<ReplayExecutor> logge
 
             request.Headers.TryAddWithoutValidation(RouteResolver.TagsHeader, string.Join(',', plan.Tags));
             request.Headers.TryAddWithoutValidation(ProxyHandler.ReplayHeader, plan.ReplayOf.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (plan.FixupId is not null)
+            {
+                request.Headers.TryAddWithoutValidation(ProxyHandler.ReplayFixupsHeader, plan.FixupId);
+            }
             foreach ((string name, string value) in plan.AuthHeaders)
             {
                 request.Headers.TryAddWithoutValidation(name, value);
@@ -103,4 +107,5 @@ public sealed record ReplayPlan(
     string? Accept,
     string[] Tags,
     KeyValuePair<string, string>[] AuthHeaders,
-    TimeSpan ActivityTimeout);
+    TimeSpan ActivityTimeout,
+    string? FixupId = null);

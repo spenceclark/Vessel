@@ -354,6 +354,141 @@ public sealed class ReplayTests
         Assert.Equal(expected, Vessel.Api.ReplayExecutor.BuildTarget(listen, "stub", "/api/chat").AbsoluteUri);
     }
 
+    // #28 — dialect detection needs no dispatch to prove, and pinning it to a real network
+    // call to api.openai.com would make this suite flaky/slow in a sandboxed CI runner. Same
+    // reasoning as ReplayExecutor_NormalizesWildcardListeners above: exercise the pure helper
+    // directly.
+    [Theory]
+    [InlineData("openai", "https://api.openai.com/v1", true)]
+    [InlineData("OpenAI", "https://API.OPENAI.COM/v1", true)]
+    [InlineData("openai", "https://api.openai.com:443/v1", true)]
+    [InlineData("openai", "https://api.openai.com.evil.example/v1", false)]
+    [InlineData("openai", "https://gemini.googleapis.com/v1", false)]
+    [InlineData("ollama", "https://api.openai.com/v1", false)]
+    [InlineData("auto", "https://api.openai.com/v1", false)]
+    public void IsCurrentOpenAiDialect_MatchesExactHostOnlyOnAnOpenAiTypedBackend(string type, string baseUrl, bool expected)
+    {
+        Assert.Equal(expected, Vessel.Api.ReplayEndpoint.IsCurrentOpenAiDialect(type, baseUrl));
+    }
+
+    [Fact]
+    public void TryApplyDialectFixup_RenamesTowardCurrentForApiOpenAiComOnly()
+    {
+        byte[] body = Encoding.UTF8.GetBytes("""{"model":"m","max_tokens":2048}""");
+        Assert.True(Vessel.Api.ReplayEndpoint.TryApplyDialectFixup(
+            "openai-chat", "openai", "https://api.openai.com/v1", body, out byte[] rewritten, out string? fixupId));
+        Assert.Equal(Vessel.Api.ReplayEndpoint.CurrentFixupId, fixupId);
+        using JsonDocument doc = JsonDocument.Parse(rewritten);
+        Assert.Equal(2048, doc.RootElement.GetProperty("max_completion_tokens").GetInt32());
+        Assert.False(doc.RootElement.TryGetProperty("max_tokens", out _));
+    }
+
+    [Fact]
+    public void TryApplyDialectFixup_RenamesTowardLegacyForEveryOtherCompatibleTarget()
+    {
+        byte[] body = Encoding.UTF8.GetBytes("""{"model":"m","max_completion_tokens":2048}""");
+        Assert.True(Vessel.Api.ReplayEndpoint.TryApplyDialectFixup(
+            "openai-chat", "ollama", "http://127.0.0.1:11434", body, out byte[] rewritten, out string? fixupId));
+        Assert.Equal(Vessel.Api.ReplayEndpoint.LegacyFixupId, fixupId);
+        using JsonDocument doc = JsonDocument.Parse(rewritten);
+        Assert.Equal(2048, doc.RootElement.GetProperty("max_tokens").GetInt32());
+        Assert.False(doc.RootElement.TryGetProperty("max_completion_tokens", out _));
+    }
+
+    [Theory]
+    [InlineData("openai-responses")]
+    [InlineData("anthropic-messages")]
+    [InlineData("ollama-chat")]
+    [InlineData("raw")]
+    public void TryApplyDialectFixup_NeverAppliesOutsideOpenAiChat(string format)
+    {
+        byte[] body = Encoding.UTF8.GetBytes("""{"max_tokens":1}""");
+        Assert.False(Vessel.Api.ReplayEndpoint.TryApplyDialectFixup(
+            format, "ollama", "http://127.0.0.1:11434", body, out byte[] rewritten, out string? fixupId));
+        Assert.Same(body, rewritten);
+        Assert.Null(fixupId);
+    }
+
+    [Theory]
+    [InlineData("""{"model":"m"}""")] // neither member present
+    [InlineData("""{"model":"m","max_tokens":1,"max_completion_tokens":2}""")] // both already present
+    [InlineData("""not-json""")]
+    [InlineData("""[1,2,3]""")] // valid JSON, not an object
+    public void TryApplyDialectFixup_NoOpsWhenTheRuleDoesNotApply(string json)
+    {
+        byte[] body = Encoding.UTF8.GetBytes(json);
+        Assert.False(Vessel.Api.ReplayEndpoint.TryApplyDialectFixup(
+            "openai-chat", "ollama", "http://127.0.0.1:11434", body, out byte[] rewritten, out string? fixupId));
+        Assert.Same(body, rewritten);
+        Assert.Null(fixupId);
+    }
+
+    [Fact]
+    public async Task Replay_AppliesLegacyDialectFixup_AndSurfacesTheRuleIdOnTheReplayRow()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync(config => config.Backends["stub"].Type = "openai");
+        using var client = new HttpClient();
+        long original = await CaptureJson(
+            client, vessel, "/v1/chat/completions?fixup-legacy",
+            "{\"model\":\"before\",\"messages\":[],\"max_completion_tokens\":2048}");
+
+        await Replay(client, vessel, original, "stub");
+        JsonElement replay = await WaitForReplay(client, vessel.BaseUrl, original);
+        JsonElement detail = await GetDetail(client, vessel.BaseUrl, replay.GetProperty("id").GetInt64());
+
+        string replayBody = detail.GetProperty("requestBody").GetProperty("text").GetString()!;
+        using JsonDocument body = JsonDocument.Parse(replayBody);
+        Assert.Equal(2048, body.RootElement.GetProperty("max_tokens").GetInt32());
+        Assert.False(body.RootElement.TryGetProperty("max_completion_tokens", out _));
+
+        Assert.Equal(
+            Vessel.Api.ReplayEndpoint.LegacyFixupId,
+            HeaderValue(detail.GetProperty("requestHeaders"), "X-Vessel-Replay-Fixups"));
+
+        // The header is Vessel's own control plane, not payload — it must never reach the backend.
+        ReflectPayload wire = await ReplayReflect(client, vessel.BaseUrl, replay);
+        using JsonDocument wireBody = JsonDocument.Parse(wire.SeenBody);
+        Assert.Equal(2048, wireBody.RootElement.GetProperty("max_tokens").GetInt32());
+        Assert.False(wireBody.RootElement.TryGetProperty("max_completion_tokens", out _));
+    }
+
+    [Fact]
+    public async Task Replay_LeavesTheBodyAloneWhenBothOrNeitherDialectMemberIsPresent()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync(config => config.Backends["stub"].Type = "openai");
+        using var client = new HttpClient();
+
+        long neither = await CaptureJson(client, vessel, "/v1/chat/completions?fixup-neither", "{\"model\":\"m\",\"messages\":[]}");
+        await Replay(client, vessel, neither, "stub");
+        JsonElement neitherReplay = await WaitForReplay(client, vessel.BaseUrl, neither);
+        JsonElement neitherDetail = await GetDetail(client, vessel.BaseUrl, neitherReplay.GetProperty("id").GetInt64());
+        Assert.Null(HeaderValue(neitherDetail.GetProperty("requestHeaders"), "X-Vessel-Replay-Fixups"));
+
+        long both = await CaptureJson(
+            client, vessel, "/v1/chat/completions?fixup-both",
+            "{\"model\":\"m\",\"messages\":[],\"max_tokens\":1,\"max_completion_tokens\":2}");
+        await Replay(client, vessel, both, "stub");
+        JsonElement bothReplay = await WaitForReplay(client, vessel.BaseUrl, both);
+        JsonElement bothDetail = await GetDetail(client, vessel.BaseUrl, bothReplay.GetProperty("id").GetInt64());
+        Assert.Null(HeaderValue(bothDetail.GetProperty("requestHeaders"), "X-Vessel-Replay-Fixups"));
+        using JsonDocument bothBody = JsonDocument.Parse(bothDetail.GetProperty("requestBody").GetProperty("text").GetString()!);
+        Assert.Equal(1, bothBody.RootElement.GetProperty("max_tokens").GetInt32());
+        Assert.Equal(2, bothBody.RootElement.GetProperty("max_completion_tokens").GetInt32());
+    }
+
+    private static string? HeaderValue(JsonElement headers, string name)
+    {
+        foreach (JsonProperty header in headers.EnumerateObject())
+        {
+            if (header.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                return header.Value.EnumerateArray().FirstOrDefault().GetString();
+            }
+        }
+
+        return null;
+    }
+
     private static void PointAllBackendsAtStub(TestVessel vessel)
     {
         ConfigStore store = vessel.Services.GetRequiredService<ConfigStore>();
