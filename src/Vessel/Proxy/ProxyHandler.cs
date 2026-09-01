@@ -193,6 +193,15 @@ public sealed class ProxyHandler
 
     public const string SessionHeader = "X-Vessel-Session";
 
+    /// <summary>
+    /// #28 — comma-separated rule ids for the replay dialect fix-ups <see cref="Api.ReplayEndpoint"/>
+    /// applied while composing this replay, so Compare can label a rename "(auto)" from a
+    /// recorded fact rather than by guessing from the before/after diff. Stripped from the
+    /// forwarded request like every other <c>X-Vessel-*</c> header; it lands only in the
+    /// replay row's own stored (redacted) request headers.
+    /// </summary>
+    public const string ReplayFixupsHeader = "X-Vessel-Replay-Fixups";
+
     private static long? TryParseReplayOf(IHeaderDictionary headers) =>
         long.TryParse(headers[ReplayHeader].FirstOrDefault(), out long replayOf) && replayOf > 0 ? replayOf : null;
 
