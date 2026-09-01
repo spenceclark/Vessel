@@ -38,6 +38,18 @@
   --color-tag-fuchsia: #e879f9;
   --color-tag-steel: #94a3b8;
 
+  /* ui-spec §2.3 — chart tokens: derived from existing tokens, never new hues. The
+     var() references resolve per theme at runtime, so the light blocks below need no
+     chart duplicates — they override the tokens these point at. */
+  --color-chart-grid: color-mix(in srgb, var(--color-border-strong) 30%, transparent);
+  --color-chart-axis: var(--color-text-muted);
+  --color-chart-1: var(--color-tag-blue);
+  --color-chart-2: var(--color-tag-indigo);
+  --color-chart-3: var(--color-tag-violet);
+  --color-chart-4: var(--color-tag-pink);
+  --color-chart-5: var(--color-tag-fuchsia);
+  --color-chart-6: var(--color-tag-steel);
+
   --font-ui: InterVariable, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, Consolas, monospace;
 

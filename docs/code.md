@@ -321,6 +321,8 @@ marking (e.g. `not_found`, `invalid_request`, `forbidden_host`, `upstream_unreac
 | `GET /vessel/api/requests/facets` | Distinct backend/model/tag/format values for the filter bar |
 | `GET /vessel/api/export` | Stream matching rows as `format=csv\|jsonl`; accepts the list scope/filter params (`requestFormat` carries the capture-format filter) and `bodies=none\|text\|full`. CSV supports `none`/`text` and starts with a UTF-8 BOM for Windows Excel; JSONL stays BOM-less, and `full` adds redacted headers and decoded bodies. |
 | `GET /vessel/api/export/count` | Exact count over the same canonical list predicate for the export popover |
+| `GET /vessel/api/series` | Token series for the context-growth chart: `metric=tokens_in\|tokens_out\|tokens_total`, `groupBy=none\|tag\|model\|backend`, over the canonical list scope (plain `format`, lenient `session`). Oldest-first by id, capped to the newest 5,000 distinct requests (`truncated` + both counts), six-series cap with `omittedSeries` counted rather than merged, `estimated` flag when any drawn row is estimated |
+| `GET /vessel/api/aggregate` | Grouped totals `by=model\|tag\|backend\|format\|warning` (`by` required — 400 `invalid_request` otherwise; `warning` fans out over the warnings array like `tag` — a request counts once per code): requests/failed, token sums, avg duration/TTFT/tok/s, nearest-rank `p50`/`p95` duration; top 50 groups ranked by tokens then requests, `totalGroups` disclosed |
 | `GET /vessel/api/stats?session=` | Totals, failures, avg latency/tok/s/TTFT, token sums; `session` = id, `current`, or `all` |
 | `GET /vessel/api/sessions` / `POST` | List at most 500 sessions newest-first with current guaranteed / reset with an optional name of at most 128 characters |
 | `DELETE /vessel/api/sessions/{id}` | Delete a non-current session marker and all its request/FTS rows atomically on the writer |
@@ -408,3 +410,57 @@ request/response views with raw and raw-stream toggles, replay dialog), `Compare
 session deletion (multi-select, counts, current disabled, every selection attempted and partial
 success reported) alongside clear-all/before. Theme (light/dark/system) is
 initialized pre-paint by `public/theme-init.js` to avoid a flash.
+
+**Reports (phase 7):** the header's History | Reports toggle swaps the list+detail row for
+a full-width reports panel (`components/reports/`) while the header — scope, stats,
+session controls — stays shared. Chart math is d3-scale + d3-shape only (`d3` itself is
+deliberately not a dependency); the shared primitives live in `components/ui/chart/`:
+`ChartFrame` (fixed-height figure with gridlines, axes, empty state and an sr-only data
+table of the same rows), `ChartLegend` (click isolates a series, shift-click hides just
+that one — #25 round 2 live-use feedback), `ChartTooltip`, `LineChart` (area+line for one
+visible series, lines for several, or a `renderMode="scatter"` of unconnected points for
+data with no real connecting order — time x-axis, nearest-point hover, click-to-select),
+`BarChart` (grouped/stacked horizontal bars with a wide label gutter), and `plot.ts`
+(the geometry every scale owner computes ticks against). Every chart color is a CSS
+`var(--color-chart-N)` token resolved in stroke/fill attributes — never JS hex — so the
+CSP-safety of `/vessel/*` carries over by construction. Data comes from
+`/vessel/api/series` and `/vessel/api/aggregate` under the centralized keys
+`['series', metric, groupBy, scope, filters]` / `['aggregate', by, scope, filters]`,
+polled at the same 5 s cadence as the header stats and enabled only while the view is
+open; every `['stats']` invalidation site (App deletion sweep, DataPanel, useLiveHistory
+clear handling) also sweeps the two chart roots, so no stale chart survives a clear or
+session deletion.
+
+**Context growth, round 2 (#25 live-use feedback):** ungrouped ("None") points render as
+`LineChart`'s scatter mode rather than a connected line — interleaved multi-agent traffic
+at wildly different context sizes drew a sawtooth of the interleaving, not a growth trend.
+`ContextGrowthCard` defaults its own grouping to Tag the moment the sibling by-tag
+aggregate fetch (already running for the "Tokens by tag" card) proves the scope carries
+tagged traffic, tracked so a manual pick (including picking None back) is never
+overridden. Once grouped with more than one series, an Overlay/Grid toggle switches to
+`ContextGrowthSmallMultiples` — one mini `LineChart` per series in the same 2-column card
+grid the aggregate cards use, sharing one y-axis domain (`LineChart`'s `yDomainMax` prop)
+so relative sizes stay comparable card to card; a lone overlay chart otherwise buries a
+smooth, meaningful trend under a noisier one.
+
+**Aggregate cards, round 2 (#26 live-use feedback):** `AggregateBarCard` collapses to a
+`StatPanel` whenever the fetched dimension has exactly one group — a bar chart with one
+bar carries no comparison. Two new projections reuse existing fetches with no new query:
+`cache` (stacked cached vs. uncached tokens, hidden by `ReportsView` entirely when no row
+in scope has any cached tokens, rather than rendering empty) and `duration` (nearest-rank
+p50/p95, never a plain average that would hide tail latency). `Requests by tag`/`Duration
+by tag` reuse the same by-tag fetch `Tokens by tag` already makes; only `Warnings by type`
+needed a new dimension (`by=warning`).
+
+**Aggregate cards, round 3 (#26 live-use feedback):** for a session with one model and no
+tags, `Tokens`/`Requests`/`Avg tok/s by model|tag` all collapse to the *same* number the
+header stats bar already shows — a degenerate stat line there added nothing but a restated
+total. `ReportsView` now computes `showByModelBreakdown`/`showByTagBreakdown` from each
+fetch's own `totalGroups` and skips mounting those five card instances entirely once it's
+learned there's nothing to break down (defaulting to shown while the fetch is still
+loading, so they don't pop in after the fact). `Duration by tag`, `Cache efficiency` and
+`Warnings by type` still collapse via `AggregateBarCard`'s per-projection `statFields`,
+but as a proper `StatPanel` (the group's name, then `--surface-3` label/value tiles
+mirroring the header's own `Stat` look) rather than a plain sentence — each of those three
+carries a number the header doesn't (p50/p95, the cached-% ratio, the warning-code
+breakdown), so collapsing them to nothing would have lost real information.

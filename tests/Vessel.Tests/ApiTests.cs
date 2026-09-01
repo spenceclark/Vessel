@@ -583,4 +583,172 @@ public class ApiTests
         string uiBody = await uiResp.Content.ReadAsStringAsync(CT);
         Assert.DoesNotContain("ServerId", uiBody); // never the stub's echo payload
     }
+
+    // Phase 7 D1 — the series endpoint echoes the (documented) defaults and the full
+    // response envelope; with no seeded rows the series list is empty, not an error.
+    [Fact]
+    public async Task Series_DefaultsAndEnvelope_EmptyScope()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        JsonElement response = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/series", CT);
+        Assert.Equal("tokens_in", response.GetProperty("metric").GetString());
+        Assert.Equal("none", response.GetProperty("groupBy").GetString());
+        Assert.Equal(JsonValueKind.Array, response.GetProperty("series").ValueKind);
+        Assert.Equal(0, response.GetProperty("returned").GetInt32());
+        Assert.Equal(0, response.GetProperty("totalMatching").GetInt64());
+        Assert.False(response.GetProperty("truncated").GetBoolean());
+        Assert.Equal(0, response.GetProperty("omittedSeries").GetInt32());
+        Assert.False(response.GetProperty("estimated").GetBoolean());
+    }
+
+    // Phase 7 D1 — the wire shape of a point ({id, t, v}) and oldest-first order over the
+    // HTTP boundary, with groupBy=tag's fan-out and null-key "(none)" series visible.
+    [Fact]
+    public async Task Series_ShapeAndGroupByTag_OverHttp()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        long first = SeedChartRow(vessel.DbPath, tokensIn: 10, tags: "[\"planner\"]");
+        long second = SeedChartRow(vessel.DbPath, tokensIn: 20, tags: null);
+
+        JsonElement response = await GetJson(
+            client, $"{vessel.BaseUrl}/vessel/api/series?groupBy=tag", CT);
+        Assert.Equal(2, response.GetProperty("returned").GetInt32());
+
+        JsonElement series = response.GetProperty("series");
+        // Ranked by total desc: the untagged (null-key) series carries the 20.
+        Assert.Equal(JsonValueKind.Null, series[0].GetProperty("key").ValueKind);
+        Assert.Equal(20, series[0].GetProperty("points")[0].GetProperty("v").GetInt64());
+        Assert.Equal("planner", series[1].GetProperty("key").GetString());
+        Assert.Equal(first, series[1].GetProperty("points")[0].GetProperty("id").GetInt64());
+        Assert.False(string.IsNullOrEmpty(series[1].GetProperty("points")[0].GetProperty("t").GetString()));
+
+        // session=all is the /requests-style explicit unscope, and an unparseable session
+        // is lenient (no scope) exactly as the list treats it — both are 200, not 400.
+        await GetJson(client, $"{vessel.BaseUrl}/vessel/api/series?session=all", CT);
+        await GetJson(client, $"{vessel.BaseUrl}/vessel/api/series?session=garbage", CT);
+    }
+
+    // Phase 7 D4 — unknown metric/groupBy values are 400 invalid_request, never a silent
+    // default that would quietly chart the wrong quantity.
+    [Fact]
+    public async Task Series_UnknownMetricOrGroupBy_400InvalidRequest()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        using HttpResponseMessage badMetric = await client.GetAsync(
+            $"{vessel.BaseUrl}/vessel/api/series?metric=cost", CT);
+        Assert.Equal(HttpStatusCode.BadRequest, badMetric.StatusCode);
+        Assert.Equal("invalid_request", badMetric.Headers.GetValues("X-Vessel-Error").Single());
+
+        using HttpResponseMessage badGroupBy = await client.GetAsync(
+            $"{vessel.BaseUrl}/vessel/api/series?groupBy=agent", CT);
+        Assert.Equal(HttpStatusCode.BadRequest, badGroupBy.StatusCode);
+        Assert.Equal("invalid_request", badGroupBy.Headers.GetValues("X-Vessel-Error").Single());
+    }
+
+    // Phase 7 D2/D4 — the aggregate envelope over a real fetch, and by= has no default:
+    // missing or unknown is 400 invalid_request.
+    [Fact]
+    public async Task Aggregate_Contract_And_ByIsRequired()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        SeedChartRow(vessel.DbPath, tokensIn: 10, model: "m1");
+        SeedChartRow(vessel.DbPath, tokensIn: 20, model: "m1", error: "upstream_unreachable");
+
+        JsonElement response = await GetJson(
+            client, $"{vessel.BaseUrl}/vessel/api/aggregate?by=model", CT);
+        Assert.Equal("model", response.GetProperty("by").GetString());
+        Assert.Equal(1, response.GetProperty("totalGroups").GetInt64());
+        JsonElement row = response.GetProperty("rows")[0];
+        Assert.Equal("m1", row.GetProperty("key").GetString());
+        Assert.Equal(2, row.GetProperty("requests").GetInt64());
+        Assert.Equal(1, row.GetProperty("failed").GetInt64());
+        Assert.Equal(30, row.GetProperty("tokensIn").GetInt64());
+        Assert.Equal(0, row.GetProperty("tokensOut").GetInt64());
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("avgTtftMs").ValueKind); // no streamed rows
+        Assert.False(row.GetProperty("tokensEstimated").GetBoolean());
+
+        using HttpResponseMessage missing = await client.GetAsync(
+            $"{vessel.BaseUrl}/vessel/api/aggregate", CT);
+        Assert.Equal(HttpStatusCode.BadRequest, missing.StatusCode);
+        Assert.Equal("invalid_request", missing.Headers.GetValues("X-Vessel-Error").Single());
+
+        using HttpResponseMessage unknown = await client.GetAsync(
+            $"{vessel.BaseUrl}/vessel/api/aggregate?by=session", CT);
+        Assert.Equal(HttpStatusCode.BadRequest, unknown.StatusCode);
+        Assert.Equal("invalid_request", unknown.Headers.GetValues("X-Vessel-Error").Single());
+    }
+
+    // #26 live-use feedback — the warning-code breakdown and the p50/p95 duration fields
+    // over HTTP, not just the store-level tests in ChartQueryTests.
+    [Fact]
+    public async Task Aggregate_ByWarning_And_Percentiles_OverHttp()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        SeedChartRow(vessel.DbPath, tokensIn: 10, warnings: "[\"cold_load\"]", durationMs: 100);
+        SeedChartRow(vessel.DbPath, tokensIn: 20, warnings: "[\"cold_load\"]", durationMs: 300);
+        SeedChartRow(vessel.DbPath, tokensIn: 40, warnings: null, durationMs: null);
+
+        JsonElement response = await GetJson(
+            client, $"{vessel.BaseUrl}/vessel/api/aggregate?by=warning", CT);
+        Assert.Equal("warning", response.GetProperty("by").GetString());
+        Assert.Equal(2, response.GetProperty("totalGroups").GetInt64());
+        JsonElement coldLoad = response.GetProperty("rows").EnumerateArray()
+            .Single(r => r.GetProperty("key").GetString() == "cold_load");
+        Assert.Equal(2, coldLoad.GetProperty("requests").GetInt64());
+        // nearest-rank over [100, 300]: p50 index 0 → 100, p95 index 1 → 300.
+        Assert.Equal(100, coldLoad.GetProperty("p50DurationMs").GetDouble());
+        Assert.Equal(300, coldLoad.GetProperty("p95DurationMs").GetDouble());
+
+        JsonElement clean = response.GetProperty("rows").EnumerateArray()
+            .Single(r => r.GetProperty("key").ValueKind == JsonValueKind.Null);
+        Assert.Equal(JsonValueKind.Null, clean.GetProperty("p50DurationMs").ValueKind); // no measured duration
+    }
+
+    /// <summary>
+    /// Direct seeding for chart-endpoint contract tests (same reasoning as
+    /// <see cref="CaptureDb.SeedRow"/>: exact known columns, no wire payloads required).
+    /// </summary>
+    private static long SeedChartRow(
+        string dbPath, long? tokensIn, string? model = null, string? tags = null, string? error = null,
+        string? warnings = null, double? durationMs = null)
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate,
+                Pooling = false,
+            }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO requests
+                (started_at, backend, tags, method, path, format, model, status_code, error,
+                 streamed, tokens_in, duration_ms, warnings, request_headers)
+            VALUES
+                (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'alpha', $tags, 'GET', '/seed-chart', 'raw',
+                 $model, 200, $error, 0, $tokensIn, $durationMs, $warnings, '{}')
+            """;
+        command.Parameters.AddWithValue("$tags", (object?)tags ?? DBNull.Value);
+        command.Parameters.AddWithValue("$model", (object?)model ?? DBNull.Value);
+        command.Parameters.AddWithValue("$error", (object?)error ?? DBNull.Value);
+        command.Parameters.AddWithValue("$tokensIn", (object?)tokensIn ?? DBNull.Value);
+        command.Parameters.AddWithValue("$durationMs", (object?)durationMs ?? DBNull.Value);
+        command.Parameters.AddWithValue("$warnings", (object?)warnings ?? DBNull.Value);
+        command.ExecuteNonQuery();
+        using var idCommand = connection.CreateCommand();
+        idCommand.CommandText = "SELECT last_insert_rowid()";
+        return (long)idCommand.ExecuteScalar()!;
+    }
 }

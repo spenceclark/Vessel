@@ -1,4 +1,4 @@
-const TAG_VARIANTS = ['tag-blue', 'tag-indigo', 'tag-violet', 'tag-pink', 'tag-fuchsia', 'tag-steel'] as const
+export const TAG_VARIANTS = ['tag-blue', 'tag-indigo', 'tag-violet', 'tag-pink', 'tag-fuchsia', 'tag-steel'] as const
 
 export type TagVariant = (typeof TAG_VARIANTS)[number]
 
@@ -9,6 +9,11 @@ export function tagVariant(tag: string): TagVariant {
     hash = (hash * 33) ^ tag.charCodeAt(i)
   }
   return TAG_VARIANTS[Math.abs(hash) % TAG_VARIANTS.length]
+}
+
+/** The ramp index (0-based) a tag's pill hash picks — the same index §2.3's --chart-N uses. */
+export function tagVariantIndex(tag: string): number {
+  return TAG_VARIANTS.indexOf(tagVariant(tag))
 }
 
 // Same tint-fill + colored-text look as the Badge `tag-*` variants (ui/badge.tsx),
