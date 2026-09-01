@@ -9,6 +9,7 @@ import { MessageView } from '@/components/MessageView'
 import { PrettyJson } from '@/components/PrettyJson'
 import { renderRequest, renderResponse } from '@/render'
 import { formatMs, formatTokPerSec, formatTokenCount } from '@/lib/format'
+import { findHeader } from '@/lib/headers'
 
 /** A side-by-side comparison is only meaningful for an original and one of its direct replays. */
 export function CompareView({ originalId, replayId, onClose }: { originalId: number; replayId: number; onClose: () => void }) {
@@ -130,34 +131,33 @@ const OPENAI_CHAT_RENAME_RULES: { id: string; from: string; to: string }[] = [
 function parameterDiff(original: RequestDetail, replay: RequestDetail): ParamDiffRow[] {
   const a = parseObject(original.requestBody?.text)
   const b = parseObject(replay.requestBody?.text)
-  if (!a || !b) return []
-  const names = new Set([...Object.keys(a), ...Object.keys(b)])
   const rows = new Map<string, ParamDiffRow>()
-  for (const name of names) {
-    const before = JSON.stringify(a[name]) ?? 'undefined'
-    const after = JSON.stringify(b[name]) ?? 'undefined'
-    if (before !== after) rows.set(name, { name, before, after })
+
+  if (a && b) {
+    const names = new Set([...Object.keys(a), ...Object.keys(b)])
+    for (const name of names) {
+      const before = JSON.stringify(a[name]) ?? 'undefined'
+      const after = JSON.stringify(b[name]) ?? 'undefined'
+      if (before !== after) rows.set(name, { name, before, after })
+    }
   }
 
   // The (auto) label must come from this recorded fact, not from pattern-matching the diff
   // itself — a user-supplied difference that happens to look like a rename must not get it.
-  const appliedFixups = new Set((header(replay.requestHeaders, 'x-vessel-replay-fixups') ?? '').split(',').filter(Boolean))
+  // Checked independently of whether the replay body parsed above: renaming toward the
+  // longer spelling can push an already-near-cap replay past the capture cap, and a
+  // confirmed fix-up must still show — from the complete original's value, since the
+  // fix-up preserves it unchanged.
+  const appliedFixups = new Set((findHeader(replay.requestHeaders, 'x-vessel-replay-fixups') ?? '').split(',').filter(Boolean))
   for (const rule of OPENAI_CHAT_RENAME_RULES) {
-    if (!appliedFixups.has(rule.id)) continue
-    const from = rows.get(rule.from)
-    const to = rows.get(rule.to)
-    if (!from || !to || from.after !== 'undefined' || to.before !== 'undefined' || from.before !== to.after) continue
+    if (!appliedFixups.has(rule.id) || !a || !(rule.from in a)) continue
+    const value = JSON.stringify(a[rule.from]) ?? 'undefined'
     rows.delete(rule.from)
     rows.delete(rule.to)
-    rows.set(rule.from, { name: `${rule.from} → ${rule.to}`, before: from.before, after: from.before, auto: true })
+    rows.set(rule.from, { name: `${rule.from} → ${rule.to}`, before: value, after: value, auto: true })
   }
 
   return [...rows.values()].sort((x, y) => x.name.localeCompare(y.name))
-}
-
-function header(headers: Record<string, string[]> | null, name: string): string | undefined {
-  if (!headers) return undefined
-  return Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1]?.[0]
 }
 
 function parseObject(text?: string): Record<string, unknown> | null {

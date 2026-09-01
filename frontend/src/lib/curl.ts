@@ -1,4 +1,5 @@
 import type { RequestDetail, StatusBackend } from '@/api/types'
+import { findHeader } from '@/lib/headers'
 
 /**
  * Phase 5's curl export intentionally targets Vessel so a pasted command is captured just as
@@ -11,7 +12,7 @@ import type { RequestDetail, StatusBackend } from '@/api/types'
 export function buildCurl(detail: RequestDetail, origin: string, backend?: StatusBackend): string {
   const base = resolveBase(origin)
   const url = `${base}/b/${encodeURIComponent(detail.backend)}${detail.path}`
-  const contentType = header(detail.requestHeaders, 'content-type')
+  const contentType = findHeader(detail.requestHeaders, 'content-type')
   const lines = [`curl -X ${shellQuote(detail.method)} ${shellQuote(url)}`]
   if (contentType) lines.push(`  -H ${shellQuote(`Content-Type: ${contentType}`)}`)
 
@@ -25,7 +26,7 @@ export function buildCurl(detail: RequestDetail, origin: string, backend?: Statu
   )
   if (needsAuth && isAnthropic) {
     lines.push(`  -H "x-api-key: $${authEnv}"`)
-    lines.push(`  -H ${shellQuote(`anthropic-version: ${header(detail.requestHeaders, 'anthropic-version') ?? '2023-06-01'}`)}`)
+    lines.push(`  -H ${shellQuote(`anthropic-version: ${findHeader(detail.requestHeaders, 'anthropic-version') ?? '2023-06-01'}`)}`)
   } else if (needsAuth) {
     lines.push(`  -H "Authorization: Bearer $${authEnv}"`)
   }
@@ -39,11 +40,6 @@ export function buildCurl(detail: RequestDetail, origin: string, backend?: Statu
   const body = detail.requestBody.text ?? ''
   const marker = heredocMarker(body)
   return `${lines.join(' \\\n')} \\\n  --data-binary @- <<'${marker}'\n${body}\n${marker}`
-}
-
-function header(headers: Record<string, string[]> | null, name: string): string | undefined {
-  if (!headers) return undefined
-  return Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1]?.[0]
 }
 
 function resolveBase(origin: string): string {
