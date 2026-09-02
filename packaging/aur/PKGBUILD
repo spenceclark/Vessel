@@ -1,0 +1,26 @@
+# Maintainer: Spencer Clark <spenceclark@gmail.com>
+# Source of truth for the vessel-bin AUR package. On each GitHub release, the
+# release workflow (.github/workflows/release.yml) fills in pkgver/sha256sums
+# below and pushes the result to the AUR git repo — this checked-in copy is a
+# template with placeholder values, not meant to be built as-is.
+pkgname=vessel-bin
+pkgver=0.0.0
+pkgrel=1
+pkgdesc="The lightweight, local-first observability proxy for LLM traffic"
+arch=('x86_64' 'aarch64')
+url="https://github.com/spenceclark/Vessel"
+license=('MIT')
+provides=('vessel')
+conflicts=('vessel')
+source_x86_64=("https://github.com/spenceclark/Vessel/releases/download/v${pkgver}/vessel-${pkgver}-linux-x64.tar.gz")
+source_aarch64=("https://github.com/spenceclark/Vessel/releases/download/v${pkgver}/vessel-${pkgver}-linux-arm64.tar.gz")
+sha256sums_x86_64=('0000000000000000000000000000000000000000000000000000000000000000')
+sha256sums_aarch64=('0000000000000000000000000000000000000000000000000000000000000000')
+
+package() {
+  local rid=linux-x64
+  [ "$CARCH" = "aarch64" ] && rid=linux-arm64
+  cd "vessel-${pkgver}-${rid}"
+  install -Dm755 vessel "${pkgdir}/usr/bin/vessel"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

@@ -1,0 +1,170 @@
+name: Packages
+
+# release.yml always drafts releases (see its `publish` job) so a human reviews
+# before going live. Triggering on `published` — not on the tag push itself —
+# guarantees every asset URL these steps hand out is already publicly fetchable,
+# and gives the maintainer a manual gate: nothing here runs until the draft is
+# published on GitHub.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  # Bumps the Homebrew tap, Scoop bucket, AUR package, and winget manifest to
+  # point at this release. Each step is gated on its own secret existing, so
+  # this workflow is a no-op until you add it — see packaging/README.md for
+  # what each secret unlocks and how to get it.
+  packages:
+    runs-on: ubuntu-latest
+    env:
+      TAP_PUSH_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute version and checksums
+        id: vars
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="${TAG#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          mkdir checksums
+          gh release download "$TAG" --repo "${{ github.repository }}" --pattern '*.sha256' --dir checksums
+          for rid in win-x64 linux-x64 linux-arm64 osx-arm64; do
+            sha="$(cut -d' ' -f1 "checksums/vessel-${version}-${rid}.sha256")"
+            echo "sha_${rid//-/_}=$sha" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Bump Homebrew formula
+        if: env.TAP_PUSH_TOKEN != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ env.TAP_PUSH_TOKEN }}
+          VERSION: ${{ steps.vars.outputs.version }}
+          SHA_OSX_ARM64: ${{ steps.vars.outputs.sha_osx_arm64 }}
+          SHA_LINUX_X64: ${{ steps.vars.outputs.sha_linux_x64 }}
+          SHA_LINUX_ARM64: ${{ steps.vars.outputs.sha_linux_arm64 }}
+        run: |
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/spenceclark/homebrew-tap.git" tap
+          cd tap
+          branch="vessel-${VERSION}"
+          git checkout -B "$branch"
+          cat > Formula/vessel.rb <<EOF
+          class Vessel < Formula
+            desc "Lightweight, local-first observability proxy for LLM traffic"
+            homepage "https://github.com/spenceclark/Vessel"
+            license "MIT"
+            version "${VERSION}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/spenceclark/Vessel/releases/download/v${VERSION}/vessel-${VERSION}-osx-arm64.tar.gz"
+                sha256 "${SHA_OSX_ARM64}"
+              else
+                odie "vessel: Intel Macs aren't published by this tap; build from source (https://github.com/spenceclark/Vessel)."
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/spenceclark/Vessel/releases/download/v${VERSION}/vessel-${VERSION}-linux-arm64.tar.gz"
+                sha256 "${SHA_LINUX_ARM64}"
+              else
+                url "https://github.com/spenceclark/Vessel/releases/download/v${VERSION}/vessel-${VERSION}-linux-x64.tar.gz"
+                sha256 "${SHA_LINUX_X64}"
+              end
+            end
+
+            def install
+              bin.install "vessel"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/vessel --version")
+            end
+          end
+          EOF
+          git -c user.name="vessel-release-bot" -c user.email="actions@github.com" commit -am "vessel ${VERSION}" --allow-empty
+          git push --force origin "$branch"
+          gh pr create --repo spenceclark/homebrew-tap --title "vessel ${VERSION}" \
+            --base main --head "$branch" --body "Automated formula bump for vessel ${VERSION}." || true
+
+      - name: Bump Scoop manifest
+        if: env.TAP_PUSH_TOKEN != ''
+        shell: bash
+        env:
+          TOKEN: ${{ env.TAP_PUSH_TOKEN }}
+          VERSION: ${{ steps.vars.outputs.version }}
+          SHA_WIN_X64: ${{ steps.vars.outputs.sha_win_x64 }}
+        run: |
+          git clone "https://x-access-token:${TOKEN}@github.com/spenceclark/scoop-bucket.git" bucket
+          cat > bucket/bucket/vessel.json <<EOF
+          {
+              "version": "${VERSION}",
+              "description": "The lightweight, local-first observability proxy for LLM traffic",
+              "homepage": "https://github.com/spenceclark/Vessel",
+              "license": "MIT",
+              "url": "https://github.com/spenceclark/Vessel/releases/download/v${VERSION}/vessel-${VERSION}-win-x64.zip",
+              "hash": "${SHA_WIN_X64}",
+              "extract_dir": "vessel-${VERSION}-win-x64",
+              "bin": "vessel.exe",
+              "checkver": {
+                  "github": "https://github.com/spenceclark/Vessel"
+              },
+              "autoupdate": {
+                  "url": "https://github.com/spenceclark/Vessel/releases/download/v\$version/vessel-\$version-win-x64.zip",
+                  "extract_dir": "vessel-\$version-win-x64"
+              }
+          }
+          EOF
+          cd bucket
+          git -c user.name="vessel-release-bot" -c user.email="actions@github.com" commit -am "vessel ${VERSION}" --allow-empty
+          git push
+
+      - name: Render AUR PKGBUILD
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+        shell: bash
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+          SHA_LINUX_X64: ${{ steps.vars.outputs.sha_linux_x64 }}
+          SHA_LINUX_ARM64: ${{ steps.vars.outputs.sha_linux_arm64 }}
+        run: |
+          mkdir -p aur-render
+          sed -e "s/^pkgver=.*/pkgver=${VERSION}/" \
+              -e "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${SHA_LINUX_X64}')/" \
+              -e "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('${SHA_LINUX_ARM64}')/" \
+              packaging/aur/PKGBUILD > aur-render/PKGBUILD
+
+      # Runs as a Docker container action, so it only ever sees files under
+      # $GITHUB_WORKSPACE (the checkout above) — a host /tmp path is invisible
+      # to it. aur-render/PKGBUILD from the step above satisfies that.
+      - name: Push to AUR
+        if: env.AUR_SSH_PRIVATE_KEY != ''
+        uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
+        with:
+          pkgname: vessel-bin
+          pkgbuild: aur-render/PKGBUILD
+          commit_username: vessel-release-bot
+          commit_email: actions@github.com
+          ssh_private_key: ${{ env.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "vessel ${{ steps.vars.outputs.version }}"
+
+      # Requires at least one manifest version already merged into winget-pkgs
+      # and a winget-pkgs fork already present under the token's account —
+      # see packaging/README.md for the one-time manual bootstrap.
+      - name: Submit winget manifest
+        if: env.WINGET_TOKEN != ''
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: spenceclark.Vessel
+          installers-regex: '\.zip$'
+          version: ${{ steps.vars.outputs.version }}
+          release-tag: ${{ github.event.release.tag_name }}
+          token: ${{ env.WINGET_TOKEN }}
