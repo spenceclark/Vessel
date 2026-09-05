@@ -37,6 +37,7 @@ namespace Vessel.Api;
 [JsonSerializable(typeof(AggregateRow))]
 [JsonSerializable(typeof(ClearResponse))]
 [JsonSerializable(typeof(ReplayRequest))]
+[JsonSerializable(typeof(ReplayAccepted))]
 [JsonSerializable(typeof(Vessel.Config.ConfigApplyResult))]
 [JsonSerializable(typeof(Vessel.Config.ConfigGetResult))]
 [JsonSerializable(typeof(JsonNode))]

@@ -40,7 +40,8 @@ public sealed class McpTools
             summary.Id, summary.StartedAt, summary.Method, summary.Path, summary.Backend, summary.Model,
             summary.Tags, summary.StatusCode, summary.Error, summary.DurationMs, summary.TtftMs,
             summary.TokPerSec, summary.TokensIn, summary.TokensOut, summary.StopReason, summary.Warnings,
-            summary.PromptPreview)).ToArray();
+            summary.PromptPreview, summary.Score, summary.ReplayOf, summary.ReplayGroup,
+            summary.ReplayPatch)).ToArray();
 
         return Json(new McpSearchResponse(rows, page.NextBefore), McpJsonContext.Default.McpSearchResponse);
     }
@@ -111,7 +112,8 @@ public sealed class McpTools
         summary.Id, summary.StartedAt, summary.SessionId, summary.Backend, summary.Tags, summary.Method,
         summary.Path, summary.Format, summary.Model, summary.StatusCode, summary.Error, summary.Streamed,
         summary.DurationMs, summary.TtftMs, summary.TokPerSec, summary.TokensIn, summary.TokensOut,
-        summary.TokensEstimated, summary.StopReason, summary.Warnings, summary.Truncated);
+        summary.TokensEstimated, summary.StopReason, summary.Warnings, summary.Truncated, summary.Score,
+        summary.ReplayOf, summary.ReplayGroup, summary.ReplayPatch);
 
     private static McpBodyWindow? WindowText(string? text, int offset, int maxChars)
     {

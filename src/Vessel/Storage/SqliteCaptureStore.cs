@@ -101,6 +101,21 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
         CREATE UNIQUE INDEX ix_sessions_current ON sessions(is_current) WHERE is_current = 1;
         CREATE INDEX ix_sessions_name ON sessions(name);
         """,
+        // v4 — issue #48: a multi-replay fan is N children sharing one group id, each
+        // carrying the compact merge patch that varied it. The replay_of index is overdue
+        // regardless — ListReplays was a full scan.
+        """
+        ALTER TABLE requests ADD COLUMN replay_group TEXT;
+        ALTER TABLE requests ADD COLUMN replay_patch TEXT;
+        CREATE INDEX ix_requests_replay_of ON requests(replay_of);
+        CREATE INDEX ix_requests_replay_group ON requests(replay_group);
+        """,
+        // v5 — issue #49: a human score, 1-5, NULL = unrated. On the request row, not on a
+        // group, so the original and pre-v4 singles are scorable too. Never written at
+        // capture time; only by PUT /requests/{id}/score.
+        """
+        ALTER TABLE requests ADD COLUMN score INTEGER;
+        """,
     ];
 
     private SqliteConnection? _connection;
@@ -148,6 +163,20 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     }
 
     /// <summary>
+    /// #49 — sets or clears one row's score on the writer thread. False means no such row:
+    /// an in-flight request has no row yet, which is why the UI never offers the control on
+    /// a pending column.
+    /// </summary>
+    public bool SetScore(long id, int? score)
+    {
+        using SqliteCommand command = Connected().CreateCommand();
+        command.CommandText = "UPDATE requests SET score = $score WHERE id = $id";
+        command.Parameters.AddWithValue("$score", (object?)score ?? DBNull.Value);
+        command.Parameters.AddWithValue("$id", id);
+        return command.ExecuteNonQuery() > 0;
+    }
+
+    /// <summary>
     /// One transaction per batch (D10): each enriched row is inserted, then — for rows with
     /// flattened text — a matching contentless FTS row keyed on the same id, so search stays
     /// consistent from the moment the text exists. Bodies are zstd-compressed here, on the
@@ -166,14 +195,14 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
             """
             INSERT INTO requests (
                 started_at, session_id, backend, tags, method, path, format, model, status_code, error,
-                streamed, replay_of, duration_ms, ttft_ms, vessel_overhead_ms, tok_per_sec,
+                streamed, replay_of, replay_group, replay_patch, duration_ms, ttft_ms, vessel_overhead_ms, tok_per_sec,
                 tokens_in, tokens_out, tokens_cached_read, tokens_cached_write, tokens_estimated,
                 stop_reason, warnings,
                 request_headers, response_headers, request_body, response_body, response_raw, truncated,
                 prompt_preview, response_preview)
             VALUES (
                 $started_at, $session_id, $backend, $tags, $method, $path, $format, $model, $status_code, $error,
-                $streamed, $replay_of, $duration_ms, $ttft_ms, $vessel_overhead_ms, $tok_per_sec,
+                $streamed, $replay_of, $replay_group, $replay_patch, $duration_ms, $ttft_ms, $vessel_overhead_ms, $tok_per_sec,
                 $tokens_in, $tokens_out, $tokens_cached_read, $tokens_cached_write, $tokens_estimated,
                 $stop_reason, $warnings,
                 $request_headers, $response_headers, $request_body, $response_body, $response_raw, $truncated,
@@ -201,6 +230,8 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
         SqliteParameter error = Add("$error");
         SqliteParameter streamed = Add("$streamed");
         SqliteParameter replayOf = Add("$replay_of");
+        SqliteParameter replayGroup = Add("$replay_group");
+        SqliteParameter replayPatch = Add("$replay_patch");
         SqliteParameter durationMs = Add("$duration_ms");
         SqliteParameter ttftMs = Add("$ttft_ms");
         SqliteParameter overheadMs = Add("$vessel_overhead_ms");
@@ -245,6 +276,8 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
             error.Value = (object?)record.Error ?? DBNull.Value;
             streamed.Value = record.Streamed ? 1 : 0;
             replayOf.Value = (object?)record.ReplayOf ?? DBNull.Value;
+            replayGroup.Value = (object?)record.ReplayGroup ?? DBNull.Value;
+            replayPatch.Value = (object?)record.ReplayPatch ?? DBNull.Value;
             durationMs.Value = (object?)record.DurationMs ?? DBNull.Value;
             ttftMs.Value = (object?)record.TtftMs ?? DBNull.Value;
             overheadMs.Value = (object?)record.VesselOverheadMs ?? DBNull.Value;

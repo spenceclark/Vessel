@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/client'
 import { aggregateQueryKey } from '@/api/queryKeys'
-import type { AggregateResponse, AggregateDimensionName, RequestFilters, SessionScope } from '@/api/types'
+import type { AggregateResponse, AggregateDimensionName, AggregateRankName, RequestFilters, SessionScope } from '@/api/types'
 import { AggregateBarCard } from '@/components/reports/AggregateBarCard'
 import { ContextGrowthCard } from '@/components/reports/ContextGrowthCard'
 import { ReportScopeBar } from '@/components/reports/ReportScopeBar'
@@ -30,10 +30,16 @@ import { ReportScopeBar } from '@/components/reports/ReportScopeBar'
  * something the header doesn't, so they stay — `AggregateBarCard` renders those as a
  * `StatPanel` instead of a one-bar chart.
  */
-function useAggregate(by: AggregateDimensionName, scope: SessionScope, filters: RequestFilters, enabled: boolean) {
+function useAggregate(
+  by: AggregateDimensionName,
+  scope: SessionScope,
+  filters: RequestFilters,
+  enabled: boolean,
+  rank: AggregateRankName = 'tokens',
+) {
   return useQuery<AggregateResponse>({
-    queryKey: aggregateQueryKey(by, scope, filters),
-    queryFn: () => api.getAggregate({ by, session: scope, filters }),
+    queryKey: aggregateQueryKey(by, scope, filters, rank),
+    queryFn: () => api.getAggregate({ by, session: scope, filters, rank }),
     enabled,
     refetchInterval: 5_000,
   })
@@ -58,6 +64,13 @@ export function ReportsView({
   const byModel = useAggregate('model', scope, filters, enabled)
   const byTag = useAggregate('tag', scope, filters, enabled)
   const byWarning = useAggregate('warning', scope, filters, enabled)
+  // #49 — the leaderboards. Both are score-*ranked* fetches, not projections of the
+  // token-ranked ones: the server caps at 50 groups, so ranking by score after that cap
+  // would drop a quiet 5/5 model behind fifty chatty 1/5 ones. by=patch is a new dimension
+  // (one row per replay patch); its card is mounted only once the fetch proves the scope has
+  // scored parameter sets in it.
+  const byModelScore = useAggregate('model', scope, filters, enabled, 'score')
+  const byPatch = useAggregate('patch', scope, filters, enabled, 'score')
 
   // #25 round 1 — undefined while byTag is still loading, so ContextGrowthCard's Tag
   // default doesn't flash on and off before the first fetch resolves.
@@ -69,6 +82,9 @@ export function ReportsView({
   // fetch proves there's only one group to show (they'd only restate the header stats
   // bar); default to showing them while the fetch is still loading, not hiding-then-
   // popping-in once real data settles the question.
+  // #49 — no parameter sets in scope means no per-param leaderboard to show at all (unlike
+  // the by-model card, which states its own "score something" empty case).
+  const hasPatchRows = byPatch.data ? byPatch.data.rows.length > 0 : false
   const showByModelBreakdown = byModel.data === undefined || byModel.data.totalGroups > 1
   const showByTagBreakdown = byTag.data === undefined || byTag.data.totalGroups > 1
 
@@ -85,6 +101,25 @@ export function ReportsView({
         />
         {/* §5 collapse rule — two columns from ~1100px, one below. */}
         <div className="grid grid-cols-1 gap-3 min-[1100px]:grid-cols-2">
+          {/* #49 review — the card answering "which model should I switch to" leads the
+              grid, unconditionally: its empty state is the discoverability hint for a
+              feature nobody would otherwise find, so it has to be visible unscored too. */}
+          <AggregateBarCard
+            title="Score by model"
+            data={byModelScore.data}
+            by="model"
+            projection="score"
+            loading={byModelScore.isLoading}
+          />
+          {hasPatchRows && (
+            <AggregateBarCard
+              title="By parameter set"
+              data={byPatch.data}
+              by="patch"
+              projection="score"
+              loading={byPatch.isLoading}
+            />
+          )}
           {showByModelBreakdown && (
             <AggregateBarCard
               title="Tokens by model"

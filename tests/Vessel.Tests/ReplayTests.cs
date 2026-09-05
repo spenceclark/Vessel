@@ -476,6 +476,232 @@ public sealed class ReplayTests
         Assert.Equal(2, bothBody.RootElement.GetProperty("max_completion_tokens").GetInt32());
     }
 
+    // ---- #48 multi-replay (fan-out) ----
+
+    [Fact]
+    public void MergePatch_MergesNestedObjectsDeletesNullsAndReplacesArrays()
+    {
+        byte[] body = Encoding.UTF8.GetBytes(
+            """{"model":"m","options":{"num_ctx":4096,"temperature":0.1},"stop":["a"],"keep":1,"drop":2}""");
+        var patch = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(
+            """{"options":{"temperature":0.9},"stop":["b","c"],"drop":null}""")!;
+
+        Assert.True(Vessel.Api.ReplayEndpoint.TryApplyMergePatch(body, patch, out byte[] rewritten));
+
+        using JsonDocument doc = JsonDocument.Parse(rewritten);
+        JsonElement root = doc.RootElement;
+        // The whole point of a merge patch: a sampler under `options` must not clobber num_ctx.
+        Assert.Equal(4096, root.GetProperty("options").GetProperty("num_ctx").GetInt32());
+        Assert.Equal(0.9, root.GetProperty("options").GetProperty("temperature").GetDouble());
+        Assert.Equal(["b", "c"], root.GetProperty("stop").EnumerateArray().Select(v => v.GetString()));
+        Assert.Equal(1, root.GetProperty("keep").GetInt32());
+        Assert.False(root.TryGetProperty("drop", out _));
+    }
+
+    // Review — a null inside an object patch is a deletion at every depth. Cloning the patch
+    // wholesale where the target has nothing to merge into would send that null as a value.
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"options":null}""")]
+    [InlineData("""{"options":7}""")]
+    [InlineData("""{"options":[1,2]}""")]
+    public void MergePatch_MergesIntoAnAbsentNullOrScalarTarget(string body)
+    {
+        var patch = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(
+            """{"options":{"seed":null,"temperature":0.2}}""")!;
+
+        Assert.True(Vessel.Api.ReplayEndpoint.TryApplyMergePatch(Encoding.UTF8.GetBytes(body), patch, out byte[] rewritten));
+
+        using JsonDocument doc = JsonDocument.Parse(rewritten);
+        JsonElement options = doc.RootElement.GetProperty("options");
+        Assert.Equal(0.2, options.GetProperty("temperature").GetDouble());
+        Assert.False(options.TryGetProperty("seed", out _));
+    }
+
+    [Fact]
+    public void MergePatch_RefusesABodyThatIsNotAJsonObject()
+    {
+        byte[] body = Encoding.UTF8.GetBytes("[1,2,3]");
+        var patch = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse("""{"temperature":1}""")!;
+        Assert.False(Vessel.Api.ReplayEndpoint.TryApplyMergePatch(body, patch, out byte[] rewritten));
+        Assert.Same(body, rewritten);
+    }
+
+    [Fact]
+    public async Task Fan_StampsGroupAndPatchOnEveryChild_AndKeepsBothHeadersOffTheWire()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync(config => config.Backends["stub"].Type = "openai");
+        using var client = new HttpClient();
+        long original = await CaptureJson(
+            client, vessel, "/v1/chat/completions?fan-group",
+            "{\"model\":\"m\",\"messages\":[],\"temperature\":0.1}");
+
+        using HttpResponseMessage accepted = await client.PostAsJsonAsync(
+            $"{vessel.BaseUrl}/vessel/api/requests/{original}/replay",
+            new { variations = new object[] { new { @params = new { temperature = 0.2 } }, new { @params = new { temperature = 0.7 } } } },
+            CT);
+        Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+        using JsonDocument acceptedBody = JsonDocument.Parse(await accepted.Content.ReadAsStringAsync(CT));
+        string group = acceptedBody.RootElement.GetProperty("replayGroup").GetString()!;
+        Assert.Equal(2, acceptedBody.RootElement.GetProperty("count").GetInt32());
+
+        JsonElement replays = await WaitForReplayCount(client, vessel.BaseUrl, original, 2);
+        var patches = new List<string>();
+        foreach (JsonElement replay in replays.EnumerateArray())
+        {
+            Assert.Equal(group, replay.GetProperty("replayGroup").GetString());
+            patches.Add(replay.GetProperty("replayPatch").GetString()!);
+
+            ReflectPayload wire = await ReplayReflect(client, vessel.BaseUrl, replay);
+            Assert.False(wire.HasReplayGroup);
+            Assert.False(wire.HasReplayPatch);
+            using JsonDocument sent = JsonDocument.Parse(wire.SeenBody);
+            Assert.Contains(sent.RootElement.GetProperty("temperature").GetDouble(), new[] { 0.2, 0.7 });
+        }
+
+        Assert.Equal(
+            ["""{"temperature":0.2}""", """{"temperature":0.7}"""],
+            patches.OrderBy(patch => patch, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Fan_AppliesThePatchBeforeTheDialectFixup()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync(config => config.Backends["stub"].Type = "openai");
+        using var client = new HttpClient();
+        long original = await CaptureJson(
+            client, vessel, "/v1/chat/completions?fan-fixup", "{\"model\":\"m\",\"messages\":[]}");
+
+        using HttpResponseMessage accepted = await client.PostAsJsonAsync(
+            $"{vessel.BaseUrl}/vessel/api/requests/{original}/replay",
+            new { variations = new object[] { new { @params = new { max_completion_tokens = 2048 } } } },
+            CT);
+        Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+
+        JsonElement replay = await WaitForReplay(client, vessel.BaseUrl, original);
+        JsonElement detail = await GetDetail(client, vessel.BaseUrl, replay.GetProperty("id").GetInt64());
+        using JsonDocument body = JsonDocument.Parse(detail.GetProperty("requestBody").GetProperty("text").GetString()!);
+        // Patched, then renamed for the target dialect — and the rename is recorded as a fix-up.
+        Assert.Equal(2048, body.RootElement.GetProperty("max_tokens").GetInt32());
+        Assert.False(body.RootElement.TryGetProperty("max_completion_tokens", out _));
+        Assert.Equal(
+            Vessel.Api.ReplayEndpoint.LegacyFixupId,
+            HeaderValue(detail.GetProperty("requestHeaders"), "X-Vessel-Replay-Fixups"));
+        Assert.Equal("""{"max_completion_tokens":2048}""", replay.GetProperty("replayPatch").GetString());
+    }
+
+    [Fact]
+    public async Task Fan_ValidatesEveryVariationBeforeDispatchingAny()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync(config => config.Backends["stub"].Type = "openai");
+        using var client = new HttpClient();
+        long original = await CaptureJson(
+            client, vessel, "/v1/chat/completions?fan-atomic", "{\"model\":\"m\",\"messages\":[]}");
+
+        using HttpResponseMessage rejected = await client.PostAsJsonAsync(
+            $"{vessel.BaseUrl}/vessel/api/requests/{original}/replay",
+            new
+            {
+                variations = new object[]
+                {
+                    new { model = "one" },
+                    new { model = "two" },
+                    new { backend = "missing" },
+                },
+            },
+            CT);
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        using JsonDocument error = JsonDocument.Parse(await rejected.Content.ReadAsStringAsync(CT));
+        Assert.Equal(2, error.RootElement.GetProperty("error").GetProperty("variation").GetInt32());
+
+        // Nothing fired: the earlier, valid variations must not leave a half-fired fan behind.
+        await Task.Delay(100, CT);
+        Assert.Empty((await GetReplays(client, vessel.BaseUrl, original)).EnumerateArray());
+    }
+
+    [Fact]
+    public async Task Fan_RejectsAModelPatchAndMoreThanEightVariations()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync(config => config.Backends["stub"].Type = "openai");
+        using var client = new HttpClient();
+        long original = await CaptureJson(
+            client, vessel, "/v1/chat/completions?fan-limits", "{\"model\":\"m\",\"messages\":[]}");
+
+        using HttpResponseMessage modelInPatch = await client.PostAsJsonAsync(
+            $"{vessel.BaseUrl}/vessel/api/requests/{original}/replay",
+            new { variations = new object[] { new { @params = new { model = "sneaky" } } } }, CT);
+        Assert.Equal(HttpStatusCode.BadRequest, modelInPatch.StatusCode);
+        Assert.Contains("model", await modelInPatch.Content.ReadAsStringAsync(CT));
+
+        object[] tooMany = Enumerable.Range(0, 9).Select(object (i) => new { model = $"m{i}" }).ToArray();
+        using HttpResponseMessage over = await client.PostAsJsonAsync(
+            $"{vessel.BaseUrl}/vessel/api/requests/{original}/replay", new { variations = tooMany }, CT);
+        Assert.Equal(HttpStatusCode.BadRequest, over.StatusCode);
+
+        using HttpResponseMessage none = await client.PostAsJsonAsync(
+            $"{vessel.BaseUrl}/vessel/api/requests/{original}/replay", new { variations = Array.Empty<object>() }, CT);
+        Assert.Equal(HttpStatusCode.BadRequest, none.StatusCode);
+
+        await Task.Delay(100, CT);
+        Assert.Empty((await GetReplays(client, vessel.BaseUrl, original)).EnumerateArray());
+    }
+
+    [Fact]
+    public async Task Fan_RunsItsMembersOneAfterAnother()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync(config => config.Backends["stub"].Type = "openai");
+        using var client = new HttpClient();
+        long original = await CaptureJson(
+            client, vessel, "/v1/chat/completions?fan-serial", "{\"model\":\"m\",\"messages\":[]}");
+
+        object[] variations = Enumerable.Range(0, 5).Select(object (i) => new { model = $"m{i}" }).ToArray();
+        using HttpResponseMessage accepted = await client.PostAsJsonAsync(
+            $"{vessel.BaseUrl}/vessel/api/requests/{original}/replay", new { variations }, CT);
+        Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+
+        JsonElement replays = await WaitForReplayCount(client, vessel.BaseUrl, original, 5);
+
+        // Members that overlapped in time would contend for one local backend and make the
+        // grid's duration column measure contention rather than the model. Fired serially,
+        // each member's window starts no earlier than the previous one's ended.
+        (DateTime start, DateTime end)[] windows = replays.EnumerateArray()
+            .Select(replay => (
+                start: DateTime.Parse(replay.GetProperty("startedAt").GetString()!, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind),
+                duration: replay.GetProperty("durationMs").GetDouble()))
+            .Select(row => (row.start, end: row.start.AddMilliseconds(row.duration)))
+            .OrderBy(window => window.start)
+            .ToArray();
+        for (int i = 1; i < windows.Length; i++)
+        {
+            Assert.True(
+                windows[i].start >= windows[i - 1].end.AddMilliseconds(-50),
+                $"member {i} started {(windows[i - 1].end - windows[i].start).TotalMilliseconds:F0}ms before its predecessor finished");
+        }
+    }
+
+    [Fact]
+    public async Task Status_PublishesTheSameRequiresAuthRuleReplayItselfApplies()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync(config =>
+        {
+            config.Backends["local-openai"] = new() { BaseUrl = "http://127.0.0.1:11434", Type = "openai" };
+            config.Backends["remote-openai"] = new() { BaseUrl = "https://api.openai.com", Type = "openai" };
+            config.Backends["keyed-ollama"] = new() { BaseUrl = "http://127.0.0.1:11434", Type = "ollama", AuthEnv = "SOME_KEY" };
+            config.Backends["local-anthropic"] = new() { BaseUrl = "http://localhost:1234", Type = "anthropic" };
+        });
+        using var client = new HttpClient();
+
+        using HttpResponseMessage response = await client.GetAsync($"{vessel.BaseUrl}/vessel/api/status", CT);
+        using JsonDocument status = JsonDocument.Parse(await response.Content.ReadAsStringAsync(CT));
+        Dictionary<string, bool> requiresAuth = status.RootElement.GetProperty("backends").EnumerateArray()
+            .ToDictionary(b => b.GetProperty("name").GetString()!, b => b.GetProperty("requiresAuth").GetBoolean());
+
+        Assert.False(requiresAuth["local-openai"]);
+        Assert.True(requiresAuth["remote-openai"]);
+        Assert.True(requiresAuth["keyed-ollama"]);
+        Assert.False(requiresAuth["local-anthropic"]);
+    }
+
     private static string? HeaderValue(JsonElement headers, string name)
     {
         foreach (JsonProperty header in headers.EnumerateObject())

@@ -52,6 +52,18 @@ export function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
+/** Coarse "how long ago", for list/summary chrome where an exact timestamp is noise. */
+export function relativeDate(iso: string): string {
+  const time = new Date(iso).getTime()
+  if (!Number.isFinite(time)) return iso
+  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000))
+  if (seconds < 60) return 'just now'
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`
+  if (seconds < 2_592_000) return `${Math.floor(seconds / 86_400)}d ago`
+  return new Date(time).toLocaleDateString()
+}
+
 export function formatTimestamp(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso

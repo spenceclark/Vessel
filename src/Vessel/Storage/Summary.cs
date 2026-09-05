@@ -34,7 +34,13 @@ public sealed record Summary(
     string? StopReason,
     string[] Warnings,
     bool Truncated,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PromptPreview = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PromptPreview = null,
+    /// <summary>#48 — the multi-replay fan this row belongs to; null on originals and pre-v4 replays.</summary>
+    string? ReplayGroup = null,
+    /// <summary>#48 — compact JSON of the merge patch this child was composed with, null when none.</summary>
+    string? ReplayPatch = null,
+    /// <summary>#49 — the human score, 1-5; null is unrated, which is the default for everything.</summary>
+    int? Score = null);
 
 /// <summary>D3 — <c>GET /requests</c> response: a page of rows plus the next cursor.</summary>
 public sealed record RequestListResponse(Summary[] Rows, long? NextBefore);
@@ -90,7 +96,10 @@ public sealed record RequestDetail(
     JsonNode? ResponseHeaders,
     BodyPayload? RequestBody,
     BodyPayload? ResponseBody,
-    BodyPayload? ResponseRaw)
+    BodyPayload? ResponseRaw,
+    string? ReplayGroup = null,
+    string? ReplayPatch = null,
+    int? Score = null)
 {
     public static RequestDetail From(
         Summary s, JsonNode? requestHeaders, JsonNode? responseHeaders,
@@ -98,7 +107,8 @@ public sealed record RequestDetail(
         s.Id, s.StartedAt, s.SessionId, s.Backend, s.Tags, s.Method, s.Path, s.Format, s.Model, s.StatusCode,
         s.Error, s.Streamed, s.ReplayOf, s.DurationMs, s.TtftMs, s.VesselOverheadMs, s.TokPerSec, s.TokensIn,
         s.TokensOut, s.TokensCachedRead, s.TokensCachedWrite, s.TokensEstimated, s.StopReason, s.Warnings,
-        s.Truncated, requestHeaders, responseHeaders, requestBody, responseBody, responseRaw);
+        s.Truncated, requestHeaders, responseHeaders, requestBody, responseBody, responseRaw,
+        s.ReplayGroup, s.ReplayPatch, s.Score);
 }
 
 /// <summary>
@@ -187,12 +197,32 @@ public enum SeriesGroupBy
 }
 
 /// <summary>Phase 7 — the dimension an aggregate report groups by.</summary>
+/// <summary>
+/// #49 review — what the <see cref="ChartLimits.MaxGroups"/> cap keeps. The cap is applied
+/// after ranking, so a leaderboard ranked client-side out of a token-ranked page is not the
+/// scope's leaderboard: 50 chatty models scoring 1/5 would hide the one quiet model scoring
+/// 5/5. <see cref="Score"/> also drops unscored groups — an unrated group is not last place,
+/// it is absent — so <c>totalGroups</c> is the size of the ranked population either way.
+/// </summary>
+public enum AggregateRank
+{
+    Tokens,
+    Score,
+}
+
 public enum AggregateDimension
 {
     Model,
     Tag,
     Backend,
     Format,
+
+    /// <summary>
+    /// #49 — one row per distinct replay patch (`replay_patch`), NULL excluded: the
+    /// per-parameter-set leaderboard, grouping every temp-0.2 replay across every prompt.
+    /// This is why #48 stored the applied patch as a column instead of re-deriving it.
+    /// </summary>
+    Patch,
 
     /// <summary>
     /// #25/#26 live-use feedback — one row per warning code present in scope. Fans out
@@ -243,7 +273,7 @@ public sealed class SeriesKeyOrder : IComparer<string?>
 public sealed record SeriesQuery(RequestQuery Scope, SeriesMetric Metric, SeriesGroupBy GroupBy);
 
 /// <summary>Phase 7 D2 — the aggregate query: the canonical list scope plus the grouping dimension.</summary>
-public sealed record AggregateQuery(RequestQuery Scope, AggregateDimension By);
+public sealed record AggregateQuery(RequestQuery Scope, AggregateDimension By, AggregateRank Rank = AggregateRank.Tokens);
 
 /// <summary>
 /// Phase 7 D1 — one chart point: the request's id (so a click can select it), its ISO
@@ -305,7 +335,18 @@ public sealed record AggregateRow(
     double? AvgTokPerSec,
     bool TokensEstimated,
     double? P50DurationMs,
-    double? P95DurationMs);
+    double? P95DurationMs,
+    /// <summary>#49 — mean of the group's non-null scores, null when nothing in it is scored.</summary>
+    double? MeanScore = null,
+    /// <summary>#49 — how many of the group's requests carry a score.</summary>
+    long Scored = 0,
+    /// <summary>
+    /// #49 — replay-group wins: groups in which this key holds the top score (ties are wins
+    /// for every key at the top), out of the groups it has a scored member in. Null for
+    /// dimensions where a fan comparison is meaningless — only model and patch have one.
+    /// </summary>
+    long? Wins = null,
+    long? Groups = null);
 
 /// <summary>
 /// Phase 7 D2 — <c>GET /vessel/api/aggregate</c> response: at most

@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -12,6 +13,9 @@ namespace Vessel.Api;
 public static class ReplayEndpoint
 {
     private const string AnthropicVersion = "2023-06-01";
+
+    /// <summary>#48 — one fan may vary at most this many ways; the one-axis guard itself lives in the UI.</summary>
+    public const int MaxVariations = 8;
 
     public static async Task Handle(HttpContext context)
     {
@@ -33,7 +37,27 @@ public static class ReplayEndpoint
             return;
         }
 
-        requested ??= new ReplayRequest(null, null);
+        requested ??= new ReplayRequest(null, null, null);
+        // D1 — a plain single replay is a fan of one: today's shape becomes one variation, and
+        // from here there is exactly one code path.
+        ReplayVariation[] variations = requested.Variations
+            ?? [new ReplayVariation(requested.Backend, requested.Model, null)];
+
+        if (variations.Length == 0)
+        {
+            await VesselErrors.Write(
+                context, StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
+                "a replay needs at least one variation");
+            return;
+        }
+
+        if (variations.Length > MaxVariations)
+        {
+            await VesselErrors.Write(
+                context, StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
+                $"a replay fan is limited to {MaxVariations} variations");
+            return;
+        }
 
         var configStore = context.RequestServices.GetRequiredService<ConfigStore>();
         ConfigSnapshot snapshot = configStore.Snapshot;
@@ -47,46 +71,117 @@ public static class ReplayEndpoint
 
         var registry = context.RequestServices.GetRequiredService<BackendRegistry>();
         BackendSet backends = registry.Resolve(snapshot);
-        string backendName = string.IsNullOrWhiteSpace(requested.Backend) ? detail.Backend : requested.Backend;
+        string group = NewGroupId();
+
+        // D3 — validation is atomic across the fan: every variation is composed before any is
+        // dispatched, so a bad one never leaves a half-fired fan behind.
+        var plans = new List<ReplayPlan>(variations.Length);
+        for (int index = 0; index < variations.Length; index++)
+        {
+            if (!TryCompose(detail, backends, snapshot, variations[index], group, out ReplayPlan? plan, out ReplayError? error))
+            {
+                await VesselErrors.Write(
+                    context, error!.Status, error.Code, error.Message, error.Backends, index);
+                return;
+            }
+
+            plans.Add(plan!);
+        }
+
+        context.RequestServices.GetRequiredService<ReplayExecutor>().Start(plans);
+
+        context.Response.StatusCode = StatusCodes.Status202Accepted;
+        context.Response.ContentType = "application/json; charset=utf-8";
+        await JsonSerializer.SerializeAsync(
+            context.Response.Body, new ReplayAccepted(group, plans.Count),
+            ApiJsonContext.Default.ReplayAccepted, context.RequestAborted);
+    }
+
+    private static string NewGroupId() =>
+        Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant();
+
+    /// <summary>
+    /// Composes one variation into a dispatchable plan, or the error that rejects the whole
+    /// fan. Order matters: model, then the merge patch, then the dialect fix-up — so a patched
+    /// <c>max_tokens</c> still gets renamed for the target dialect and recorded as such (D3).
+    /// </summary>
+    private static bool TryCompose(
+        RequestDetail detail, BackendSet backends, ConfigSnapshot snapshot,
+        ReplayVariation variation, string group,
+        out ReplayPlan? plan, out ReplayError? error)
+    {
+        plan = null;
+        error = null;
+        string backendName = string.IsNullOrWhiteSpace(variation.Backend) ? detail.Backend : variation.Backend;
         ResolvedBackend? backend = backends.Find(backendName);
         if (backend is null)
         {
-            await VesselErrors.Write(
-                context, StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
+            error = new ReplayError(
+                StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
                 $"unknown replay backend '{backendName}'", backends.Names);
-            return;
+            return false;
         }
 
-        if (!IsCompatible(detail, backend, requested.Model is not null))
+        if (!IsCompatible(detail, backend, variation.Model is not null || variation.Params is not null))
         {
-            await VesselErrors.Write(
-                context, StatusCodes.Status400BadRequest, VesselErrors.FormatMismatch,
+            error = new ReplayError(
+                StatusCodes.Status400BadRequest, VesselErrors.FormatMismatch,
                 $"{detail.Format} cannot be replayed to backend '{backend.Name}' ({backend.Type})");
-            return;
+            return false;
         }
 
         if (detail.Truncated)
         {
-            await VesselErrors.Write(
-                context, StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
+            error = new ReplayError(
+                StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
                 "the captured request body was truncated and cannot be replayed safely");
-            return;
+            return false;
         }
 
         if (!TryGetBody(detail.RequestBody, out byte[] body, out string? bodyError))
         {
-            await VesselErrors.Write(
-                context, StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
-                bodyError!);
-            return;
+            error = new ReplayError(StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest, bodyError!);
+            return false;
         }
 
-        if (requested.Model is not null && !TryOverrideModel(body, requested.Model, out body))
+        if (variation.Model is not null && !TryOverrideModel(body, variation.Model, out body))
         {
-            await VesselErrors.Write(
-                context, StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
+            error = new ReplayError(
+                StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
                 "the captured request body is not a JSON object, so its model cannot be overridden");
-            return;
+            return false;
+        }
+
+        string? patchJson = null;
+        if (variation.Params is not null)
+        {
+            if (variation.Params is not JsonObject patch)
+            {
+                error = new ReplayError(
+                    StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
+                    "replay params must be a JSON object");
+                return false;
+            }
+
+            // One way to do each thing: the model is the variation's own field, never a
+            // patch member, so there is no precedence rule to remember.
+            if (patch.ContainsKey("model"))
+            {
+                error = new ReplayError(
+                    StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
+                    "replay params must not set 'model'; use the variation's model field");
+                return false;
+            }
+
+            if (!TryApplyMergePatch(body, patch, out body))
+            {
+                error = new ReplayError(
+                    StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
+                    "the captured request body is not a JSON object, so params cannot be applied");
+                return false;
+            }
+
+            patchJson = patch.ToJsonString();
         }
 
         if (TryApplyDialectFixup(detail.Format, backend.Type, backend.BaseUrl, body, out byte[] fixedUpBody, out string? fixupId))
@@ -96,21 +191,79 @@ public static class ReplayEndpoint
 
         if (!TryBuildAuth(detail, backend, out KeyValuePair<string, string>[] authHeaders, out string? missingEnv))
         {
-            await VesselErrors.Write(
-                context, StatusCodes.Status400BadRequest, VesselErrors.MissingReplayAuth,
+            error = new ReplayError(
+                StatusCodes.Status400BadRequest, VesselErrors.MissingReplayAuth,
                 $"replay requires environment variable '{missingEnv}' on the Vessel process");
-            return;
+            return false;
         }
 
-        string? contentType = Header(detail.RequestHeaders, "Content-Type");
-        string? accept = Header(detail.RequestHeaders, "Accept");
-        var plan = new ReplayPlan(
-            id, backend.Name, detail.Method, detail.Path, body, contentType, accept, detail.Tags,
-            authHeaders, TimeSpan.FromSeconds(snapshot.Config.Timeouts.ActivitySeconds), fixupId);
-        context.RequestServices.GetRequiredService<ReplayExecutor>().Start(plan);
-        context.Response.StatusCode = StatusCodes.Status202Accepted;
-        context.Response.ContentType = "application/json; charset=utf-8";
-        await context.Response.WriteAsync("{}", context.RequestAborted);
+        plan = new ReplayPlan(
+            detail.Id, backend.Name, detail.Method, detail.Path, body,
+            Header(detail.RequestHeaders, "Content-Type"), Header(detail.RequestHeaders, "Accept"), detail.Tags,
+            authHeaders, TimeSpan.FromSeconds(snapshot.Config.Timeouts.ActivitySeconds), fixupId, group, patchJson);
+        return true;
+    }
+
+    /// <summary>
+    /// RFC 7396 JSON Merge Patch: objects merge recursively, <c>null</c> deletes, arrays and
+    /// scalars replace. Recursive because a sampler under Ollama's <c>options</c> must not
+    /// clobber the sibling keys the original set there — which is also why the endpoint can
+    /// stay format-agnostic about where a parameter lives (D3).
+    /// </summary>
+    public static bool TryApplyMergePatch(byte[] body, JsonObject patch, out byte[] rewritten)
+    {
+        rewritten = body;
+        JsonObject? target;
+        try
+        {
+            target = JsonNode.Parse(body) as JsonObject;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        if (target is null)
+        {
+            return false;
+        }
+
+        Merge(target, patch);
+        rewritten = Encoding.UTF8.GetBytes(target.ToJsonString());
+        return true;
+    }
+
+    private static void Merge(JsonObject target, JsonObject patch)
+    {
+        foreach ((string key, JsonNode? value) in patch)
+        {
+            if (value is null)
+            {
+                target.Remove(key);
+            }
+            else if (value is JsonObject nested)
+            {
+                // An object patch always merges, even where the target has no object to merge
+                // into: cloning it wholesale would carry its nested nulls into the outgoing
+                // body as literal values, when a null is a deletion and deleting an absent
+                // key is a no-op. Applying {"options":{"seed":null,"temperature":0.2}} to {}
+                // must produce {"options":{"temperature":0.2}}, not a null seed on the wire.
+                if (target.TryGetPropertyValue(key, out JsonNode? existing) && existing is JsonObject existingObject)
+                {
+                    Merge(existingObject, nested);
+                }
+                else
+                {
+                    var fresh = new JsonObject();
+                    Merge(fresh, nested);
+                    target[key] = fresh;
+                }
+            }
+            else
+            {
+                target[key] = value.DeepClone();
+            }
+        }
     }
 
     private static bool IsCompatible(RequestDetail detail, ResolvedBackend target, bool modelOverride)
@@ -255,6 +408,20 @@ public static class ReplayEndpoint
         }
     }
 
+    /// <summary>
+    /// #48 — whether replaying to this backend reattaches a key, i.e. whether a fan aimed at it
+    /// spends money. The single definition: <see cref="TryBuildAuth"/> gates on it and
+    /// <c>/status</c> publishes it, so the dialog's paid-call count cannot drift from what
+    /// replay actually does.
+    /// </summary>
+    public static bool RequiresAuth(ResolvedBackend backend)
+    {
+        string type = backend.Type.ToLowerInvariant();
+        bool isLoopback = Uri.TryCreate(backend.BaseUrl, UriKind.Absolute, out Uri? uri) && uri.IsLoopback;
+        return !string.IsNullOrWhiteSpace(backend.AuthEnv)
+            || (type is "anthropic" or "openai" or "auto") && !isLoopback;
+    }
+
     private static bool TryBuildAuth(
         RequestDetail detail, ResolvedBackend backend,
         out KeyValuePair<string, string>[] headers, out string? missingEnv)
@@ -262,10 +429,7 @@ public static class ReplayEndpoint
         headers = [];
         missingEnv = null;
         string type = backend.Type.ToLowerInvariant();
-        bool isLoopback = Uri.TryCreate(backend.BaseUrl, UriKind.Absolute, out Uri? uri) && uri.IsLoopback;
-        bool needsAuth = !string.IsNullOrWhiteSpace(backend.AuthEnv)
-            || (type is "anthropic" or "openai" or "auto") && !isLoopback;
-        if (!needsAuth)
+        if (!RequiresAuth(backend))
         {
             return true;
         }
@@ -315,4 +479,16 @@ public static class ReplayEndpoint
     }
 }
 
-public sealed record ReplayRequest(string? Backend, string? Model);
+/// <summary>
+/// #48 — one variation of a fan. <c>Params</c> is an RFC 7396 merge patch applied to the
+/// decoded original body, which is what keeps the endpoint format-agnostic: it never needs to
+/// know whether a sampler lives at the top level or under Ollama's <c>options</c>.
+/// </summary>
+public sealed record ReplayVariation(string? Backend, string? Model, JsonNode? Params);
+
+/// <summary>The single-replay shape (<c>backend</c>/<c>model</c>) stays accepted as a fan of one.</summary>
+public sealed record ReplayRequest(string? Backend, string? Model, ReplayVariation[]? Variations);
+
+public sealed record ReplayAccepted(string ReplayGroup, int Count);
+
+internal sealed record ReplayError(int Status, string Code, string Message, string[]? Backends = null);

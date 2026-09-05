@@ -19,10 +19,10 @@ public sealed class SqliteReadStore(string dbPath)
         id, started_at, session_id, backend, tags, method, path, format, model, status_code,
         error, streamed, replay_of, duration_ms, ttft_ms, vessel_overhead_ms, tok_per_sec,
         tokens_in, tokens_out, tokens_cached_read, tokens_cached_write, tokens_estimated,
-        stop_reason, warnings, truncated
+        stop_reason, warnings, truncated, replay_group, replay_patch, score
         """;
 
-    private const int SummaryColumnCount = 25;
+    private const int SummaryColumnCount = 28;
     private const int ExportIdPageSize = 256;
 
     /// <summary>
@@ -725,6 +725,7 @@ public sealed class SqliteReadStore(string dbPath)
             AggregateDimension.Tag => "fan_each.value",
             AggregateDimension.Backend => "requests.backend",
             AggregateDimension.Format => "requests.format",
+            AggregateDimension.Patch => "requests.replay_patch",
             AggregateDimension.Warning => "fan_each.value",
             _ => throw new ArgumentOutOfRangeException(nameof(query)),
         };
@@ -743,7 +744,10 @@ public sealed class SqliteReadStore(string dbPath)
         using SqliteTransaction transaction = connection.BeginTransaction();
         using SqliteCommand command = connection.CreateCommand();
         command.Transaction = transaction;
-        string filteredFrom = ConfigureFilteredCommand(command, query.Scope, fanOut: fanOut);
+        // by=patch is the only dimension with a meaningless NULL key: an unpatched row did
+        // not vary a parameter, so it is not a parameter set.
+        string[] keyWhere = query.By == AggregateDimension.Patch ? ["requests.replay_patch IS NOT NULL"] : [];
+        string filteredFrom = ConfigureFilteredCommand(command, query.Scope, fanOut: fanOut, extraWhere: keyWhere);
         command.CommandText =
             $"""
 
@@ -757,7 +761,9 @@ public sealed class SqliteReadStore(string dbPath)
                    AVG(requests.duration_ms),
                    AVG(CASE WHEN requests.streamed = 1 THEN requests.ttft_ms ELSE NULL END),
                    AVG(requests.tok_per_sec),
-                   COALESCE(MAX(requests.tokens_estimated), 0)
+                   COALESCE(MAX(requests.tokens_estimated), 0),
+                   AVG(requests.score),
+                   COUNT(requests.score)
             {filteredFrom}
             GROUP BY {keyExpression}
             """;
@@ -774,7 +780,7 @@ public sealed class SqliteReadStore(string dbPath)
             percentileCommand.Transaction = transaction;
             string percentileFrom = ConfigureFilteredCommand(
                 percentileCommand, query.Scope, fanOut: fanOut,
-                extraWhere: ["requests.duration_ms IS NOT NULL"]);
+                extraWhere: [.. keyWhere, "requests.duration_ms IS NOT NULL"]);
             percentileCommand.CommandText = $"SELECT {keyExpression}, requests.duration_ms {percentileFrom}";
             using SqliteDataReader reader = percentileCommand.ExecuteReader();
             while (reader.Read())
@@ -799,6 +805,10 @@ public sealed class SqliteReadStore(string dbPath)
 
         nullKeyDurations?.Sort();
         foreach (List<double> list in durationsByKey.Values) list.Sort();
+
+        FanWins? fanWins = query.By is AggregateDimension.Model or AggregateDimension.Patch
+            ? ReadFanWins(connection, transaction, query, keyExpression)
+            : null;
 
         double? Percentile(string? key, double p)
         {
@@ -827,19 +837,37 @@ public sealed class SqliteReadStore(string dbPath)
                     AvgTokPerSec: reader.IsDBNull(9) ? null : reader.GetDouble(9),
                     TokensEstimated: reader.GetInt64(10) != 0,
                     P50DurationMs: Percentile(key, 0.50),
-                    P95DurationMs: Percentile(key, 0.95)));
+                    P95DurationMs: Percentile(key, 0.95),
+                    MeanScore: reader.IsDBNull(11) ? null : reader.GetDouble(11),
+                    Scored: reader.GetInt64(12),
+                    Wins: key is null ? null : fanWins?.Wins.GetValueOrDefault(key),
+                    Groups: key is null ? null : fanWins?.Groups.GetValueOrDefault(key)));
             }
         }
 
         transaction.Commit();
 
-        rows.Sort((a, b) =>
+        if (query.Rank == AggregateRank.Score)
         {
-            int cmp = (b.TokensIn + b.TokensOut).CompareTo(a.TokensIn + a.TokensOut);
-            if (cmp != 0) return cmp;
-            cmp = b.Requests.CompareTo(a.Requests);
-            return cmp != 0 ? cmp : SeriesKeyOrder.Instance.Compare(a.Key, b.Key);
-        });
+            rows.RemoveAll(row => row.Scored == 0);
+            rows.Sort((a, b) =>
+            {
+                int cmp = (b.MeanScore ?? 0).CompareTo(a.MeanScore ?? 0);
+                if (cmp != 0) return cmp;
+                cmp = b.Scored.CompareTo(a.Scored);
+                return cmp != 0 ? cmp : SeriesKeyOrder.Instance.Compare(a.Key, b.Key);
+            });
+        }
+        else
+        {
+            rows.Sort((a, b) =>
+            {
+                int cmp = (b.TokensIn + b.TokensOut).CompareTo(a.TokensIn + a.TokensOut);
+                if (cmp != 0) return cmp;
+                cmp = b.Requests.CompareTo(a.Requests);
+                return cmp != 0 ? cmp : SeriesKeyOrder.Instance.Compare(a.Key, b.Key);
+            });
+        }
 
         return new AggregateResponse(
             By: DimensionName(query.By),
@@ -900,12 +928,169 @@ public sealed class SqliteReadStore(string dbPath)
         _ => throw new ArgumentOutOfRangeException(nameof(groupBy)),
     };
 
+    private sealed record FanWins(
+        Dictionary<string, long> Wins,
+        Dictionary<string, long> Groups);
+
+    /// <summary>
+    /// #49 — replay-group win rate. The report's scope selects which <em>fans</em> are in
+    /// play; membership of a selected fan is then read in full, unfiltered. Filtering members
+    /// first would let a report filter change who won: with alpha=3 and beta=5 in one fan,
+    /// filtering to model alpha would hide beta and promote alpha's loss to a win. A group's
+    /// members are the rows carrying its <c>replay_group</c> plus the original they replay,
+    /// joined through <c>replay_of</c> — the original by id, because it is a member of the fan
+    /// whether or not it falls inside the viewed session. Only scored members count; the top
+    /// score wins and <em>every</em> key holding it wins — 4/4/4/5/4 is the finding, not a
+    /// rounding problem. A key that fields two members in one group still wins that group
+    /// once, so wins never exceed groups.
+    /// <para>
+    /// Folded in C# for the same reason the percentiles above are: the row set is bounded by
+    /// the store's retention cap, and this is far easier to verify than the equivalent SQL.
+    /// </para>
+    /// </summary>
+    private static FanWins ReadFanWins(
+        SqliteConnection connection, SqliteTransaction transaction, AggregateQuery query, string keyExpression)
+    {
+        // Step 1 — which fans the scope puts in play, from either side of the link. A
+        // matching *child* selects its own fan; a matching *original* selects the fans that
+        // replay it. Children only would lose a fan whenever the scope names the original —
+        // its model when the replays used others, or its session, since replays land in the
+        // current one — and with it the original's own recorded win.
+        var selected = new HashSet<string>(StringComparer.Ordinal);
+        using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            string from = ConfigureFilteredCommand(
+                command, query.Scope, extraWhere: ["requests.replay_group IS NOT NULL"]);
+            command.CommandText = $"SELECT DISTINCT requests.replay_group {from}";
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                selected.Add(reader.GetString(0));
+            }
+        }
+
+        using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            // The scoped predicate becomes a subquery over ids; its own alias is `requests`,
+            // so the outer table is aliased to keep the two apart.
+            string from = ConfigureFilteredCommand(command, query.Scope);
+            command.CommandText =
+                "SELECT DISTINCT child.replay_group FROM requests child "
+                + $"WHERE child.replay_group IS NOT NULL AND child.replay_of IN (SELECT requests.id {from})";
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                selected.Add(reader.GetString(0));
+            }
+        }
+
+        var members = new Dictionary<string, List<(int? Score, string? Key)>>(StringComparer.Ordinal);
+        var originalOf = new Dictionary<string, long>(StringComparer.Ordinal);
+        if (selected.Count == 0)
+        {
+            return new FanWins([], []);
+        }
+
+        // Step 2 — every member of those fans, unfiltered. Group ids reach the database from
+        // a request header, so they are bound as parameters rather than inlined.
+        using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            var names = new List<string>(selected.Count);
+            int index = 0;
+            foreach (string group in selected)
+            {
+                string name = $"$g{index.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+                names.Add(name);
+                command.Parameters.AddWithValue(name, group);
+                index++;
+            }
+
+            // Deliberately not filtered by the dimension's own key predicate either: a member
+            // with no patch still competes for the top score in a params fan, it just wins for
+            // nobody.
+            command.CommandText =
+                $"SELECT requests.replay_group, requests.score, {keyExpression}, requests.replay_of "
+                + $"FROM requests WHERE requests.replay_group IN ({string.Join(", ", names)})";
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                string group = reader.GetString(0);
+                if (!members.TryGetValue(group, out List<(int?, string?)>? list))
+                {
+                    list = [];
+                    members[group] = list;
+                }
+
+                list.Add((reader.IsDBNull(1) ? null : reader.GetInt32(1), reader.IsDBNull(2) ? null : reader.GetString(2)));
+                if (!reader.IsDBNull(3))
+                {
+                    originalOf[group] = reader.GetInt64(3);
+                }
+            }
+        }
+
+        var originals = new Dictionary<long, (int? Score, string? Key)>();
+        if (originalOf.Count > 0)
+        {
+            using SqliteCommand command = connection.CreateCommand();
+            command.Transaction = transaction;
+            string ids = string.Join(',', originalOf.Values.Distinct().Select(
+                id => id.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            command.CommandText = $"SELECT requests.id, requests.score, {keyExpression} FROM requests WHERE requests.id IN ({ids})";
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                originals[reader.GetInt64(0)] = (
+                    reader.IsDBNull(1) ? null : reader.GetInt32(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2));
+            }
+        }
+
+        var wins = new Dictionary<string, long>(StringComparer.Ordinal);
+        var groups = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach ((string group, List<(int? Score, string? Key)> list) in members)
+        {
+            List<(int? Score, string? Key)> all = [.. list];
+            if (originalOf.TryGetValue(group, out long originalId)
+                && originals.TryGetValue(originalId, out (int? Score, string? Key) original))
+            {
+                all.Add(original);
+            }
+
+            (int? Score, string? Key)[] scored = [.. all.Where(member => member.Score is not null)];
+            if (scored.Length == 0)
+            {
+                continue;
+            }
+
+            int top = scored.Max(member => member.Score!.Value);
+            foreach (string key in scored.Where(m => m.Key is not null).Select(m => m.Key!).Distinct(StringComparer.Ordinal))
+            {
+                groups[key] = groups.GetValueOrDefault(key) + 1;
+            }
+
+            foreach (string key in scored
+                .Where(m => m.Key is not null && m.Score!.Value == top)
+                .Select(m => m.Key!)
+                .Distinct(StringComparer.Ordinal))
+            {
+                wins[key] = wins.GetValueOrDefault(key) + 1;
+            }
+        }
+
+        return new FanWins(wins, groups);
+    }
+
     private static string DimensionName(AggregateDimension by) => by switch
     {
         AggregateDimension.Model => "model",
         AggregateDimension.Tag => "tag",
         AggregateDimension.Backend => "backend",
         AggregateDimension.Format => "format",
+        AggregateDimension.Patch => "patch",
         AggregateDimension.Warning => "warning",
         _ => throw new ArgumentOutOfRangeException(nameof(by)),
     };
@@ -967,6 +1152,9 @@ public sealed class SqliteReadStore(string dbPath)
         StopReason: reader.IsDBNull(22) ? null : reader.GetString(22),
         Warnings: ParseStringArray(reader, 23),
         Truncated: reader.GetInt64(24) != 0,
+        ReplayGroup: reader.IsDBNull(25) ? null : reader.GetString(25),
+        ReplayPatch: reader.IsDBNull(26) ? null : reader.GetString(26),
+        Score: reader.IsDBNull(27) ? null : reader.GetInt32(27),
         PromptPreview: includePreview && !reader.IsDBNull(SummaryColumnCount) ? reader.GetString(SummaryColumnCount) : null);
 
     private static string[] ParseStringArray(SqliteDataReader reader, int ordinal) =>

@@ -35,3 +35,13 @@ public sealed record ClearCommand(string? BeforeIso, TaskCompletionSource<int> C
 public sealed record DeleteSessionCommand(
     long SessionId,
     TaskCompletionSource<SessionDeleteResult> Completion) : CaptureWork;
+
+/// <summary>
+/// #49 — <c>PUT /requests/{id}/score</c> enqueues this rather than opening a second write
+/// connection, like every other mutation. <see cref="Completion"/> carries false when no row
+/// matched, which the endpoint turns into a 404.
+/// </summary>
+public sealed record SetScoreCommand(
+    long Id,
+    int? Score,
+    TaskCompletionSource<bool> Completion) : CaptureWork;

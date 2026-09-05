@@ -13,7 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Popover } from '@/components/ui/popover'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
-import { formatCompactTokenCount, formatMs, formatTokPerSec } from '@/lib/format'
+import { formatCompactTokenCount, formatMs, formatTokPerSec, relativeDate } from '@/lib/format'
 
 /** §5 — the header panel: mark + wordmark, view toggle, stat group, session toggle / Reset / gear / backend indicator. */
 export function StatsBar({
@@ -415,17 +415,6 @@ function SessionOption({
 function sessionContext(session: SessionInfo) {
   const count = `${session.requestCount} request${session.requestCount === 1 ? '' : 's'}`
   return `${count} · ${relativeDate(session.lastRequestAt ?? session.startedAt)}`
-}
-
-function relativeDate(iso: string) {
-  const time = new Date(iso).getTime()
-  if (!Number.isFinite(time)) return iso
-  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000))
-  if (seconds < 60) return 'just now'
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`
-  if (seconds < 2_592_000) return `${Math.floor(seconds / 86_400)}d ago`
-  return new Date(time).toLocaleDateString()
 }
 
 function BackendIndicator({ backends }: { backends: StatusBackend[] }) {

@@ -93,6 +93,9 @@ public sealed class ProxyHandler
         // allocates the seq *and* registers it as in-flight in one step (I0b(1)).
         long? replayOf = TryParseReplayOf(context.Request.Headers);
         capture.SetReplayOf(replayOf);
+        capture.SetReplayFan(
+            ParseFanHeader(context.Request.Headers, ReplayGroupHeader),
+            ParseFanHeader(context.Request.Headers, ReplayPatchHeader));
         capture.Register(
             context.Request.Method,
             decision.ForwardPath.Value + context.Request.QueryString.Value,
@@ -201,6 +204,22 @@ public sealed class ProxyHandler
     /// replay row's own stored (redacted) request headers.
     /// </summary>
     public const string ReplayFixupsHeader = "X-Vessel-Replay-Fixups";
+
+    /// <summary>
+    /// #48 — the fan id shared by every child of one multi-replay, and the compact JSON merge
+    /// patch this child was composed with. Stamped by <see cref="Api.ReplayExecutor"/>, stripped
+    /// from the forwarded request like every other <c>X-Vessel-*</c> header, and recorded as
+    /// columns so the grid can group and label columns from a stored fact rather than by diffing.
+    /// </summary>
+    public const string ReplayGroupHeader = "X-Vessel-Replay-Group";
+
+    public const string ReplayPatchHeader = "X-Vessel-Replay-Patch";
+
+    private static string? ParseFanHeader(IHeaderDictionary headers, string name)
+    {
+        string? value = headers[name].FirstOrDefault();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
 
     private static long? TryParseReplayOf(IHeaderDictionary headers) =>
         long.TryParse(headers[ReplayHeader].FirstOrDefault(), out long replayOf) && replayOf > 0 ? replayOf : null;

@@ -91,7 +91,7 @@ public sealed class CaptureContext
     public void Register(string method, string path, string backend, string[] tags, long? replayOf) =>
         Seq = _events.Register(
             StartedAtIso, SessionName is null ? SessionId : null,
-            method, path, backend, tags, replayOf, sessionName: SessionName);
+            method, path, backend, tags, replayOf, sessionName: SessionName, replayGroup: ReplayGroup);
 
     private double ElapsedMs => Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
 
@@ -200,12 +200,25 @@ public sealed class CaptureContext
             Truncated: RequestBuffer.Truncated || ResponseBuffer.Truncated,
             UsageInjected: UsageInjected,
             ResponseAuthoredByVessel: ResponseAuthoredByVessel,
-            ReplayOf: ReplayOf);
+            ReplayOf: ReplayOf,
+            ReplayGroup: ReplayGroup,
+            ReplayPatch: ReplayPatch);
     }
 
     public long? ReplayOf { get; private set; }
 
+    /// <summary>#48 — the fan this replay belongs to, and the merge patch that varied it.</summary>
+    public string? ReplayGroup { get; private set; }
+
+    public string? ReplayPatch { get; private set; }
+
     public void SetReplayOf(long? replayOf) => ReplayOf = replayOf;
+
+    public void SetReplayFan(string? replayGroup, string? replayPatch)
+    {
+        ReplayGroup = replayGroup;
+        ReplayPatch = replayPatch;
+    }
 
     /// <summary>
     /// Wire-level streamed heuristic (no parsing exists until Phase 2): SSE or NDJSON

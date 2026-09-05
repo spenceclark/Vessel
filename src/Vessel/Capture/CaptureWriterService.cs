@@ -218,6 +218,9 @@ public sealed class CaptureWriterService(
                 case DeleteSessionCommand command:
                     RunDeleteSession(command);
                     break;
+                case SetScoreCommand command:
+                    RunSetScore(command);
+                    break;
             }
         }
 
@@ -393,6 +396,19 @@ public sealed class CaptureWriterService(
             name, SessionLimits.MaxMarkers, SessionLimits.MaxNameLength, resolution.Session.Id);
     }
 
+    /// <summary>#49 — one row's score, set on the writer thread like every other mutation.</summary>
+    private void RunSetScore(SetScoreCommand command)
+    {
+        try
+        {
+            command.Completion.TrySetResult(store.SetScore(command.Id, command.Score));
+        }
+        catch (Exception ex)
+        {
+            command.Completion.TrySetException(ex);
+        }
+    }
+
     /// <summary>
     /// Session ids captured by headerless requests at start time remain FK targets until
     /// those requests finish, even if Reset makes their marker non-current meanwhile.
@@ -430,7 +446,9 @@ public sealed class CaptureWriterService(
             TokensEstimated: enriched.TokensEstimated,
             StopReason: enriched.StopReason,
             Warnings: ParseStringArray(enriched.WarningsJson),
-            Truncated: record.Truncated);
+            Truncated: record.Truncated,
+            ReplayGroup: record.ReplayGroup,
+            ReplayPatch: record.ReplayPatch);
     }
 
     private static string[] ParseStringArray(string? json) =>

@@ -582,6 +582,7 @@ function toInFlight(descriptor: ActiveDescriptor): InFlightRequest {
     backend: descriptor.backend,
     tags: descriptor.tags,
     replayOf: descriptor.replayOf,
+    replayGroup: descriptor.replayGroup,
     ...(descriptor.model !== null ? { model: descriptor.model } : {}),
     ...(descriptor.ttftMs !== null ? { ttftMs: descriptor.ttftMs } : {}),
   }
@@ -598,6 +599,7 @@ function sameInFlight(a: InFlightRequest, b: InFlightRequest): boolean {
     a.path === b.path &&
     a.backend === b.backend &&
     a.replayOf === b.replayOf &&
+    a.replayGroup === b.replayGroup &&
     a.model === b.model &&
     a.ttftMs === b.ttftMs &&
     a.tags.length === b.tags.length &&

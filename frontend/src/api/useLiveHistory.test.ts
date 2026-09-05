@@ -85,6 +85,9 @@ function summary(id: number, overrides: Partial<Summary> = {}): Summary {
     error: null,
     streamed: false,
     replayOf: null,
+    replayGroup: null,
+    replayPatch: null,
+    score: null,
     durationMs: 10,
     ttftMs: null,
     vesselOverheadMs: 1,
@@ -112,6 +115,7 @@ function startedEvent(seq: number, row: Summary) {
     backend: row.backend,
     tags: row.tags,
     replayOf: row.replayOf,
+    replayGroup: row.replayGroup,
   }
 }
 

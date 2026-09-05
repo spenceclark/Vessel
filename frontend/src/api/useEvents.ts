@@ -18,6 +18,7 @@ export interface InFlightRequest {
   backend: string
   tags: string[]
   replayOf: number | null
+  replayGroup?: string | null
   model?: string
   ttftMs?: number
 }

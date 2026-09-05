@@ -1,4 +1,5 @@
 import type { RequestDetail } from '@/api/types'
+import { formatMs } from '@/lib/format'
 import { ollamaImageSource } from './imageSource'
 import type { RenderBlock, RenderedView, RenderMessage } from './types'
 
@@ -72,7 +73,7 @@ export function extractOllamaResponse(detail: RequestDetail): RenderedView | nul
 
     const params: { k: string; v: string }[] = []
     for (const key of METRIC_KEYS) {
-      if (resp[key] !== undefined && resp[key] !== null) params.push({ k: key, v: String(resp[key]) })
+      if (resp[key] !== undefined && resp[key] !== null) params.push({ k: key, v: metricValue(key, resp[key]) })
     }
 
     if (blocks.length === 0 && params.length === 0) return null
@@ -80,6 +81,16 @@ export function extractOllamaResponse(detail: RequestDetail): RenderedView | nul
   } catch {
     return null
   }
+}
+
+/**
+ * Ollama reports every `*_duration` in nanoseconds, which renders as an unreadable
+ * 11-digit integer. Show the same figure as a duration; a non-numeric value (or any
+ * other metric) is passed through untouched.
+ */
+function metricValue(key: string, value: unknown): string {
+  if (!key.endsWith('_duration') || typeof value !== 'number' || !Number.isFinite(value)) return String(value)
+  return formatMs(value / 1e6)
 }
 
 function requestMessage(m: any): RenderMessage {

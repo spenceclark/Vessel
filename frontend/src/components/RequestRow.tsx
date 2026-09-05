@@ -60,16 +60,14 @@ export function RequestRow({
         ) : (
           row.model && <span className="shrink truncate font-mono text-xs text-text-muted">{row.model}</span>
         )}
-        {row.warnings.length > 0 && (
-          <Badge variant={isError ? 'danger' : 'warn'} className="ml-auto shrink-0">
-            {row.warnings.length}
-          </Badge>
-        )}
-        {row.replayOf != null && (
-          <Badge variant="neutral" className="ml-auto shrink-0">
-            replay #{row.replayOf}
-          </Badge>
-        )}
+        {/* One right-aligned group: `ml-auto` on each badge would split the spare space
+            between them, floating the warning count at a different x on every row. */}
+        <span className="ml-auto flex shrink-0 gap-1.5">
+          {row.warnings.length > 0 && (
+            <Badge variant={isError ? 'danger' : 'warn'}>{row.warnings.length}</Badge>
+          )}
+          {row.replayOf != null && <Badge variant="neutral">replay #{row.replayOf}</Badge>}
+        </span>
       </div>
     </button>
   )

@@ -48,6 +48,9 @@ public interface ICaptureStore
     /// request and FTS rows. The current marker is protected at execution time.
     /// </summary>
     SessionDeleteResult DeleteSession(long sessionId, IReadOnlySet<long>? protectedSessionIds = null);
+
+    /// <summary>#49 — sets or clears one row's score (1-5, or null); false when no row matched.</summary>
+    bool SetScore(long id, int? score);
 }
 
 public enum SessionDeleteStatus

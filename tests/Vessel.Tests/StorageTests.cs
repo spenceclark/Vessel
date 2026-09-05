@@ -65,7 +65,7 @@ public class StorageTests
             using var connection = new SqliteConnection($"Data Source={Path.Combine(dir, "vessel.db")};Pooling=False");
             connection.Open();
 
-            Assert.Equal(3L, Scalar(connection, "PRAGMA user_version"));
+            Assert.Equal(5L, Scalar(connection, "PRAGMA user_version"));
             Assert.Equal("wal", (string)Scalar(connection, "PRAGMA journal_mode"));
             Assert.Equal(2L, Scalar(connection, "PRAGMA auto_vacuum")); // 2 = INCREMENTAL
             Assert.Equal(2L, Scalar(connection, "SELECT COUNT(*) FROM requests"));
@@ -378,7 +378,7 @@ public class StorageTests
             using var check = new SqliteConnection($"Data Source={dbPath};Pooling=False");
             check.Open();
 
-            Assert.Equal(3L, Scalar(check, "PRAGMA user_version"));
+            Assert.Equal(5L, Scalar(check, "PRAGMA user_version"));
             Assert.Equal(2L, Scalar(check, "SELECT COUNT(*) FROM requests"));
             Assert.Equal("/old", (string)Scalar(check, "SELECT path FROM requests WHERE id = 1"));
             Assert.Equal(1L, Scalar(check, "SELECT COUNT(*) FROM requests_fts WHERE rowid = 1"));
@@ -390,6 +390,18 @@ public class StorageTests
                 Assert.True(reader.Read());
                 Assert.True(reader.IsDBNull(0));
                 Assert.True(reader.IsDBNull(1));
+            }
+
+            // #48 (v4) / #49 (v5) — the fan and score columns are equally nullable, and a
+            // pre-migration row keeps NULLs across all three.
+            using (SqliteCommand command = check.CreateCommand())
+            {
+                command.CommandText = "SELECT replay_group, replay_patch, score FROM requests WHERE id = 1";
+                using SqliteDataReader reader = command.ExecuteReader();
+                Assert.True(reader.Read());
+                Assert.True(reader.IsDBNull(0));
+                Assert.True(reader.IsDBNull(1));
+                Assert.True(reader.IsDBNull(2));
             }
         }
         finally

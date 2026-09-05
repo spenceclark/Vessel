@@ -49,6 +49,10 @@ function row(overrides: Partial<AggregateRow> = {}): AggregateRow {
     tokensEstimated: false,
     p50DurationMs: 361,
     p95DurationMs: 1440,
+    meanScore: null,
+    scored: 0,
+    wins: null,
+    groups: null,
     ...overrides,
   }
 }

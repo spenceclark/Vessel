@@ -1,4 +1,4 @@
-import type { AggregateDimensionName, RequestFilters, SeriesGroupByName, SeriesMetricName, SessionScope } from './types'
+import type { AggregateDimensionName, AggregateRankName, RequestFilters, SeriesGroupByName, SeriesMetricName, SessionScope } from './types'
 
 /**
  * The list query's key, in one place. `useLiveHistory` has to match, invalidate and write
@@ -41,6 +41,7 @@ export function aggregateQueryKey(
   by: AggregateDimensionName,
   scope: SessionScope | null,
   filters: RequestFilters,
+  rank: AggregateRankName = 'tokens',
 ) {
-  return [...AGGREGATE_QUERY_ROOT, by, scope, filters] as const
+  return [...AGGREGATE_QUERY_ROOT, by, rank, scope, filters] as const
 }

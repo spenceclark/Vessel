@@ -7,7 +7,7 @@ import type { RequestDetail } from '@/api/types'
 
 function detail(overrides: Partial<RequestDetail> = {}): RequestDetail {
   return {
-    id: 4, startedAt: '2026-08-29T12:00:00Z', sessionId: 1, backend: 'openai', tags: [], method: 'POST', path: '/v1/chat/completions', format: 'openai-chat', model: 'm', statusCode: 200, error: null, streamed: false, replayOf: null, durationMs: 10, ttftMs: null, vesselOverheadMs: 1, tokPerSec: null, tokensIn: null, tokensOut: null, tokensCachedRead: null, tokensCachedWrite: null, tokensEstimated: false, stopReason: null, warnings: [], truncated: false, requestHeaders: { 'Content-Type': ['application/json'] }, responseHeaders: null, requestBody: { text: '{"quote":"it\'s safe"}' }, responseBody: null, responseRaw: null,
+    id: 4, startedAt: '2026-08-29T12:00:00Z', sessionId: 1, backend: 'openai', tags: [], method: 'POST', path: '/v1/chat/completions', format: 'openai-chat', model: 'm', statusCode: 200, error: null, streamed: false, replayOf: null, replayGroup: null, replayPatch: null, score: null, durationMs: 10, ttftMs: null, vesselOverheadMs: 1, tokPerSec: null, tokensIn: null, tokensOut: null, tokensCachedRead: null, tokensCachedWrite: null, tokensEstimated: false, stopReason: null, warnings: [], truncated: false, requestHeaders: { 'Content-Type': ['application/json'] }, responseHeaders: null, requestBody: { text: '{"quote":"it\'s safe"}' }, responseBody: null, responseRaw: null,
     ...overrides,
   }
 }
@@ -16,7 +16,7 @@ describe('buildCurl', () => {
   it('targets Vessel with a heredoc-safe text body and an auth placeholder', () => {
     const command = buildCurl(detail(), 'http://127.0.0.1:4550', {
       name: 'openai', baseUrl: 'https://api.openai.com', type: 'openai', default: false,
-      health: { state: 'unknown', lastSeenAt: null },
+      health: { state: 'unknown', lastSeenAt: null }, requiresAuth: false,
     })
     expect(command).toContain("'http://127.0.0.1:4550/b/openai/v1/chat/completions'")
     expect(command).toContain('Authorization: Bearer $OPENAI_API_KEY')
@@ -183,6 +183,7 @@ function backend(overrides: Record<string, unknown> = {}) {
   return {
     name: 'openai', baseUrl: 'https://api.openai.com', type: 'openai', default: false,
     health: { state: 'unknown' as const, lastSeenAt: null },
+    requiresAuth: false,
     ...overrides,
   }
 }

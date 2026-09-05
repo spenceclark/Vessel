@@ -32,6 +32,9 @@ function detail(overrides: Partial<RequestDetail>): RequestDetail {
     error: null,
     streamed: false,
     replayOf: null,
+    replayGroup: null,
+    replayPatch: null,
+    score: null,
     durationMs: 10,
     ttftMs: null,
     vesselOverheadMs: 1,
@@ -71,7 +74,7 @@ describe('DetailPane — raw-stream fallback (R24)', () => {
   it('shows a visible failure notice when clipboard access rejects', async () => {
     vi.spyOn(api, 'getStatus').mockResolvedValue({
       name: 'vessel', version: '0.1.0', listen: '127.0.0.1:4550', defaultBackend: 'stub',
-      backends: [{ name: 'stub', baseUrl: 'http://localhost:11434', type: 'ollama', default: true, health: { state: 'unknown', lastSeenAt: null } }],
+      backends: [{ name: 'stub', baseUrl: 'http://localhost:11434', type: 'ollama', default: true, health: { state: 'unknown', lastSeenAt: null }, requiresAuth: false }],
       capture: { recording: true }, mcp: { enabled: true }, listenSecurity: { isNonLoopback: false, isContainer: false }, serverRunId: 'run',
       setup: { firstRun: false, defaultBackendReachable: null },
     })
@@ -162,5 +165,36 @@ describe('DetailPane — raw-stream fallback (R24)', () => {
 
     expect(screen.getByRole('alert')).toBeTruthy()
     expect(screen.getByText(/display decode limit reached/)).toBeTruthy()
+  })
+
+  // #48 review — two fans of one original must be told apart: what varied, and when.
+  it('labels each replay fan by its varied dimension and age', async () => {
+    const member = (id: number, group: string, model: string | null, patch: string | null) => ({
+      id, startedAt: new Date(Date.now() - 120_000).toISOString(), sessionId: 1, backend: 'stub', tags: [],
+      method: 'POST', path: '/api/chat', format: 'ollama-chat', model, statusCode: 200, error: null,
+      streamed: false, replayOf: 1, replayGroup: group, replayPatch: patch, score: null, durationMs: 10, ttftMs: null,
+      vesselOverheadMs: 1, tokPerSec: null, tokensIn: null, tokensOut: null, tokensCachedRead: null,
+      tokensCachedWrite: null, tokensEstimated: false, stopReason: null, warnings: [], truncated: false,
+    })
+    vi.spyOn(api, 'getReplays').mockResolvedValue([
+      member(2, 'fanA', 'qwen', null),
+      member(3, 'fanA', 'llama', null),
+      member(4, 'fanB', 'base', '{"temperature":0.7}'),
+      member(5, 'fanB', 'base', '{"temperature":0.9}'),
+      member(6, 'fanC', 'base', null),
+      member(7, 'fanC', 'base', null),
+      member(8, null as unknown as string, 'base', null),
+    ])
+    renderPane(detail({ model: 'base' }))
+
+    // The counts are stated once, in the header; rows say what varied and when.
+    expect(await screen.findByText('Replays · 4 fans, 7 replays')).toBeTruthy()
+    expect(screen.getByText('models · 2 · 2m ago')).toBeTruthy()
+    expect(screen.getByText('params · 2 · 2m ago')).toBeTruthy()
+    // Same model twice is a variance run, not a model comparison.
+    expect(screen.getByText('×2 same model · 2 · 2m ago')).toBeTruthy()
+    // A groupless single replay is a row like any other.
+    expect(screen.getByText('#8 · single · 2m ago')).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: 'Compare' })).toHaveLength(4)
   })
 })

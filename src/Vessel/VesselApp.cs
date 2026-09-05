@@ -146,6 +146,7 @@ public static class VesselApp
         app.MapGet("/vessel/api/requests/{id:long}", (RequestDelegate)RequestsEndpoints.Detail);
         app.MapGet("/vessel/api/requests/{id:long}/replays", (RequestDelegate)RequestsEndpoints.Replays);
         app.MapPost("/vessel/api/requests/{id:long}/replay", (RequestDelegate)ReplayEndpoint.Handle);
+        app.MapPut("/vessel/api/requests/{id:long}/score", (RequestDelegate)ScoreEndpoint.Handle);
         app.MapGet("/vessel/api/stats", (RequestDelegate)StatsEndpoint.Handle);
         app.MapGet("/vessel/api/sessions", (RequestDelegate)SessionsEndpoints.List);
         app.MapPost("/vessel/api/sessions", (RequestDelegate)SessionsEndpoints.Create);
