@@ -271,10 +271,11 @@ emits no SSE event, so a second tab is stale until its own next refetch. The lea
 no endpoint: `AVG(score)`/`COUNT(score)` ride every aggregate row and `rank=score` orders
 before the group cap (ranking a leaderboard client-side out of a token-ranked page would hide
 a quiet 5/5 behind fifty chatty 1/5s); replay-group win rate is a second query folded in C#
-beside the percentiles — the scope selects which *fans* are in play and their membership is
-then read in full, so a report filter cannot change who won (a group's members are its
-`replay_group` rows plus the original through `replay_of`; ties are wins for everyone at the
-top) — and
+beside the percentiles — the scope selects which *fans* are in play, from either side of the
+link (a matching child selects its own fan; a matching original selects the fans replaying
+it), and their membership is then read in full, so a report filter cannot change who won (a
+group's members are its `replay_group` rows plus the original through `replay_of`; ties are
+wins for everyone at the top) — and
 `by=patch` groups by the patch #48 recorded, which is the per-parameter-set leaderboard. MCP
 exposes `score` read-only — an agent can read which variant a human preferred, it cannot vote.
 

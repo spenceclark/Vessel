@@ -259,4 +259,43 @@ describe('CompareView', () => {
     expect(row?.textContent).toContain('512')
     expect(row?.textContent).toContain('(auto)')
   })
+
+  // Review — neither side of a rename may be filled in from the other: that turns an added
+  // limit, and a patch whose body could not be read, into apparent no-ops.
+  it('shows an absent original as — and falls back to the recorded patch, not the other side', async () => {
+    const fixups = { 'X-Vessel-Replay-Fixups': ['openai-chat:max_tokens->max_completion_tokens'] }
+    const added: RequestDetail = {
+      ...detail(2, 'm', 1),
+      replayPatch: '{"max_tokens":512}',
+      requestHeaders: fixups,
+      requestBody: { text: JSON.stringify({ model: 'm', messages: [], max_completion_tokens: 512 }) },
+    }
+    const bare: RequestDetail = {
+      ...detail(1, 'm', null),
+      requestBody: { text: JSON.stringify({ model: 'm', messages: [] }) },
+    }
+    vi.spyOn(api, 'getRequest').mockImplementation(async (id) => (id === 1 ? bare : added))
+    const { unmount } = render(
+      createElement(CompareView, { originalId: 1, replayIds: [2], onClose: () => undefined }),
+      { wrapper: wrapper() },
+    )
+
+    const addedRow = (await screen.findByText('max_tokens → max_completion_tokens')).closest('div')
+    expect(addedRow?.textContent).toContain('—')
+    expect(addedRow?.textContent).toContain('512')
+    unmount()
+
+    // The replay body is unreadable, but the recorded patch still knows what was set.
+    const unreadable: RequestDetail = { ...added, requestBody: null }
+    const withLimit: RequestDetail = {
+      ...detail(1, 'm', null),
+      requestBody: { text: JSON.stringify({ model: 'm', messages: [], max_tokens: 2048 }) },
+    }
+    vi.spyOn(api, 'getRequest').mockImplementation(async (id) => (id === 1 ? withLimit : unreadable))
+    render(createElement(CompareView, { originalId: 1, replayIds: [2], onClose: () => undefined }), { wrapper: wrapper() })
+
+    const patchedRow = (await screen.findByText('max_tokens → max_completion_tokens')).closest('div')
+    expect(patchedRow?.textContent).toContain('2048')
+    expect(patchedRow?.textContent).toContain('512')
+  })
 })

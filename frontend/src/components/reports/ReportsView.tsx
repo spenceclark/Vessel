@@ -101,6 +101,25 @@ export function ReportsView({
         />
         {/* §5 collapse rule — two columns from ~1100px, one below. */}
         <div className="grid grid-cols-1 gap-3 min-[1100px]:grid-cols-2">
+          {/* #49 review — the card answering "which model should I switch to" leads the
+              grid, unconditionally: its empty state is the discoverability hint for a
+              feature nobody would otherwise find, so it has to be visible unscored too. */}
+          <AggregateBarCard
+            title="Score by model"
+            data={byModelScore.data}
+            by="model"
+            projection="score"
+            loading={byModelScore.isLoading}
+          />
+          {hasPatchRows && (
+            <AggregateBarCard
+              title="By parameter set"
+              data={byPatch.data}
+              by="patch"
+              projection="score"
+              loading={byPatch.isLoading}
+            />
+          )}
           {showByModelBreakdown && (
             <AggregateBarCard
               title="Tokens by model"
@@ -169,22 +188,6 @@ export function ReportsView({
             projection="requests"
             loading={byWarning.isLoading}
           />
-          <AggregateBarCard
-            title="Score by model"
-            data={byModelScore.data}
-            by="model"
-            projection="score"
-            loading={byModelScore.isLoading}
-          />
-          {hasPatchRows && (
-            <AggregateBarCard
-              title="By parameter set"
-              data={byPatch.data}
-              by="patch"
-              projection="score"
-              loading={byPatch.isLoading}
-            />
-          )}
         </div>
       </div>
     </div>

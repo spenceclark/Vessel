@@ -202,6 +202,27 @@ public sealed class ScoreTests
         Assert.Equal((0L, 1L), Wins(filtered, "alpha"));
     }
 
+    // Review — a fan is selected from either side of the link. Scoping to the original's own
+    // model (or its session, since replays land in the current one) must still find the fan
+    // it heads, or the original's recorded win disappears.
+    [Fact]
+    public void Aggregate_WinRate_SelectsFansThroughAMatchingOriginalToo()
+    {
+        using var harness = new Harness();
+        long original = harness.Seed(model: "base", score: 5);
+        harness.Seed(model: "alpha", score: 3, replayOf: original, replayGroup: "fan1");
+        harness.Seed(model: "beta", score: 4, replayOf: original, replayGroup: "fan1");
+
+        AggregateResponse unfiltered = harness.Read.GetAggregate(
+            new AggregateQuery(new RequestQuery(), AggregateDimension.Model));
+        Assert.Equal((1L, 1L), Wins(unfiltered, "base"));
+
+        // Only the original matches this filter; its fan is reached through replay_of.
+        AggregateResponse filtered = harness.Read.GetAggregate(
+            new AggregateQuery(new RequestQuery(Model: "base"), AggregateDimension.Model));
+        Assert.Equal((1L, 1L), Wins(filtered, "base"));
+    }
+
     // Review — ranking after the server's group cap is not the scope's leaderboard: a quiet
     // 5/5 model would sit behind every chatty 1/5 one and be truncated away.
     [Fact]

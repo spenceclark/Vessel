@@ -530,18 +530,27 @@ function parameterDiff(original: RequestDetail, replay: RequestDetail): ParamDif
   const appliedFixups = new Set((findHeader(replay.requestHeaders, 'x-vessel-replay-fixups') ?? '').split(',').filter(Boolean))
   for (const rule of OPENAI_CHAT_RENAME_RULES) {
     if (!appliedFixups.has(rule.id)) continue
+    // An absent original stays absent: copying the sent value back would render an *added*
+    // limit as a no-op.
     const before = a && rule.from in a ? JSON.stringify(a[rule.from]) ?? 'undefined' : null
     // The value actually sent, read under the *target* spelling — a params fan can patch the
     // very key the fix-up then renames, and showing the original's value on both sides would
-    // render a token-limit sweep as five copies of the number nobody swept.
-    const after = b && rule.to in b ? JSON.stringify(b[rule.to]) ?? 'undefined' : null
+    // render a token-limit sweep as five copies of the number nobody swept. When the replay
+    // body cannot be read (truncated, or pushed past the cap by the longer spelling) the
+    // recorded patch still knows what was set; only with no patch either does the fix-up's
+    // own guarantee — it renames without altering the value — make the original the answer.
+    const after = b && rule.to in b
+      ? JSON.stringify(b[rule.to]) ?? 'undefined'
+      : patch && rule.from in patch
+        ? JSON.stringify(patch[rule.from]) ?? 'undefined'
+        : before
     if (before === null && after === null) continue
     rows.delete(rule.from)
     rows.delete(rule.to)
     rows.set(rule.from, {
       name: `${rule.from} → ${rule.to}`,
-      before: before ?? after!,
-      after: after ?? before!,
+      before: before ?? '—',
+      after: after ?? '—',
       auto: true,
     })
   }

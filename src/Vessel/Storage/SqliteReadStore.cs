@@ -951,14 +951,34 @@ public sealed class SqliteReadStore(string dbPath)
     private static FanWins ReadFanWins(
         SqliteConnection connection, SqliteTransaction transaction, AggregateQuery query, string keyExpression)
     {
-        // Step 1 — which fans the scope puts in play.
-        var selected = new List<string>();
+        // Step 1 — which fans the scope puts in play, from either side of the link. A
+        // matching *child* selects its own fan; a matching *original* selects the fans that
+        // replay it. Children only would lose a fan whenever the scope names the original —
+        // its model when the replays used others, or its session, since replays land in the
+        // current one — and with it the original's own recorded win.
+        var selected = new HashSet<string>(StringComparer.Ordinal);
         using (SqliteCommand command = connection.CreateCommand())
         {
             command.Transaction = transaction;
             string from = ConfigureFilteredCommand(
                 command, query.Scope, extraWhere: ["requests.replay_group IS NOT NULL"]);
             command.CommandText = $"SELECT DISTINCT requests.replay_group {from}";
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                selected.Add(reader.GetString(0));
+            }
+        }
+
+        using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            // The scoped predicate becomes a subquery over ids; its own alias is `requests`,
+            // so the outer table is aliased to keep the two apart.
+            string from = ConfigureFilteredCommand(command, query.Scope);
+            command.CommandText =
+                "SELECT DISTINCT child.replay_group FROM requests child "
+                + $"WHERE child.replay_group IS NOT NULL AND child.replay_of IN (SELECT requests.id {from})";
             using SqliteDataReader reader = command.ExecuteReader();
             while (reader.Read())
             {
@@ -979,11 +999,13 @@ public sealed class SqliteReadStore(string dbPath)
         {
             command.Transaction = transaction;
             var names = new List<string>(selected.Count);
-            for (int i = 0; i < selected.Count; i++)
+            int index = 0;
+            foreach (string group in selected)
             {
-                string name = $"$g{i.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+                string name = $"$g{index.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
                 names.Add(name);
-                command.Parameters.AddWithValue(name, selected[i]);
+                command.Parameters.AddWithValue(name, group);
+                index++;
             }
 
             // Deliberately not filtered by the dimension's own key predicate either: a member
