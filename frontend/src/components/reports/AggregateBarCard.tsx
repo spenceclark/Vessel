@@ -210,17 +210,13 @@ export function AggregateBarCard({
   loading: boolean
 }) {
   const spec = PROJECTIONS[projection]
-  // #49 — a leaderboard ranks by the score, and a group nobody scored is not a last place;
-  // it is absent. Every other projection keeps the API's own tokens-desc order.
-  const ranked = data
-    ? projection === 'score'
-      ? data.rows.filter((row) => row.scored > 0).sort((a, b) => (b.meanScore ?? 0) - (a.meanScore ?? 0))
-      : data.rows
-    : []
-  const displayRows = ranked.slice(0, DISPLAY_ROWS)
+  // Ranking (and, for a leaderboard, dropping unscored groups) happens server-side, before
+  // its own group cap — so these rows are already the right ones, in the right order, and
+  // `totalGroups` still discloses the untruncated population.
+  const displayRows = data ? data.rows.slice(0, DISPLAY_ROWS) : []
   const hasRows = displayRows.length > 0
-  const capNote = data && displayRows.length < ranked.length
-    ? `Top ${displayRows.length} of ${ranked.length.toLocaleString('en-US')} by ${projection === 'score' ? 'mean score' : RANKED_BY}.`
+  const capNote = data && displayRows.length < data.totalGroups
+    ? `Top ${displayRows.length} of ${data.totalGroups.toLocaleString('en-US')} by ${projection === 'score' ? 'mean score' : RANKED_BY}.`
     : null
   const fanOutNote = FAN_OUT_NOTE[by]
 
@@ -235,8 +231,8 @@ export function AggregateBarCard({
         <p className="flex h-[180px] items-center justify-center text-sm text-text-muted">
           Score some compares to see a leaderboard.
         </p>
-      ) : ranked.length === 1 ? (
-        <StatPanel groupKey={ranked[0]!.key} fields={spec.statFields(ranked[0]!, spec.formatValue(displayRows))} />
+      ) : data.totalGroups === 1 ? (
+        <StatPanel groupKey={data.rows[0]!.key} fields={spec.statFields(data.rows[0]!, spec.formatValue(displayRows))} />
       ) : (
         <>
           <BarChart

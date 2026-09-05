@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/client'
 import { aggregateQueryKey } from '@/api/queryKeys'
-import type { AggregateResponse, AggregateDimensionName, RequestFilters, SessionScope } from '@/api/types'
+import type { AggregateResponse, AggregateDimensionName, AggregateRankName, RequestFilters, SessionScope } from '@/api/types'
 import { AggregateBarCard } from '@/components/reports/AggregateBarCard'
 import { ContextGrowthCard } from '@/components/reports/ContextGrowthCard'
 import { ReportScopeBar } from '@/components/reports/ReportScopeBar'
@@ -30,10 +30,16 @@ import { ReportScopeBar } from '@/components/reports/ReportScopeBar'
  * something the header doesn't, so they stay — `AggregateBarCard` renders those as a
  * `StatPanel` instead of a one-bar chart.
  */
-function useAggregate(by: AggregateDimensionName, scope: SessionScope, filters: RequestFilters, enabled: boolean) {
+function useAggregate(
+  by: AggregateDimensionName,
+  scope: SessionScope,
+  filters: RequestFilters,
+  enabled: boolean,
+  rank: AggregateRankName = 'tokens',
+) {
   return useQuery<AggregateResponse>({
-    queryKey: aggregateQueryKey(by, scope, filters),
-    queryFn: () => api.getAggregate({ by, session: scope, filters }),
+    queryKey: aggregateQueryKey(by, scope, filters, rank),
+    queryFn: () => api.getAggregate({ by, session: scope, filters, rank }),
     enabled,
     refetchInterval: 5_000,
   })
@@ -58,10 +64,13 @@ export function ReportsView({
   const byModel = useAggregate('model', scope, filters, enabled)
   const byTag = useAggregate('tag', scope, filters, enabled)
   const byWarning = useAggregate('warning', scope, filters, enabled)
-  // #49 — the leaderboards. by=model is an existing fetch projected a fifth way; by=patch is
-  // a genuinely new dimension (one row per replay patch) and its card is mounted only once
-  // that fetch proves the scope has parameter sets in it.
-  const byPatch = useAggregate('patch', scope, filters, enabled)
+  // #49 — the leaderboards. Both are score-*ranked* fetches, not projections of the
+  // token-ranked ones: the server caps at 50 groups, so ranking by score after that cap
+  // would drop a quiet 5/5 model behind fifty chatty 1/5 ones. by=patch is a new dimension
+  // (one row per replay patch); its card is mounted only once the fetch proves the scope has
+  // scored parameter sets in it.
+  const byModelScore = useAggregate('model', scope, filters, enabled, 'score')
+  const byPatch = useAggregate('patch', scope, filters, enabled, 'score')
 
   // #25 round 1 — undefined while byTag is still loading, so ContextGrowthCard's Tag
   // default doesn't flash on and off before the first fetch resolves.
@@ -162,10 +171,10 @@ export function ReportsView({
           />
           <AggregateBarCard
             title="Score by model"
-            data={byModel.data}
+            data={byModelScore.data}
             by="model"
             projection="score"
-            loading={byModel.isLoading}
+            loading={byModelScore.isLoading}
           />
           {hasPatchRows && (
             <AggregateBarCard

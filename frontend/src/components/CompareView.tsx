@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError, api } from '@/api/client'
 import { AGGREGATE_QUERY_ROOT, requestDetailQueryKey } from '@/api/queryKeys'
 import { MAX_SCORE, MIN_SCORE, type RequestDetail } from '@/api/types'
@@ -24,8 +24,29 @@ export function CompareView({ originalId, replayIds, inFlight = [], onClose }: {
   inFlight?: InFlightRequest[]
   onClose: () => void
 }) {
+  // The selection carries the ids known when Compare was opened, which for a fan still
+  // firing is not the whole fan. Subscribing to the original's replay list — the same query
+  // a completion already invalidates — lets a member that finishes while this view is open
+  // become a column instead of vanishing with its pending one.
+  const replaysQuery = useQuery({
+    queryKey: ['replays', originalId],
+    queryFn: () => api.getReplays(originalId),
+  })
+  const summaries = useMemo(() => replaysQuery.data ?? [], [replaysQuery.data])
+  const selectedGroup = useMemo(
+    () => summaries.find((summary) => replayIds.includes(summary.id))?.replayGroup ?? null,
+    [summaries, replayIds],
+  )
+  const memberIds = useMemo(() => {
+    const live = selectedGroup === null
+      ? []
+      : summaries.filter((summary) => summary.replayGroup === selectedGroup).map((summary) => summary.id)
+    // Union with the selection: a fan opened before its list refetches still shows.
+    return [...new Set([...replayIds, ...live])].sort((a, b) => a - b)
+  }, [summaries, selectedGroup, replayIds])
+
   const queries = useQueries({
-    queries: [originalId, ...replayIds].map((id) => ({
+    queries: [originalId, ...memberIds].map((id) => ({
       queryKey: requestDetailQueryKey(id),
       queryFn: () => api.getRequest(id),
     })),
@@ -43,7 +64,7 @@ export function CompareView({ originalId, replayIds, inFlight = [], onClose }: {
 
   // Fire order is id order within a fan, so the columns read left to right as they were sent.
   const ordered = [...members].sort((a, b) => a.id - b.id)
-  const group = ordered.find((member) => member.replayGroup != null)?.replayGroup ?? null
+  const group = selectedGroup ?? ordered.find((member) => member.replayGroup != null)?.replayGroup ?? null
   const pending = inFlight.filter((item) =>
     item.replayOf === original.id && (group == null || item.replayGroup === group))
 
@@ -351,9 +372,10 @@ function RequestPanel({ detail, view, pair, members, diff }: {
             {diff.map((row) => (
               <div key={row.name} className="grid grid-cols-[minmax(80px,auto)_1fr] gap-2">
                 <dt className="text-text-muted">{row.name}</dt>
-                <dd>{row.cells[0]?.auto
+                <dd>{row.cells[0]?.auto && row.cells[0].after === row.before
                   ? <>{row.before} <span className="text-text-muted">(auto)</span></>
-                  : <>{row.before} <span className="text-text-muted">→</span> {row.cells[0]?.after ?? row.before}</>}</dd>
+                  : <>{row.before} <span className="text-text-muted">→</span> {row.cells[0]?.after ?? row.before}
+                    {row.cells[0]?.auto && <span className="text-text-muted"> (auto)</span>}</>}</dd>
               </div>
             ))}
           </dl>
@@ -507,11 +529,21 @@ function parameterDiff(original: RequestDetail, replay: RequestDetail): ParamDif
   // fix-up preserves it unchanged.
   const appliedFixups = new Set((findHeader(replay.requestHeaders, 'x-vessel-replay-fixups') ?? '').split(',').filter(Boolean))
   for (const rule of OPENAI_CHAT_RENAME_RULES) {
-    if (!appliedFixups.has(rule.id) || !a || !(rule.from in a)) continue
-    const value = JSON.stringify(a[rule.from]) ?? 'undefined'
+    if (!appliedFixups.has(rule.id)) continue
+    const before = a && rule.from in a ? JSON.stringify(a[rule.from]) ?? 'undefined' : null
+    // The value actually sent, read under the *target* spelling — a params fan can patch the
+    // very key the fix-up then renames, and showing the original's value on both sides would
+    // render a token-limit sweep as five copies of the number nobody swept.
+    const after = b && rule.to in b ? JSON.stringify(b[rule.to]) ?? 'undefined' : null
+    if (before === null && after === null) continue
     rows.delete(rule.from)
     rows.delete(rule.to)
-    rows.set(rule.from, { name: `${rule.from} → ${rule.to}`, before: value, after: value, auto: true })
+    rows.set(rule.from, {
+      name: `${rule.from} → ${rule.to}`,
+      before: before ?? after!,
+      after: after ?? before!,
+      auto: true,
+    })
   }
 
   return [...rows.values()].sort((x, y) => x.name.localeCompare(y.name))

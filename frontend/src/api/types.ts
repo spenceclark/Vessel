@@ -219,6 +219,12 @@ export type SeriesGroupByName = 'none' | 'tag' | 'model' | 'backend'
 
 export type AggregateDimensionName = 'model' | 'tag' | 'backend' | 'format' | 'patch' | 'warning'
 
+/**
+ * #49 review — what the server's group cap keeps. Ranking a leaderboard client-side out of a
+ * token-ranked page is not the scope's leaderboard, so the ranking is the server's job.
+ */
+export type AggregateRankName = 'tokens' | 'score'
+
 /** #49 — a score is 1-5, or null to clear. */
 export const MIN_SCORE = 1
 export const MAX_SCORE = 5

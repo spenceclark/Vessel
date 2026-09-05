@@ -217,4 +217,46 @@ describe('CompareView', () => {
     // A null patch leaf deletes the key rather than setting it to null.
     expect(row?.textContent).toContain('(removed)')
   })
+
+  // Review P1 — a member that finishes while Compare is open must become a column, not
+  // vanish with its pending one. The selection is frozen; the replay list is not.
+  it('picks up a fan member that completes while the view is open', async () => {
+    const summary = (id: number) => ({ ...detail(id, 'm', 1), replayGroup: 'fan0' })
+    vi.spyOn(api, 'getRequest').mockImplementation(async (id) => detail(id, 'm', id === 1 ? null : 1))
+    const getReplays = vi.spyOn(api, 'getReplays').mockResolvedValue([summary(2)])
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const wrap = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client }, children)
+    render(createElement(CompareView, { originalId: 1, replayIds: [2], onClose: () => undefined }), { wrapper: wrap })
+
+    expect(await screen.findByText('Replay #2')).toBeTruthy()
+    expect(screen.queryByText('Replay #3')).toBeNull()
+
+    // #3 lands: the same invalidation a completion already fires brings it in.
+    getReplays.mockResolvedValue([summary(2), summary(3)])
+    await client.invalidateQueries({ queryKey: ['replays', 1] })
+    expect(await screen.findByText('Replay #3')).toBeTruthy()
+  })
+
+  // Review P2 — a params fan can patch the very key the dialect fix-up then renames; the
+  // panel must show the patched value, not five copies of the original.
+  it('keeps a patched value when the dialect fix-up renamed its key', async () => {
+    const original: RequestDetail = {
+      ...detail(1, 'm', null),
+      requestBody: { text: JSON.stringify({ model: 'm', messages: [], max_tokens: 2048 }) },
+    }
+    const replay: RequestDetail = {
+      ...detail(2, 'm', 1),
+      replayPatch: '{"max_tokens":512}',
+      requestHeaders: { 'X-Vessel-Replay-Fixups': ['openai-chat:max_tokens->max_completion_tokens'] },
+      requestBody: { text: JSON.stringify({ model: 'm', messages: [], max_completion_tokens: 512 }) },
+    }
+    vi.spyOn(api, 'getRequest').mockImplementation(async (id) => (id === 1 ? original : replay))
+    render(createElement(CompareView, { originalId: 1, replayIds: [2], onClose: () => undefined }), { wrapper: wrapper() })
+
+    const row = (await screen.findByText('max_tokens → max_completion_tokens')).closest('div')
+    expect(row?.textContent).toContain('2048')
+    expect(row?.textContent).toContain('512')
+    expect(row?.textContent).toContain('(auto)')
+  })
 })

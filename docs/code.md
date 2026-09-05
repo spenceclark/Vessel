@@ -268,9 +268,13 @@ request id rather than by group, so the original of a fan and a pre-v4 single re
 scorable. There is no score table, no history and no author: single-user local tool, latest
 value wins. `PUT /requests/{id}/score` runs as a `SetScoreCommand` on the writer thread and
 emits no SSE event, so a second tab is stale until its own next refetch. The leaderboard adds
-no endpoint: `AVG(score)`/`COUNT(score)` ride every aggregate row, replay-group win rate is a
-second query folded in C# beside the percentiles (a group's members are its `replay_group`
-rows plus the original through `replay_of`; ties are wins for everyone at the top), and
+no endpoint: `AVG(score)`/`COUNT(score)` ride every aggregate row and `rank=score` orders
+before the group cap (ranking a leaderboard client-side out of a token-ranked page would hide
+a quiet 5/5 behind fifty chatty 1/5s); replay-group win rate is a second query folded in C#
+beside the percentiles — the scope selects which *fans* are in play and their membership is
+then read in full, so a report filter cannot change who won (a group's members are its
+`replay_group` rows plus the original through `replay_of`; ties are wins for everyone at the
+top) — and
 `by=patch` groups by the patch #48 recorded, which is the per-parameter-set leaderboard. MCP
 exposes `score` read-only — an agent can read which variant a human preferred, it cannot vote.
 
@@ -353,7 +357,7 @@ marking (e.g. `not_found`, `invalid_request`, `forbidden_host`, `upstream_unreac
 | `GET /vessel/api/export` | Stream matching rows as `format=csv\|jsonl`; accepts the list scope/filter params (`requestFormat` carries the capture-format filter) and `bodies=none\|text\|full`. CSV supports `none`/`text` and starts with a UTF-8 BOM for Windows Excel; JSONL stays BOM-less, and `full` adds redacted headers and decoded bodies. |
 | `GET /vessel/api/export/count` | Exact count over the same canonical list predicate for the export popover |
 | `GET /vessel/api/series` | Token series for the context-growth chart: `metric=tokens_in\|tokens_out\|tokens_total`, `groupBy=none\|tag\|model\|backend`, over the canonical list scope (plain `format`, lenient `session`). Oldest-first by id, capped to the newest 5,000 distinct requests (`truncated` + both counts), six-series cap with `omittedSeries` counted rather than merged, `estimated` flag when any drawn row is estimated |
-| `GET /vessel/api/aggregate` | Grouped totals `by=model\|tag\|backend\|format\|patch\|warning` (`by` required — 400 `invalid_request` otherwise; `warning` fans out over the warnings array like `tag` — a request counts once per code): requests/failed, token sums, avg duration/TTFT/tok/s, nearest-rank `p50`/`p95` duration; top 50 groups ranked by tokens then requests, `totalGroups` disclosed |
+| `GET /vessel/api/aggregate` | Grouped totals `by=model\|tag\|backend\|format\|patch\|warning` (`rank=tokens\|score` decides what the group cap keeps; `rank=score` drops unscored groups and orders by mean score, so `totalGroups` is the ranked population) (`by` required — 400 `invalid_request` otherwise; `warning` fans out over the warnings array like `tag` — a request counts once per code): requests/failed, token sums, avg duration/TTFT/tok/s, nearest-rank `p50`/`p95` duration; top 50 groups ranked by tokens then requests, `totalGroups` disclosed |
 | `GET /vessel/api/stats?session=` | Totals, failures, avg latency/tok/s/TTFT, token sums; `session` = id, `current`, or `all` |
 | `GET /vessel/api/sessions` / `POST` | List at most 500 sessions newest-first with current guaranteed / reset with an optional name of at most 128 characters |
 | `DELETE /vessel/api/sessions/{id}` | Delete a non-current session marker and all its request/FTS rows atomically on the writer |

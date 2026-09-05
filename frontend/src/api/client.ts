@@ -1,6 +1,7 @@
 import type {
   ActiveRequestsResponse,
   AggregateDimensionName,
+  AggregateRankName,
   AggregateResponse,
   ClearResponse,
   ConfigApplyResult,
@@ -194,8 +195,10 @@ export const api = {
     by,
     session,
     filters,
-  }: { by: AggregateDimensionName; session?: SessionScope; filters?: RequestFilters }) => {
+    rank,
+  }: { by: AggregateDimensionName; session?: SessionScope; filters?: RequestFilters; rank?: AggregateRankName }) => {
     const params = new URLSearchParams({ by })
+    if (rank !== undefined) params.set('rank', rank)
     if (session !== undefined && session !== 'all') params.set('session', String(session))
     applyFilterParams(params, filters)
     const qs = params.toString()

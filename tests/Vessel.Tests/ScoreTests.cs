@@ -183,6 +183,48 @@ public sealed class ScoreTests
         Assert.Equal((0L, 2L), Wins(response, warm));
     }
 
+    // Review — the scope selects which fans are in play; it must not change who won one.
+    // Filtering to alpha hides beta, and alpha's loss would otherwise read as a win.
+    [Fact]
+    public void Aggregate_WinRate_IsNotChangedByTheReportsOwnRowFilter()
+    {
+        using var harness = new Harness();
+        long original = harness.Seed(model: "base", score: null);
+        harness.Seed(model: "alpha", score: 3, replayOf: original, replayGroup: "fan1");
+        harness.Seed(model: "beta", score: 5, replayOf: original, replayGroup: "fan1");
+
+        AggregateResponse unfiltered = harness.Read.GetAggregate(
+            new AggregateQuery(new RequestQuery(), AggregateDimension.Model));
+        Assert.Equal((0L, 1L), Wins(unfiltered, "alpha"));
+
+        AggregateResponse filtered = harness.Read.GetAggregate(
+            new AggregateQuery(new RequestQuery(Model: "alpha"), AggregateDimension.Model));
+        Assert.Equal((0L, 1L), Wins(filtered, "alpha"));
+    }
+
+    // Review — ranking after the server's group cap is not the scope's leaderboard: a quiet
+    // 5/5 model would sit behind every chatty 1/5 one and be truncated away.
+    [Fact]
+    public void Aggregate_RankByScore_DropsUnscoredGroupsAndOrdersByMean()
+    {
+        using var harness = new Harness();
+        harness.Seed(model: "quiet", score: 5);
+        harness.Seed(model: "loud", score: 1);
+        harness.Seed(model: "loud", score: 1);
+        harness.Seed(model: "unrated", score: null);
+
+        AggregateResponse ranked = harness.Read.GetAggregate(
+            new AggregateQuery(new RequestQuery(), AggregateDimension.Model, AggregateRank.Score));
+
+        Assert.Equal(["quiet", "loud"], ranked.Rows.Select(row => row.Key));
+        // totalGroups is the ranked population, so the card's "top N of M" stays honest.
+        Assert.Equal(2, ranked.TotalGroups);
+
+        AggregateResponse byTokens = harness.Read.GetAggregate(
+            new AggregateQuery(new RequestQuery(), AggregateDimension.Model));
+        Assert.Equal(3, byTokens.TotalGroups);
+    }
+
     [Fact]
     public void Aggregate_WinsAreNullForDimensionsWithoutFans()
     {

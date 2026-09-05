@@ -498,6 +498,26 @@ public sealed class ReplayTests
         Assert.False(root.TryGetProperty("drop", out _));
     }
 
+    // Review — a null inside an object patch is a deletion at every depth. Cloning the patch
+    // wholesale where the target has nothing to merge into would send that null as a value.
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"options":null}""")]
+    [InlineData("""{"options":7}""")]
+    [InlineData("""{"options":[1,2]}""")]
+    public void MergePatch_MergesIntoAnAbsentNullOrScalarTarget(string body)
+    {
+        var patch = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(
+            """{"options":{"seed":null,"temperature":0.2}}""")!;
+
+        Assert.True(Vessel.Api.ReplayEndpoint.TryApplyMergePatch(Encoding.UTF8.GetBytes(body), patch, out byte[] rewritten));
+
+        using JsonDocument doc = JsonDocument.Parse(rewritten);
+        JsonElement options = doc.RootElement.GetProperty("options");
+        Assert.Equal(0.2, options.GetProperty("temperature").GetDouble());
+        Assert.False(options.TryGetProperty("seed", out _));
+    }
+
     [Fact]
     public void MergePatch_RefusesABodyThatIsNotAJsonObject()
     {

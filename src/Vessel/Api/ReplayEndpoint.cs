@@ -241,11 +241,23 @@ public static class ReplayEndpoint
             {
                 target.Remove(key);
             }
-            else if (value is JsonObject nested
-                && target.TryGetPropertyValue(key, out JsonNode? existing)
-                && existing is JsonObject existingObject)
+            else if (value is JsonObject nested)
             {
-                Merge(existingObject, nested);
+                // An object patch always merges, even where the target has no object to merge
+                // into: cloning it wholesale would carry its nested nulls into the outgoing
+                // body as literal values, when a null is a deletion and deleting an absent
+                // key is a no-op. Applying {"options":{"seed":null,"temperature":0.2}} to {}
+                // must produce {"options":{"temperature":0.2}}, not a null seed on the wire.
+                if (target.TryGetPropertyValue(key, out JsonNode? existing) && existing is JsonObject existingObject)
+                {
+                    Merge(existingObject, nested);
+                }
+                else
+                {
+                    var fresh = new JsonObject();
+                    Merge(fresh, nested);
+                    target[key] = fresh;
+                }
             }
             else
             {

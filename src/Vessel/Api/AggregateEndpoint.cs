@@ -32,8 +32,23 @@ public static class AggregateEndpoint
             return;
         }
 
+        string? rankRaw = NullIfEmpty(context.Request.Query["rank"]);
+        AggregateRank? rank = rankRaw switch
+        {
+            null or "tokens" => AggregateRank.Tokens,
+            "score" => AggregateRank.Score,
+            _ => null,
+        };
+        if (rank is null)
+        {
+            await VesselErrors.Write(
+                context, StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
+                "'rank' must be tokens or score");
+            return;
+        }
+
         AggregateResponse response = context.RequestServices.GetRequiredService<SqliteReadStore>()
-            .GetAggregate(new AggregateQuery(SeriesEndpoint.ParseListScope(context), by.Value));
+            .GetAggregate(new AggregateQuery(SeriesEndpoint.ParseListScope(context), by.Value, rank.Value));
         context.Response.ContentType = "application/json; charset=utf-8";
         await JsonSerializer.SerializeAsync(
             context.Response.Body, response, ApiJsonContext.Default.AggregateResponse, context.RequestAborted);

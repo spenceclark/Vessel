@@ -847,13 +847,27 @@ public sealed class SqliteReadStore(string dbPath)
 
         transaction.Commit();
 
-        rows.Sort((a, b) =>
+        if (query.Rank == AggregateRank.Score)
         {
-            int cmp = (b.TokensIn + b.TokensOut).CompareTo(a.TokensIn + a.TokensOut);
-            if (cmp != 0) return cmp;
-            cmp = b.Requests.CompareTo(a.Requests);
-            return cmp != 0 ? cmp : SeriesKeyOrder.Instance.Compare(a.Key, b.Key);
-        });
+            rows.RemoveAll(row => row.Scored == 0);
+            rows.Sort((a, b) =>
+            {
+                int cmp = (b.MeanScore ?? 0).CompareTo(a.MeanScore ?? 0);
+                if (cmp != 0) return cmp;
+                cmp = b.Scored.CompareTo(a.Scored);
+                return cmp != 0 ? cmp : SeriesKeyOrder.Instance.Compare(a.Key, b.Key);
+            });
+        }
+        else
+        {
+            rows.Sort((a, b) =>
+            {
+                int cmp = (b.TokensIn + b.TokensOut).CompareTo(a.TokensIn + a.TokensOut);
+                if (cmp != 0) return cmp;
+                cmp = b.Requests.CompareTo(a.Requests);
+                return cmp != 0 ? cmp : SeriesKeyOrder.Instance.Compare(a.Key, b.Key);
+            });
+        }
 
         return new AggregateResponse(
             By: DimensionName(query.By),
@@ -919,13 +933,16 @@ public sealed class SqliteReadStore(string dbPath)
         Dictionary<string, long> Groups);
 
     /// <summary>
-    /// #49 — replay-group win rate. A group's members are the rows carrying its
-    /// <c>replay_group</c> plus the original they replay, joined through <c>replay_of</c>;
-    /// the original is fetched by id rather than through the scope filter, because it is a
-    /// member of the fan whether or not it falls inside the viewed session. Only scored
-    /// members count; the top score wins and <em>every</em> key holding it wins — 4/4/4/5/4
-    /// is the finding, not a rounding problem. A key that fields two members in one group
-    /// still wins that group once, so wins never exceed groups.
+    /// #49 — replay-group win rate. The report's scope selects which <em>fans</em> are in
+    /// play; membership of a selected fan is then read in full, unfiltered. Filtering members
+    /// first would let a report filter change who won: with alpha=3 and beta=5 in one fan,
+    /// filtering to model alpha would hide beta and promote alpha's loss to a win. A group's
+    /// members are the rows carrying its <c>replay_group</c> plus the original they replay,
+    /// joined through <c>replay_of</c> — the original by id, because it is a member of the fan
+    /// whether or not it falls inside the viewed session. Only scored members count; the top
+    /// score wins and <em>every</em> key holding it wins — 4/4/4/5/4 is the finding, not a
+    /// rounding problem. A key that fields two members in one group still wins that group
+    /// once, so wins never exceed groups.
     /// <para>
     /// Folded in C# for the same reason the percentiles above are: the row set is bounded by
     /// the store's retention cap, and this is far easier to verify than the equivalent SQL.
@@ -934,17 +951,47 @@ public sealed class SqliteReadStore(string dbPath)
     private static FanWins ReadFanWins(
         SqliteConnection connection, SqliteTransaction transaction, AggregateQuery query, string keyExpression)
     {
-        var members = new Dictionary<string, List<(int? Score, string? Key)>>(StringComparer.Ordinal);
-        var originalOf = new Dictionary<string, long>(StringComparer.Ordinal);
+        // Step 1 — which fans the scope puts in play.
+        var selected = new List<string>();
         using (SqliteCommand command = connection.CreateCommand())
         {
             command.Transaction = transaction;
-            // Deliberately not filtered by the dimension's own key predicate: a member with no
-            // patch still competes for the top score in a params fan, it just wins for nobody.
             string from = ConfigureFilteredCommand(
                 command, query.Scope, extraWhere: ["requests.replay_group IS NOT NULL"]);
+            command.CommandText = $"SELECT DISTINCT requests.replay_group {from}";
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                selected.Add(reader.GetString(0));
+            }
+        }
+
+        var members = new Dictionary<string, List<(int? Score, string? Key)>>(StringComparer.Ordinal);
+        var originalOf = new Dictionary<string, long>(StringComparer.Ordinal);
+        if (selected.Count == 0)
+        {
+            return new FanWins([], []);
+        }
+
+        // Step 2 — every member of those fans, unfiltered. Group ids reach the database from
+        // a request header, so they are bound as parameters rather than inlined.
+        using (SqliteCommand command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            var names = new List<string>(selected.Count);
+            for (int i = 0; i < selected.Count; i++)
+            {
+                string name = $"$g{i.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+                names.Add(name);
+                command.Parameters.AddWithValue(name, selected[i]);
+            }
+
+            // Deliberately not filtered by the dimension's own key predicate either: a member
+            // with no patch still competes for the top score in a params fan, it just wins for
+            // nobody.
             command.CommandText =
-                $"SELECT requests.replay_group, requests.score, {keyExpression}, requests.replay_of {from}";
+                $"SELECT requests.replay_group, requests.score, {keyExpression}, requests.replay_of "
+                + $"FROM requests WHERE requests.replay_group IN ({string.Join(", ", names)})";
             using SqliteDataReader reader = command.ExecuteReader();
             while (reader.Read())
             {

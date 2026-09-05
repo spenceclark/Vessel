@@ -197,6 +197,19 @@ public enum SeriesGroupBy
 }
 
 /// <summary>Phase 7 — the dimension an aggregate report groups by.</summary>
+/// <summary>
+/// #49 review — what the <see cref="ChartLimits.MaxGroups"/> cap keeps. The cap is applied
+/// after ranking, so a leaderboard ranked client-side out of a token-ranked page is not the
+/// scope's leaderboard: 50 chatty models scoring 1/5 would hide the one quiet model scoring
+/// 5/5. <see cref="Score"/> also drops unscored groups — an unrated group is not last place,
+/// it is absent — so <c>totalGroups</c> is the size of the ranked population either way.
+/// </summary>
+public enum AggregateRank
+{
+    Tokens,
+    Score,
+}
+
 public enum AggregateDimension
 {
     Model,
@@ -260,7 +273,7 @@ public sealed class SeriesKeyOrder : IComparer<string?>
 public sealed record SeriesQuery(RequestQuery Scope, SeriesMetric Metric, SeriesGroupBy GroupBy);
 
 /// <summary>Phase 7 D2 — the aggregate query: the canonical list scope plus the grouping dimension.</summary>
-public sealed record AggregateQuery(RequestQuery Scope, AggregateDimension By);
+public sealed record AggregateQuery(RequestQuery Scope, AggregateDimension By, AggregateRank Rank = AggregateRank.Tokens);
 
 /// <summary>
 /// Phase 7 D1 — one chart point: the request's id (so a click can select it), its ISO
