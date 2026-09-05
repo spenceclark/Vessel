@@ -14,6 +14,10 @@ via the official **ModelContextProtocol C# SDK**; four read-only tools
 (`search_requests`, `get_request`, `get_stats`, `list_sessions`); token-budget
 shaping rules; config kill-switch; docs/trust-boundary statements.
 
+*(Amended by #49: search rows and request detail carry the `score` field, so an agent can
+read which variant a human preferred. The surface stays read-only — there is deliberately no
+`set_score` tool; scoring is HTTP-only.)*
+
 **Out (explicitly):** any mutating tool (replay, clear, sessions, config — each would
 need its own approval; agents triggering side effects is a separate decision); stdio
 transport (a bridge only if a real client demands it — none of the primary targets

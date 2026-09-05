@@ -23,7 +23,13 @@ public sealed record McpSearchRow(
     long? TokensOut,
     string? StopReason,
     string[] Warnings,
-    string? PromptPreview);
+    string? PromptPreview,
+    /// <summary>#49 — the human score, so an agent can read which variant a person preferred.</summary>
+    int? Score,
+    /// <summary>#48 — the replay links, so a fan can be identified from MCP alone.</summary>
+    long? ReplayOf,
+    string? ReplayGroup,
+    string? ReplayPatch);
 
 /// <summary>One <c>get_request</c> body window, never an encoded binary payload.</summary>
 public sealed record McpBodyWindow(
@@ -65,7 +71,11 @@ public sealed record McpRequestSummary(
     bool TokensEstimated,
     string? StopReason,
     string[] Warnings,
-    bool Truncated);
+    bool Truncated,
+    int? Score,
+    long? ReplayOf,
+    string? ReplayGroup,
+    string? ReplayPatch);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(McpSearchResponse))]

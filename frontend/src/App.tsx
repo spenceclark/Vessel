@@ -23,7 +23,9 @@ import { ReportsView } from '@/components/reports/ReportsView'
 export type Selection =
   | { kind: 'row'; id: number }
   | { kind: 'inflight'; seq: number }
-  | { kind: 'compare'; originalId: number; replayId: number }
+  // #48 — a comparison is an original plus the members of one replay fan; a pair is the
+  // one-element case.
+  | { kind: 'compare'; originalId: number; replayIds: number[] }
 
 /** D6/D3 — one screen: StatsBar / FilterBar / RequestList / DetailPane, plus phase 7's Reports view behind the header toggle. No router. */
 export default function App() {
@@ -262,11 +264,16 @@ export default function App() {
           </div>
           <div className="min-w-0 flex-1 overflow-hidden rounded-panel border border-border bg-surface shadow-panel">
             {selection?.kind === 'compare' ? (
-              <CompareView originalId={selection.originalId} replayId={selection.replayId} onClose={() => setSelection({ kind: 'row', id: selection.replayId })} />
+              <CompareView
+                originalId={selection.originalId}
+                replayIds={selection.replayIds}
+                inFlight={inFlight}
+                onClose={() => setSelection({ kind: 'row', id: selection.replayIds[selection.replayIds.length - 1] })}
+              />
             ) : selection?.kind === 'inflight' ? (
               <InFlightDetailPane item={inFlight.find((i) => i.seq === selection.seq) ?? null} />
             ) : (
-              <DetailPane id={selection?.kind === 'row' ? selection.id : null} onCompare={(originalId, replayId) => setSelection({ kind: 'compare', originalId, replayId })} />
+              <DetailPane id={selection?.kind === 'row' ? selection.id : null} onCompare={(originalId, replayIds) => setSelection({ kind: 'compare', originalId, replayIds })} />
             )}
           </div>
         </div>

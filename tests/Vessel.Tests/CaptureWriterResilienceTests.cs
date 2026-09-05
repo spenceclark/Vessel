@@ -96,6 +96,8 @@ public class CaptureWriterResilienceTests : IDisposable
         public SessionDeleteResult DeleteSession(long sessionId, IReadOnlySet<long>? protectedSessionIds = null) =>
             new(SessionDeleteStatus.Deleted, 0);
 
+        public bool SetScore(long id, int? score) => true;
+
         public int SnapshotAttempts()
         {
             lock (_lock)
@@ -230,6 +232,8 @@ public class CaptureWriterResilienceTests : IDisposable
         channel.Enqueue(new CreateSessionCommand("after", session));
         var deleteSession = new TaskCompletionSource<SessionDeleteResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         channel.Enqueue(new DeleteSessionCommand(2, deleteSession));
+        var score = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        channel.Enqueue(new SetScoreCommand(3, 4, score));
 
         // "Promptly" is the point: without the fix these never complete at all.
         await Assert.ThrowsAsync<CaptureStoppedException>(
@@ -238,6 +242,10 @@ public class CaptureWriterResilienceTests : IDisposable
             () => session.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<CaptureStoppedException>(
             () => deleteSession.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        // #49 — a new command type that misses CaptureChannel.FailIfCommand hangs its HTTP
+        // caller until abort rather than failing, which is why it is pinned here.
+        await Assert.ThrowsAsync<CaptureStoppedException>(
+            () => score.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
 
         await writer.StopAsync(TestContext.Current.CancellationToken);
     }
@@ -270,11 +278,16 @@ public class CaptureWriterResilienceTests : IDisposable
         Assert.False(channel.IsStopped); // one failure short
 
         var clear = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var score = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         channel.Enqueue(TestCapture.Record("/fail-final"));
         channel.Enqueue(new ClearCommand(null, clear));
+        channel.Enqueue(new SetScoreCommand(1, 5, score));
 
         await Assert.ThrowsAsync<CaptureStoppedException>(
             () => clear.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        // #49 — the TerminateAfterGiveUp half of the same contract.
+        await Assert.ThrowsAsync<CaptureStoppedException>(
+            () => score.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
         Assert.True(channel.IsStopped);
 
         await writer.StopAsync(TestContext.Current.CancellationToken);
@@ -427,6 +440,15 @@ public class CaptureWriterResilienceTests : IDisposable
                 int deleted = _live.Count;
                 _live.Clear();
                 return new SessionDeleteResult(SessionDeleteStatus.Deleted, deleted);
+            }
+        }
+
+        public bool SetScore(long id, int? score)
+        {
+            lock (_lock)
+            {
+                _operations.Add($"set-score:{id}={score?.ToString() ?? "null"}");
+                return true;
             }
         }
     }

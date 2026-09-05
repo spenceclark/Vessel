@@ -9,6 +9,7 @@ import type {
   ExportBodies,
   ExportCountResponse,
   ExportFormat,
+  ReplayPayload,
   RequestDetail,
   RequestFilters,
   RequestListResponse,
@@ -122,11 +123,19 @@ export const api = {
 
   getReplays: (id: number) => request<import('./types').Summary[]>(`/requests/${id}/replays`),
 
-  replay: (id: number, payload: { backend?: string; model?: string }) =>
-    request<void>(`/requests/${id}/replay`, {
+  replay: (id: number, payload: ReplayPayload) =>
+    request<{ replayGroup: string; count: number }>(`/requests/${id}/replay`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+    }),
+
+  /** #49 — 1-5, or null to clear. 204 on success. */
+  setScore: (id: number, score: number | null) =>
+    request<void>(`/requests/${id}/score`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ score }),
     }),
 
   getStats: (session?: StatsSessionParam) =>

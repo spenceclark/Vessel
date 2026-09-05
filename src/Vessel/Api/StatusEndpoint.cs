@@ -41,7 +41,8 @@ public static class StatusEndpoint
             backends.All
                 .OrderBy(b => b.Name, StringComparer.OrdinalIgnoreCase)
                 .Select(b => new StatusBackend(
-                    b.Name, b.BaseUrl, b.Type, b.IsDefault, b.AuthEnv, backendHealthTracker.Get(b.Name)))
+                    b.Name, b.BaseUrl, b.Type, b.IsDefault, b.AuthEnv, backendHealthTracker.Get(b.Name),
+                    ReplayEndpoint.RequiresAuth(b)))
                 .ToArray(),
             new CaptureHealth(!captureChannel.IsStopped, captureChannel.StoppedReason),
             new McpStatus(configStore.Current.Mcp.Enabled),

@@ -152,7 +152,8 @@ public sealed class CaptureEvents
     /// <returns>The newly allocated, already-registered request seq.</returns>
     public long Register(
         string startedAt, long? sessionId, string method, string path,
-        string backend, string[] tags, long? replayOf = null, string? sessionName = null)
+        string backend, string[] tags, long? replayOf = null, string? sessionName = null,
+        string? replayGroup = null)
     {
         long seq;
         lock (_publishLock)
@@ -162,7 +163,7 @@ public sealed class CaptureEvents
             // describe this request even to a client that never received its `started` frame.
             // Model and TtftMs are both learned later (RequestReady, FirstToken respectively).
             _active.Add(seq, new ActiveDescriptor(
-                seq, startedAt, sessionId, sessionName, method, path, backend, tags, replayOf, null, null));
+                seq, startedAt, sessionId, sessionName, method, path, backend, tags, replayOf, replayGroup, null, null));
         }
 
         // Serialized and published outside the allocation section (JSON touches no shared
@@ -179,7 +180,7 @@ public sealed class CaptureEvents
         if (!_subscribers.IsEmpty)
         {
             Publish("started", JsonSerializer.Serialize(
-                new StartedEvent(seq, startedAt, sessionId, sessionName, method, path, backend, tags, replayOf),
+                new StartedEvent(seq, startedAt, sessionId, sessionName, method, path, backend, tags, replayOf, replayGroup),
                 EventsJsonContext.Default.StartedEvent));
         }
 
@@ -367,6 +368,8 @@ public sealed record ActiveDescriptor(
     string Backend,
     string[] Tags,
     long? ReplayOf,
+    /// <summary>#48 — the multi-replay fan this in-flight child belongs to, so the grid can show it live.</summary>
+    string? ReplayGroup,
     string? Model,
     double? TtftMs);
 
@@ -390,7 +393,7 @@ public sealed class CaptureSubscription : IDisposable
 
 internal sealed record StartedEvent(
     long Seq, string StartedAt, long? SessionId, string? SessionName,
-    string Method, string Path, string Backend, string[] Tags, long? ReplayOf);
+    string Method, string Path, string Backend, string[] Tags, long? ReplayOf, string? ReplayGroup);
 
 internal sealed record RequestReadyEvent(long Seq, string Model);
 

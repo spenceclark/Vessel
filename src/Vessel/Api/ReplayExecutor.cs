@@ -26,11 +26,36 @@ public sealed class ReplayExecutor(IServer server, ILogger<ReplayExecutor> logge
         Timeout = Timeout.InfiniteTimeSpan,
     };
 
-    public void Start(ReplayPlan plan) => _ = ExecuteAsync(plan);
+    public void Start(ReplayPlan plan) => Start([plan]);
+
+    /// <summary>
+    /// #48 — a fan's members run <em>one after another</em>, holding one dispatch slot for the
+    /// whole fan. Firing them concurrently made four members of a local-backend fan contend for
+    /// one GPU, so the duration column — a headline number in the grid — measured contention
+    /// rather than the model. Independent single replays are each their own fan and still run
+    /// up to <see cref="MaxConcurrentReplays"/> at a time.
+    /// </summary>
+    // ponytail: serial per fan; serial-per-backend/parallel-across-backends if cloud fan wall time is ever a complaint.
+    public void Start(IReadOnlyList<ReplayPlan> fan) => _ = ExecuteFanAsync(fan);
+
+    private async Task ExecuteFanAsync(IReadOnlyList<ReplayPlan> fan)
+    {
+        await _dispatchSlots.WaitAsync();
+        try
+        {
+            foreach (ReplayPlan plan in fan)
+            {
+                await ExecuteAsync(plan);
+            }
+        }
+        finally
+        {
+            _dispatchSlots.Release();
+        }
+    }
 
     private async Task ExecuteAsync(ReplayPlan plan)
     {
-        await _dispatchSlots.WaitAsync();
         try
         {
             string listen = server.Features.Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
@@ -57,6 +82,11 @@ public sealed class ReplayExecutor(IServer server, ILogger<ReplayExecutor> logge
             {
                 request.Headers.TryAddWithoutValidation(ProxyHandler.ReplayFixupsHeader, plan.FixupId);
             }
+            request.Headers.TryAddWithoutValidation(ProxyHandler.ReplayGroupHeader, plan.ReplayGroup);
+            if (plan.PatchJson is not null)
+            {
+                request.Headers.TryAddWithoutValidation(ProxyHandler.ReplayPatchHeader, plan.PatchJson);
+            }
             foreach ((string name, string value) in plan.AuthHeaders)
             {
                 request.Headers.TryAddWithoutValidation(name, value);
@@ -73,10 +103,6 @@ public sealed class ReplayExecutor(IServer server, ILogger<ReplayExecutor> logge
             // failures, which creates the capture row. This only covers executor setup or an
             // unexpected transport failure before that point; it must never fault unobserved.
             logger.LogWarning(ex, "replay execution could not complete");
-        }
-        finally
-        {
-            _dispatchSlots.Release();
         }
     }
 
@@ -108,4 +134,8 @@ public sealed record ReplayPlan(
     string[] Tags,
     KeyValuePair<string, string>[] AuthHeaders,
     TimeSpan ActivityTimeout,
-    string? FixupId = null);
+    string? FixupId = null,
+    /// <summary>#48 — the fan id every child of this multi-replay shares.</summary>
+    string ReplayGroup = "",
+    /// <summary>#48 — compact JSON of the merge patch this variation applied, null when none.</summary>
+    string? PatchJson = null);

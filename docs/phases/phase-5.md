@@ -53,6 +53,8 @@ SSE lifecycle events, and UI liveness for free. No second execution path exists.
   a background task that **drains the response** (capture needs the body to complete;
   the drain respects the same activity timeout as any proxied request) and returns
   **202 `{}`** immediately. No id/seq in the response — correlation is D4.
+  *(Amended by #48: the body is now `{ replayGroup, count }` — the client needs the fan
+  id to open the grid and to correlate `started` events. Still no child ids.)*
 
 ### D2 — Auth re-attachment (pre-agreed in plan.md, restated as the contract)
 
@@ -94,6 +96,11 @@ replays of one original all correlate naturally. Contract change recorded in
 phase-3.md D5 when landing.
 
 ### D5 — Compare view: a `replay_of` pair, nothing else
+
+*(Amended by #48: Compare is a replay **group** — an original plus the members of one fan.
+A pair is the one-member rendering. Amended again by #49: every column, the pair's included,
+now carries a header with a 1-5 score control, so the pair render is no longer byte-identical
+to phase 5's — deliberately.)*
 
 Entry points: a replayed row's detail shows "Replay of #N — compare"; an original
 with replays shows "Replays (n)" linking each. Compare takes over the detail-pane

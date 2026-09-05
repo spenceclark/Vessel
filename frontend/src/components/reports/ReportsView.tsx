@@ -58,6 +58,10 @@ export function ReportsView({
   const byModel = useAggregate('model', scope, filters, enabled)
   const byTag = useAggregate('tag', scope, filters, enabled)
   const byWarning = useAggregate('warning', scope, filters, enabled)
+  // #49 — the leaderboards. by=model is an existing fetch projected a fifth way; by=patch is
+  // a genuinely new dimension (one row per replay patch) and its card is mounted only once
+  // that fetch proves the scope has parameter sets in it.
+  const byPatch = useAggregate('patch', scope, filters, enabled)
 
   // #25 round 1 — undefined while byTag is still loading, so ContextGrowthCard's Tag
   // default doesn't flash on and off before the first fetch resolves.
@@ -69,6 +73,9 @@ export function ReportsView({
   // fetch proves there's only one group to show (they'd only restate the header stats
   // bar); default to showing them while the fetch is still loading, not hiding-then-
   // popping-in once real data settles the question.
+  // #49 — no parameter sets in scope means no per-param leaderboard to show at all (unlike
+  // the by-model card, which states its own "score something" empty case).
+  const hasPatchRows = byPatch.data ? byPatch.data.rows.length > 0 : false
   const showByModelBreakdown = byModel.data === undefined || byModel.data.totalGroups > 1
   const showByTagBreakdown = byTag.data === undefined || byTag.data.totalGroups > 1
 
@@ -153,6 +160,22 @@ export function ReportsView({
             projection="requests"
             loading={byWarning.isLoading}
           />
+          <AggregateBarCard
+            title="Score by model"
+            data={byModel.data}
+            by="model"
+            projection="score"
+            loading={byModel.isLoading}
+          />
+          {hasPatchRows && (
+            <AggregateBarCard
+              title="By parameter set"
+              data={byPatch.data}
+              by="patch"
+              projection="score"
+              loading={byPatch.isLoading}
+            />
+          )}
         </div>
       </div>
     </div>

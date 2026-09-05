@@ -98,7 +98,8 @@ public static class ExportEndpoint
         string header =
             "id,started_at,session_id,backend,tags,method,path,format,model,status_code,error,streamed,replay_of," +
             "duration_ms,ttft_ms,vessel_overhead_ms,tok_per_sec,tokens_in,tokens_out,tokens_cached_read," +
-            "tokens_cached_write,tokens_estimated,stop_reason,warnings,truncated" +
+            "tokens_cached_write,tokens_estimated,stop_reason,warnings,truncated," +
+            "replay_group,replay_patch,score" +
             (bodies == ExportBodies.Text ? ",prompt_text,response_text" : "") + "\r\n";
         await context.Response.WriteAsync(header, context.RequestAborted);
 
@@ -171,6 +172,7 @@ public static class ExportEndpoint
             s.StopReason ?? "",
             JsonSerializer.Serialize(s.Warnings, CaptureJsonContext.Default.StringArray),
             s.Truncated ? "true" : "false",
+            s.ReplayGroup ?? "", s.ReplayPatch ?? "", Invariant(s.Score),
         ];
 
         IEnumerable<string> allFields = bodies == ExportBodies.Text

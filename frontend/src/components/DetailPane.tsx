@@ -12,7 +12,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { DecodeTruncatedNotice } from '@/components/DecodeTruncatedNotice'
 import { renderRequest, renderResponse } from '@/render'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { formatMs, formatTimestamp, formatTokPerSec, formatTokenCount } from '@/lib/format'
+import { formatMs, formatTimestamp, formatTokPerSec, formatTokenCount, relativeDate } from '@/lib/format'
 import { warningLabel, warningVariant } from '@/lib/warnings'
 import { tagVariant } from '@/lib/tags'
 import { cn } from '@/lib/utils'
@@ -38,7 +38,7 @@ function isErrorStopReason(reason: string | null): boolean {
  * a toggle back to the raw-JSON view — kept exactly as-is, on every tab, regardless of
  * format.
  */
-export function DetailPane({ id, onCompare }: { id: number | null; onCompare?: (originalId: number, replayId: number) => void }) {
+export function DetailPane({ id, onCompare }: { id: number | null; onCompare?: (originalId: number, replayIds: number[]) => void }) {
   const [tab, setTab] = useState<TabKey>('overview')
   const [responseView, setResponseView] = useState<'reassembled' | 'raw'>('reassembled')
   const [requestDisplay, setRequestDisplay] = useState<ViewMode>('rendered')
@@ -207,7 +207,48 @@ export function DetailPane({ id, onCompare }: { id: number | null; onCompare?: (
   )
 }
 
-function OverviewTab({ detail, isError, replays, onCompare }: { detail: import('@/api/types').RequestDetail; isError: boolean; replays: import('@/api/types').Summary[]; onCompare?: (originalId: number, replayId: number) => void }) {
+/**
+ * #48 — one entry per fan: a multi-replay opens as one grid, while single replays and
+ * pre-v4 rows (which carry no group) stay listed individually as they always were. The label
+ * names what varied and when, so two fans of the same original are told apart at a glance —
+ * all of it read off the summaries already loaded, nothing re-derived by diffing bodies.
+ */
+function replayFans(
+  replays: import('@/api/types').Summary[],
+  originalModel: string | null,
+): { key: string; ids: number[]; label: string }[] {
+  const fans = new Map<string, import('@/api/types').Summary[]>()
+  for (const replay of [...replays].sort((a, b) => a.id - b.id)) {
+    const key = replay.replayGroup ?? `single:${replay.id}`
+    fans.set(key, [...(fans.get(key) ?? []), replay])
+  }
+  return [...fans].map(([key, members]) => ({
+    key,
+    ids: members.map((member) => member.id),
+    // The count lives in the header, so a row only has to say what varied and when.
+    label: members.length === 1
+      ? `#${members[0].id} · single · ${relativeDate(members[0].startedAt)}`
+      : `${dimension(members, originalModel)} · ${members.length} · ${relativeDate(members[0].startedAt)}`,
+  }))
+}
+
+function dimension(members: import('@/api/types').Summary[], originalModel: string | null): string {
+  if (members.some((member) => member.replayPatch != null)) return 'params'
+  // Same model N times is a variance run, not a model comparison — say so rather than
+  // labelling it "models" and implying a difference that isn't there.
+  if (members.every((member) => member.model === originalModel)) return `×${members.length} same model`
+  return 'models'
+}
+
+function ReplaysHeader({ replays, fans }: { replays: import('@/api/types').Summary[]; fans: number }) {
+  return (
+    <div className="text-text-muted">
+      Replays · {fans} fan{fans === 1 ? '' : 's'}, {replays.length} replay{replays.length === 1 ? '' : 's'}
+    </div>
+  )
+}
+
+function OverviewTab({ detail, isError, replays, onCompare }: { detail: import('@/api/types').RequestDetail; isError: boolean; replays: import('@/api/types').Summary[]; onCompare?: (originalId: number, replayIds: number[]) => void }) {
   return (
     <div className="flex flex-col gap-4 text-sm">
       <div>
@@ -229,15 +270,25 @@ function OverviewTab({ detail, isError, replays, onCompare }: { detail: import('
 
       {detail.replayOf != null && (
         <div className="rounded-control bg-surface-2 p-2 text-sm">
-          Replay of <button type="button" className="font-mono text-accent hover:underline" onClick={() => onCompare?.(detail.replayOf!, detail.id)}>#{detail.replayOf}</button>
-          {onCompare && <button type="button" className="ml-2 text-accent hover:underline" onClick={() => onCompare(detail.replayOf!, detail.id)}>Compare</button>}
+          Replay of <button type="button" className="font-mono text-accent hover:underline" onClick={() => onCompare?.(detail.replayOf!, [detail.id])}>#{detail.replayOf}</button>
+          {onCompare && <button type="button" className="ml-2 text-accent hover:underline" onClick={() => onCompare(detail.replayOf!, [detail.id])}>Compare</button>}
         </div>
       )}
 
       {replays.length > 0 && (
-        <div className="rounded-control bg-surface-2 p-2 text-sm">
-          <span className="text-text-muted">Replays ({replays.length}): </span>
-          {replays.map((replay, index) => <span key={replay.id}>{index > 0 && ', '}<button type="button" className="font-mono text-accent hover:underline" onClick={() => onCompare?.(detail.id, replay.id)}>#{replay.id}</button></span>)}
+        // One row per fan, with the same anatomy as the "Replay of #N · Compare" block
+        // above: muted label left, accent action right — so the two blocks rhyme, and the
+        // three competing counts collapse into one header.
+        <div className="flex flex-col gap-1 rounded-control bg-surface-2 p-2 text-sm">
+          <ReplaysHeader replays={replays} fans={replayFans(replays, detail.model).length} />
+          {replayFans(replays, detail.model).map((fan) => (
+            <div key={fan.key} className="flex items-baseline justify-between gap-3">
+              <span className="font-mono text-xs text-text-muted">{fan.label}</span>
+              <button type="button" className="shrink-0 text-accent hover:underline" onClick={() => onCompare?.(detail.id, fan.ids)}>
+                Compare
+              </button>
+            </div>
+          ))}
         </div>
       )}
 

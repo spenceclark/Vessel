@@ -20,6 +20,7 @@ public static class AggregateEndpoint
             "tag" => AggregateDimension.Tag,
             "backend" => AggregateDimension.Backend,
             "format" => AggregateDimension.Format,
+            "patch" => AggregateDimension.Patch,
             "warning" => AggregateDimension.Warning,
             _ => null,
         };
@@ -27,7 +28,7 @@ public static class AggregateEndpoint
         {
             await VesselErrors.Write(
                 context, StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
-                "'by' must be model, tag, backend, format, or warning");
+                "'by' must be model, tag, backend, format, patch, or warning");
             return;
         }
 

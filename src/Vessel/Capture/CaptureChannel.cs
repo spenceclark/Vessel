@@ -97,6 +97,9 @@ public sealed class CaptureChannel
             case DeleteSessionCommand command:
                 command.Completion.TrySetException(new CaptureStoppedException(reason));
                 break;
+            case SetScoreCommand command:
+                command.Completion.TrySetException(new CaptureStoppedException(reason));
+                break;
         }
     }
 }

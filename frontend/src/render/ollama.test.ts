@@ -23,6 +23,9 @@ function detail(format: string, requestBody: BodyPayload | null, responseBody: B
     error: null,
     streamed: false,
     replayOf: null,
+    replayGroup: null,
+    replayPatch: null,
+    score: null,
     durationMs: 100,
     ttftMs: null,
     vesselOverheadMs: null,
@@ -107,6 +110,22 @@ describe('extractOllamaResponse — ollama-generate', () => {
           { kind: 'markdown', text: 'four' },
         ],
       },
+    ])
+  })
+
+  it('renders nanosecond durations as readable times and leaves counts alone', () => {
+    const view = extractOllamaResponse(detail('ollama-generate', null, body(JSON.stringify({
+      response: 'four',
+      done_reason: 'stop',
+      total_duration: 53905793100,
+      load_duration: 5504624,
+      eval_count: 112,
+    }))))
+    expect(view?.params).toEqual([
+      { k: 'done_reason', v: 'stop' },
+      { k: 'total_duration', v: '53.91s' },
+      { k: 'load_duration', v: '6ms' },
+      { k: 'eval_count', v: '112' },
     ])
   })
 })

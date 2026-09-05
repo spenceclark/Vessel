@@ -1,4 +1,4 @@
-import type { AggregateDimensionName, AggregateResponse, AggregateRow } from '@/api/types'
+import { MAX_SCORE, type AggregateDimensionName, type AggregateResponse, type AggregateRow } from '@/api/types'
 import { CHART_RAMP } from '@/lib/chartColors'
 import { formatCompactTokenCount, formatMs, formatTokPerSec } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -6,7 +6,7 @@ import { BarChart } from '@/components/ui/chart/BarChart'
 import { ChartLegend } from '@/components/ui/chart/ChartLegend'
 
 /** D12 — what a card projects out of one aggregate fetch. */
-export type AggregateProjection = 'tokens' | 'requests' | 'rate' | 'cache' | 'duration'
+export type AggregateProjection = 'tokens' | 'requests' | 'rate' | 'cache' | 'duration' | 'score'
 
 /**
  * A 180px card only reads cleanly with a handful of bars — independent of the API's own
@@ -29,6 +29,10 @@ interface Projection {
   values: (rows: AggregateResponse['rows']) => (number | null)[][]
   formatValue: (rows: AggregateResponse['rows']) => (v: number) => string
   legend: boolean
+  /** #49 — a fixed axis maximum, for a measure whose scale is meaningful (a 1-5 score). */
+  domainMax?: number
+  /** #49 — a per-bar suffix beyond the value itself (mean · n · win rate). */
+  label?: (row: AggregateRow) => string
   /**
    * #26 live-use feedback (round 2) — a single-group scope's stat panel: the group's own
    * numbers, laid out as tiles (never plain prose — see `AggregateBarCard`'s degenerate
@@ -117,6 +121,27 @@ const PROJECTIONS: Record<AggregateProjection, Projection> = {
       ]
     },
   },
+  // #49 — the leaderboard: mean human score on a *fixed* 0-5 axis, because auto-scaling
+  // 3.9 against 4.1 to fill the card is a lie about how different they are. Unscored groups
+  // are dropped rather than drawn as zero (see `scoreRows` below).
+  score: {
+    measures: [{ name: 'mean score', colorVar: CHART_RAMP[0]! }],
+    mode: 'grouped',
+    values: (rows) => rows.map((row) => [row.meanScore]),
+    formatValue: () => (v) => v.toFixed(1),
+    legend: false,
+    domainMax: MAX_SCORE,
+    label: (row) => {
+      const mean = row.meanScore == null ? '—' : row.meanScore.toFixed(1)
+      const wins = row.wins != null && row.groups ? ` · top ${row.wins}/${row.groups}` : ''
+      return `${mean} · n=${row.scored}${wins}`
+    },
+    statFields: (row) => [
+      { label: 'Mean score', value: row.meanScore == null ? '—' : `${row.meanScore.toFixed(1)}/${MAX_SCORE}` },
+      { label: 'Scored', value: row.scored.toLocaleString('en-US') },
+      ...(row.wins != null && row.groups ? [{ label: 'Fan wins', value: `${row.wins}/${row.groups}` }] : []),
+    ],
+  },
   // #26 live-use feedback — "averages hide the tail latencies that make an agent feel
   // slow"; nearest-rank p50/p95 computed server-side (Summary.cs `AggregateRow`), never
   // client-derived from an average.
@@ -185,10 +210,17 @@ export function AggregateBarCard({
   loading: boolean
 }) {
   const spec = PROJECTIONS[projection]
-  const displayRows = data ? data.rows.slice(0, DISPLAY_ROWS) : []
+  // #49 — a leaderboard ranks by the score, and a group nobody scored is not a last place;
+  // it is absent. Every other projection keeps the API's own tokens-desc order.
+  const ranked = data
+    ? projection === 'score'
+      ? data.rows.filter((row) => row.scored > 0).sort((a, b) => (b.meanScore ?? 0) - (a.meanScore ?? 0))
+      : data.rows
+    : []
+  const displayRows = ranked.slice(0, DISPLAY_ROWS)
   const hasRows = displayRows.length > 0
-  const capNote = data && displayRows.length < data.totalGroups
-    ? `Top ${displayRows.length} of ${data.totalGroups.toLocaleString('en-US')} by ${RANKED_BY}.`
+  const capNote = data && displayRows.length < ranked.length
+    ? `Top ${displayRows.length} of ${ranked.length.toLocaleString('en-US')} by ${projection === 'score' ? 'mean score' : RANKED_BY}.`
     : null
   const fanOutNote = FAN_OUT_NOTE[by]
 
@@ -199,12 +231,17 @@ export function AggregateBarCard({
         <div className="flex h-[180px] items-center justify-center text-sm text-text-muted" aria-live="polite">
           {loading ? '…' : '—'}
         </div>
-      ) : data.totalGroups === 1 ? (
-        <StatPanel groupKey={data.rows[0]!.key} fields={spec.statFields(data.rows[0]!, spec.formatValue(displayRows))} />
+      ) : projection === 'score' && displayRows.length === 0 ? (
+        <p className="flex h-[180px] items-center justify-center text-sm text-text-muted">
+          Score some compares to see a leaderboard.
+        </p>
+      ) : ranked.length === 1 ? (
+        <StatPanel groupKey={ranked[0]!.key} fields={spec.statFields(ranked[0]!, spec.formatValue(displayRows))} />
       ) : (
         <>
           <BarChart
-            rows={displayRows.map((row) => ({ key: row.key }))}
+            rows={displayRows.map((row) => ({ key: row.key, note: spec.label?.(row) }))}
+            domainMax={spec.domainMax}
             values={spec.values(displayRows)}
             measures={spec.measures}
             mode={spec.mode}

@@ -35,13 +35,14 @@ public static class VesselErrors
     public const string ForbiddenOrigin = "forbidden_origin";
 
     public static Task Write(
-        HttpContext context, int statusCode, string code, string message, string[]? backends = null)
+        HttpContext context, int statusCode, string code, string message, string[]? backends = null,
+        int? variation = null)
     {
         context.Response.StatusCode = statusCode;
         context.Response.ContentType = "application/json; charset=utf-8";
         context.Response.Headers[Header] = code;
 
-        var payload = new ErrorPayload(new ErrorBody("vessel", code, message, backends));
+        var payload = new ErrorPayload(new ErrorBody("vessel", code, message, backends, variation));
         return JsonSerializer.SerializeAsync(
             context.Response.Body, payload, ApiJsonContext.Default.ErrorPayload, context.RequestAborted);
     }
@@ -53,7 +54,9 @@ public sealed record ErrorBody(
     string Source,
     string Code,
     string Message,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string[]? Backends);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string[]? Backends,
+    /// <summary>#48 — the index of the fan variation that failed validation, when the failure is one variation's.</summary>
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Variation = null);
 
 public sealed record StatusPayload(
     string Name,
@@ -74,7 +77,13 @@ public sealed record StatusBackend(
     string Type,
     bool Default,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? AuthEnv,
-    BackendHealth Health);
+    BackendHealth Health,
+    /// <summary>
+    /// #48 — whether replaying to this backend spends a key, so the fan-out dialog can say
+    /// how many of N requests are paid calls. Computed by <see cref="ReplayEndpoint.RequiresAuth"/>,
+    /// the same rule replay itself applies — never mirrored by hand in the client.
+    /// </summary>
+    bool RequiresAuth = false);
 
 /// <summary>
 /// R06 — whether the background writer is still recording. A give-up used to be visible

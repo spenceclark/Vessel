@@ -146,7 +146,9 @@ public sealed class StubBackend : IAsyncDisposable
                 context.Request.Headers.ContainsKey("Authorization"),
                 context.Request.Headers.ContainsKey("x-api-key"),
                 context.Request.Headers["anthropic-version"].FirstOrDefault(),
-                context.Request.Headers.ContainsKey("X-Stale-Header"));
+                context.Request.Headers.ContainsKey("X-Stale-Header"),
+                context.Request.Headers.ContainsKey("X-Vessel-Replay-Group"),
+                context.Request.Headers.ContainsKey("X-Vessel-Replay-Patch"));
             context.Response.ContentType = "application/json";
             await JsonSerializer.SerializeAsync(context.Response.Body, payload);
         };
@@ -288,4 +290,7 @@ public sealed record ReflectPayload(
     bool HasAuthorization = false,
     bool HasAnthropicApiKey = false,
     string? AnthropicVersion = null,
-    bool HasStaleHeader = false);
+    bool HasStaleHeader = false,
+    // #48 — the fan headers are Vessel's own control plane and must never reach a backend.
+    bool HasReplayGroup = false,
+    bool HasReplayPatch = false);

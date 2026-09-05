@@ -28,6 +28,12 @@ export interface Summary {
   stopReason: string | null
   warnings: string[]
   truncated: boolean
+  /** #48 — the multi-replay fan this row belongs to; null on originals and pre-v4 replays. */
+  replayGroup: string | null
+  /** #48 — compact JSON of the merge patch this child was composed with. */
+  replayPatch: string | null
+  /** #49 — the human score, 1-5; null is unrated. */
+  score: number | null
 }
 
 export interface RequestListResponse {
@@ -43,6 +49,24 @@ export interface BodyPayload {
 }
 
 export type HeaderMap = Record<string, string[]>
+
+/**
+ * #48 — one variation of a replay fan. `params` is an RFC 7396 merge patch applied to the
+ * decoded original body, so a sampler nested under Ollama's `options` merges instead of
+ * clobbering its siblings. The one-axis guard (models OR params, never the cross-product)
+ * lives in the dialog, not the API.
+ */
+export interface ReplayVariation {
+  backend?: string
+  model?: string
+  params?: Record<string, unknown>
+}
+
+/** The single-replay shape stays accepted; the server treats it as a fan of one. */
+export type ReplayPayload = { backend?: string; model?: string } | { variations: ReplayVariation[] }
+
+/** #48 — a fan is capped server-side; the dialog enforces the same number. */
+export const MAX_REPLAY_VARIATIONS = 8
 
 export interface RequestDetail extends Summary {
   requestHeaders: HeaderMap | null
@@ -83,6 +107,8 @@ export interface StatusBackend {
   default: boolean
   authEnv?: string
   health: BackendHealth
+  /** #48 — replaying here reattaches a key, i.e. a fan aimed at it makes paid calls. */
+  requiresAuth: boolean
 }
 
 export interface BackendHealth {
@@ -191,7 +217,11 @@ export type SeriesMetricName = 'tokens_in' | 'tokens_out' | 'tokens_total'
 
 export type SeriesGroupByName = 'none' | 'tag' | 'model' | 'backend'
 
-export type AggregateDimensionName = 'model' | 'tag' | 'backend' | 'format' | 'warning'
+export type AggregateDimensionName = 'model' | 'tag' | 'backend' | 'format' | 'patch' | 'warning'
+
+/** #49 — a score is 1-5, or null to clear. */
+export const MIN_SCORE = 1
+export const MAX_SCORE = 5
 
 /** D1 — one chart point: the request's id (so a click can select it), ISO started_at, value. */
 export interface SeriesPoint {
@@ -236,6 +266,15 @@ export interface AggregateRow {
   /** #26 live-use feedback — nearest-rank percentiles over the group's non-null durations. */
   p50DurationMs: number | null
   p95DurationMs: number | null
+  /** #49 — mean of the group's scores and how many rows carry one. */
+  meanScore: number | null
+  scored: number
+  /**
+   * #49 — replay-group wins out of the groups this key has a scored member in. Null for
+   * dimensions where a fan comparison is meaningless (only model and patch have one).
+   */
+  wins: number | null
+  groups: number | null
 }
 
 export interface AggregateResponse {
@@ -302,6 +341,7 @@ export interface ActiveDescriptor {
   backend: string
   tags: string[]
   replayOf: number | null
+  replayGroup: string | null
   model: string | null
   ttftMs: number | null
 }
@@ -349,6 +389,7 @@ export interface StartedEvent {
   backend: string
   tags: string[]
   replayOf: number | null
+  replayGroup: string | null
 }
 
 export interface RequestReadyEvent {

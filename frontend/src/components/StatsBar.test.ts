@@ -57,6 +57,7 @@ function status(setup: StatusPayload['setup'], health: 'green' | 'red' | 'unknow
         type: 'ollama',
         default: true,
         health: { state: health, lastSeenAt: null },
+        requiresAuth: false,
       },
     ],
     capture: { recording: true },

@@ -27,10 +27,11 @@ export function BarChart({
   height,
   label,
   formatValue,
+  domainMax,
   emptyText = 'No requests in scope.',
 }: {
-  /** Rank-ordered top-first, exactly as they display. */
-  rows: { key: string | null }[]
+  /** Rank-ordered top-first, exactly as they display; `note` annotates the bar's end. */
+  rows: { key: string | null; note?: string }[]
   /** rows × measures; null = no measured value (no bar, "—" in the table). */
   values: (number | null)[][]
   measures: BarMeasure[]
@@ -38,6 +39,12 @@ export function BarChart({
   height: ChartHeight
   label: string
   formatValue: (v: number) => string
+  /**
+   * #49 — a fixed axis maximum for a measure with a meaningful scale (a 1-5 score).
+   * Auto-scaling those would stretch 3.9 against 4.1 across the whole card, which reads as
+   * a large difference when it is not.
+   */
+  domainMax?: number
   emptyText?: string
 }) {
   const [containerRef, containerSize] = useChartSize()
@@ -63,9 +70,9 @@ export function BarChart({
     // interpolation, mapping every bar to NaN width instead of zero-length.
     const rawMax = mode === 'grouped' ? maxGrouped : maxStacked
     const x = scaleLinear()
-      .domain([0, rawMax > 0 ? rawMax : 1])
+      .domain([0, domainMax ?? (rawMax > 0 ? rawMax : 1)])
       .range([0, plot.width])
-      .nice()
+    if (domainMax === undefined) x.nice()
     // §8.6/§2.3 — the value axis routes through the card's own formatValue so tick labels
     // agree with the bars' own tooltips/table (e.g. "8.1M", not d3's raw "8,000,000").
     return {
@@ -76,16 +83,18 @@ export function BarChart({
       })),
       xScale: x,
     }
-  }, [rows, values, mode, plot.width, plot.height, formatValue])
+  }, [rows, values, mode, plot.width, plot.height, formatValue, domainMax])
 
+  const hasNotes = rows.some((row) => row.note)
   const table: ChartTable = {
-    columns: ['Key', ...measures.map((measure) => measure.name)],
+    columns: ['Key', ...measures.map((measure) => measure.name), ...(hasNotes ? ['detail'] : [])],
     rows: rows.map((row, index) => [
       row.key ?? '(none)',
       ...measures.map((_, measureIndex) => {
         const value = values[index]![measureIndex]
         return value === null ? null : formatValue(value)
       }),
+      ...(hasNotes ? [row.note ?? null] : []),
     ]),
   }
 
@@ -160,6 +169,16 @@ export function BarChart({
                             )
                           })
                         })()}
+                    {row.note && (
+                      <text
+                        x={Math.min(plotSize.width - 2, xScale(Math.max(...rowValues.map((v) => v ?? 0))) + 6)}
+                        y={y + rowHeight / 2}
+                        dy="0.32em"
+                        className="fill-chart-axis text-xs"
+                      >
+                        {row.note}
+                      </text>
+                    )}
                   </g>
                 )
               })}
