@@ -8,27 +8,8 @@
 
 ## Quickstart
 
-1. Install `vessel`, then run it. A first run creates the config and opens `http://127.0.0.1:4550/vessel/`.
+1. Download the archive for your OS from [Releases](https://github.com/spenceclark/Vessel/releases), extract it, and run `vessel` (or `vessel.exe`). A first run creates the config and opens `http://127.0.0.1:4550/vessel/`.
    The default backend is Ollama on `localhost:11434`; if nothing is listening there, that first run opens on the backend picker so you can add OpenAI, Claude, or another backend straight away.
-
-   ```bash
-   # macOS / Linux — Homebrew
-   brew tap spenceclark/tap && brew install vessel
-
-   # Windows — winget
-   winget install spenceclark.Vessel
-
-   # Windows — Scoop
-   scoop bucket add spenceclark https://github.com/spenceclark/scoop-bucket
-   scoop install vessel
-
-   # Arch Linux — any AUR helper
-   yay -S vessel-bin
-   ```
-
-   No package manager? Download the archive for your OS from
-   [Releases](https://github.com/spenceclark/Vessel/releases), extract it, and run
-   `vessel` (or `vessel.exe`) directly.
 2. Point a client at Vessel. Your first request appearing in the UI means it worked.
 
 ```bash
@@ -46,9 +27,8 @@ Vessel is a **foreground process**: its terminal is Vessel, so closing the termi
 stops capture. For always-on use, use your OS’s normal mechanism (Task Scheduler,
 systemd, or launchd).
 
-Unsigned first-run note (manual download only — `brew install` isn't affected, since
-Homebrew strips the quarantine attribute itself): macOS 15+ (Sequoia) removed
-right-click → Open as a Gatekeeper bypass, so first unblock the binary from Terminal:
+Unsigned first-run note: macOS 15+ (Sequoia) removed right-click → Open as a Gatekeeper
+bypass, so first unblock the binary from Terminal:
 
 ```
 xattr -d com.apple.quarantine ./vessel
@@ -60,9 +40,8 @@ Privacy & Security** and click **Open Anyway**, then run it again and click **Op
 Apple Silicon, if you still see `Killed: 9` after un-quarantining, ad-hoc-sign the binary
 with `codesign -s - --force ./vessel`.
 
-Windows may show SmartScreen, where **More info** then **Run anyway** is needed —
-this is the same unsigned binary regardless of install method (manual download,
-winget, or Scoop). Signing/notarization is intentionally deferred.
+Windows may show SmartScreen, where **More info** then **Run anyway** is needed.
+Signing/notarization is intentionally deferred.
 
 ## Features
 
