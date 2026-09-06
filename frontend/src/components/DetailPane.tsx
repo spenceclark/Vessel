@@ -13,7 +13,7 @@ import { DecodeTruncatedNotice } from '@/components/DecodeTruncatedNotice'
 import { renderRequest, renderResponse } from '@/render'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatMs, formatTimestamp, formatTokPerSec, formatTokenCount, relativeDate } from '@/lib/format'
-import { warningLabel, warningVariant } from '@/lib/warnings'
+import { warningHint, warningLabel, warningVariant } from '@/lib/warnings'
 import { tagVariant } from '@/lib/tags'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -259,12 +259,18 @@ function OverviewTab({ detail, isError, replays, onCompare }: { detail: import('
       </div>
 
       {detail.warnings.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {detail.warnings.map((w) => (
-            <Badge key={w} variant={warningVariant(w, isError)}>
-              {warningLabel(w)}
-            </Badge>
-          ))}
+        <div>
+          {detail.warnings.flatMap((w) => {
+            const hint = warningHint(w)
+            return hint ? [<p key={w} className="mb-1.5 text-xs text-text-muted">{hint}</p>] : []
+          })}
+          <div className="flex flex-wrap gap-1.5">
+            {detail.warnings.map((w) => (
+              <Badge key={w} variant={warningVariant(w, isError)}>
+                {warningLabel(w)}
+              </Badge>
+            ))}
+          </div>
         </div>
       )}
 

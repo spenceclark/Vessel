@@ -12,10 +12,21 @@ const WARNING_LABELS: Record<string, string> = {
   slow_ttft: 'Slow TTFT',
   usage_injected: 'Usage injected',
   tool_call_in_text: 'Tool call in text',
+  path_missing_v1: 'Missing /v1 in base_url',
 }
 
 export function warningLabel(code: string): string {
   return WARNING_LABELS[code] ?? code
+}
+
+// One-line explanations shown above the badge in the detail Overview (issue #57) — most
+// warning codes are self-explanatory from the label alone, so this stays sparse.
+const WARNING_HINTS: Record<string, string> = {
+  path_missing_v1: "OpenAI-compatible backends expect /v1 in the client's base_url.",
+}
+
+export function warningHint(code: string): string | undefined {
+  return WARNING_HINTS[code]
 }
 
 // ui-spec.md §6 — info-class codes render info-colored regardless of the row's error
