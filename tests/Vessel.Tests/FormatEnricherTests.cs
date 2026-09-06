@@ -225,4 +225,74 @@ public class FormatEnricherTests
 
         Assert.DoesNotContain(Warnings.ToolCallInText, Warns(enriched));
     }
+
+    // Issue #57: type: openai + 404 + a path missing /v1 is the classic base_url mistake.
+    [Fact]
+    public void OpenAiBackend_404_PathMissingV1_IsWarned()
+    {
+        var config = new VesselConfig();
+        config.Backends["test"] = new BackendConfig { Type = "openai" };
+        var enricher = new FormatEnricher(config, FormatEnricher.DefaultAdapters());
+
+        CaptureRecord record = Record("/chat/completions", """{"model":"m"}""", null) with { StatusCode = 404 };
+        EnrichedRecord enriched = enricher.Enrich(record);
+
+        Assert.Contains(Warnings.PathMissingV1, Warns(enriched));
+    }
+
+    [Fact]
+    public void OpenAiBackend_404_PathHasV1_IsNotWarned()
+    {
+        var config = new VesselConfig();
+        config.Backends["test"] = new BackendConfig { Type = "openai" };
+        var enricher = new FormatEnricher(config, FormatEnricher.DefaultAdapters());
+
+        CaptureRecord record = Record("/v1/chat/completions", """{"model":"m"}""", null) with { StatusCode = 404 };
+        EnrichedRecord enriched = enricher.Enrich(record);
+
+        Assert.DoesNotContain(Warnings.PathMissingV1, Warns(enriched));
+    }
+
+    [Fact]
+    public void OpenAiBackend_NonNotFoundStatus_IsNotWarned()
+    {
+        var config = new VesselConfig();
+        config.Backends["test"] = new BackendConfig { Type = "openai" };
+        var enricher = new FormatEnricher(config, FormatEnricher.DefaultAdapters());
+
+        CaptureRecord record = Record("/chat/completions", """{"model":"m"}""", null) with { StatusCode = 500 };
+        EnrichedRecord enriched = enricher.Enrich(record);
+
+        Assert.DoesNotContain(Warnings.PathMissingV1, Warns(enriched));
+    }
+
+    // "auto" (the default) only counts once detection actually resolved an OpenAI shape.
+    [Fact]
+    public void AutoBackend_ResolvedOpenAiShaped_404_PathMissingV1_IsWarned()
+    {
+        var config = new VesselConfig();
+        config.Backends["test"] = new BackendConfig();
+        var enricher = new FormatEnricher(config, FormatEnricher.DefaultAdapters());
+
+        CaptureRecord record = Record("/chat/completions", """{"model":"m"}""", null) with { StatusCode = 404 };
+        EnrichedRecord enriched = enricher.Enrich(record);
+
+        Assert.Equal(FormatNames.OpenAiChat, enriched.Format);
+        Assert.Contains(Warnings.PathMissingV1, Warns(enriched));
+    }
+
+    // Ollama's OpenAI-compatible surface has the same base_url mistake shape, but it's a
+    // different backend type and out of this issue's scope (see #57's "Not doing").
+    [Fact]
+    public void OllamaBackend_404_PathMissingV1_IsNotWarned()
+    {
+        var config = new VesselConfig();
+        config.Backends["test"] = new BackendConfig { Type = "ollama" };
+        var enricher = new FormatEnricher(config, FormatEnricher.DefaultAdapters());
+
+        CaptureRecord record = Record("/chat/completions", """{"model":"m"}""", null) with { StatusCode = 404 };
+        EnrichedRecord enriched = enricher.Enrich(record);
+
+        Assert.DoesNotContain(Warnings.PathMissingV1, Warns(enriched));
+    }
 }

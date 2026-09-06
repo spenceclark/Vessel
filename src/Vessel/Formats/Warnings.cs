@@ -49,6 +49,14 @@ public static class Warnings
     public const string ToolCallInText = "tool_call_in_text";
 
     /// <summary>
+    /// A 404 to an OpenAI-shaped backend whose forwarded path doesn't start with
+    /// <c>/v1/</c> — the classic base_url mistake (the OpenAI SDK appends a fixed suffix
+    /// like <c>/chat/completions</c> to whatever base_url it's given, and the client-side
+    /// error names it as "model not found" instead).
+    /// </summary>
+    public const string PathMissingV1 = "path_missing_v1";
+
+    /// <summary>
     /// Canonical ordering used when serializing a row's warnings, so the stored array is
     /// deterministic regardless of the order producers discovered the codes.
     /// </summary>
@@ -56,7 +64,7 @@ public static class Warnings
     [
         TruncatedResponse, HttpError, ProxyError, ClientDisconnect, TokensEstimated,
         StreamIncomplete, ParseError, BodyTruncated, ColdLoad, SlowTtft, UsageInjected,
-        ToolCallInText,
+        ToolCallInText, PathMissingV1,
     ];
 
     /// <summary>Deduplicates and orders codes into the canonical sequence for storage.</summary>

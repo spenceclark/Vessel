@@ -192,7 +192,7 @@ public sealed class FormatEnricher
         }
 
         string? warningsJson = SerializeWarnings(
-            BuildWarnings(record, result.Warnings, result.StopReason, estimated, decodeTruncated));
+            BuildWarnings(record, result.Warnings, format, result.StopReason, estimated, decodeTruncated));
 
         return new EnrichedRecord(
             record, format, result.Model, tokPerSec,
@@ -240,7 +240,7 @@ public sealed class FormatEnricher
 
     private EnrichedRecord Raw(CaptureRecord record, bool parseError, bool decodeTruncated = false)
     {
-        var warnings = BuildWarnings(record, [], stopReason: null, estimated: false, decodeTruncated);
+        var warnings = BuildWarnings(record, [], FormatNames.Raw, stopReason: null, estimated: false, decodeTruncated);
         if (parseError)
         {
             warnings.Add(Warnings.ParseError);
@@ -254,7 +254,7 @@ public sealed class FormatEnricher
     }
 
     private List<string> BuildWarnings(
-        CaptureRecord record, IReadOnlyList<string> adapterWarnings, string? stopReason, bool estimated,
+        CaptureRecord record, IReadOnlyList<string> adapterWarnings, string format, string? stopReason, bool estimated,
         bool decodeTruncated = false)
     {
         var warnings = new List<string>(adapterWarnings);
@@ -284,6 +284,14 @@ public sealed class FormatEnricher
             warnings.Add(Warnings.HttpError);
         }
 
+        // Issue #57: the classic base_url mistake — the OpenAI SDK appends a fixed suffix
+        // like /chat/completions to whatever base_url it's given, and OpenAI (and Ollama's
+        // OpenAI-compatible surface) serve it under /v1/. Path/status only, no body read.
+        if (record.StatusCode == 404 && IsOpenAiPathMissingV1(record, format))
+        {
+            warnings.Add(Warnings.PathMissingV1);
+        }
+
         // R05: a decoded body cut off at the budget is "the body was cut off" to the user,
         // exactly like a wire capture that hit maxBodyMb — same warning, one concept.
         if (record.Truncated || decodeTruncated)
@@ -302,6 +310,20 @@ public sealed class FormatEnricher
         }
 
         return warnings;
+    }
+
+    /// <summary>
+    /// Issue #57 scope: backend type says "openai" outright, or "auto" resolved to an
+    /// OpenAI-shaped format — and the forwarded path doesn't start with /v1/.
+    /// </summary>
+    private bool IsOpenAiPathMissingV1(CaptureRecord record, string format)
+    {
+        string? backendType = _backendTypes.GetValueOrDefault(record.Backend);
+        bool openAiShaped = format is FormatNames.OpenAiChat or FormatNames.OpenAiResponses;
+        bool isOpenAiBackend = string.Equals(backendType, "openai", StringComparison.OrdinalIgnoreCase)
+            || (openAiShaped && string.Equals(backendType, "auto", StringComparison.OrdinalIgnoreCase));
+
+        return isOpenAiBackend && !record.Path.StartsWith("/v1/", StringComparison.Ordinal);
     }
 
     private static string? SerializeWarnings(IEnumerable<string> warnings)
