@@ -19,8 +19,7 @@ Named sessions, multi-replay with scoring, reports, export, and package-manager 
 - Export the current filtered request list to CSV or JSONL (#24).
 - Replay dialect fix-ups: `max_tokens` ↔ `max_completion_tokens` is renamed automatically
   for OpenAI Chat replays and shown as `(auto)` in Compare's parameter diff (#28).
-- Package-manager installs: Homebrew (macOS and Linux), Scoop, AUR, and winget
-  (#31, #32, #50).
+- Package-manager installs: Homebrew (macOS and Linux) and Scoop (#31, #32).
 - Tool calls a model emits as plain text instead of structured output are detected and
   flagged (#40).
 - A hint on 404s from OpenAI-compatible backends when the client's `base_url` is missing
