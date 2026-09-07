@@ -8,7 +8,19 @@
 
 ## Quickstart
 
-1. Download the archive for your OS from [Releases](https://github.com/spenceclark/Vessel/releases), extract it, and run `vessel` (or `vessel.exe`). A first run creates the config and opens `http://127.0.0.1:4550/vessel/`.
+1. Install and run `vessel`:
+
+   ```bash
+   # macOS (Apple Silicon) and Linux — Homebrew 6 requires trusting a third-party tap first
+   brew trust spenceclark/tap
+   brew install spenceclark/tap/vessel
+
+   # Windows
+   scoop bucket add spenceclark https://github.com/spenceclark/scoop-bucket
+   scoop install vessel
+   ```
+
+   Or download the archive for your OS from [Releases](https://github.com/spenceclark/Vessel/releases), extract it, and run `vessel` (or `vessel.exe`). A first run creates the config and opens `http://127.0.0.1:4550/vessel/` (`--no-open` skips the browser).
    The default backend is Ollama on `localhost:11434`; if nothing is listening there, that first run opens on the backend picker so you can add OpenAI, Claude, or another backend straight away.
 2. Point a client at Vessel. Your first request appearing in the UI means it worked.
 
@@ -27,8 +39,9 @@ Vessel is a **foreground process**: its terminal is Vessel, so closing the termi
 stops capture. For always-on use, use your OS’s normal mechanism (Task Scheduler,
 systemd, or launchd).
 
-Unsigned first-run note: macOS 15+ (Sequoia) removed right-click → Open as a Gatekeeper
-bypass, so first unblock the binary from Terminal:
+Homebrew and Scoop installs skip the prompts below. If you run the downloaded archive
+instead: macOS 15+ (Sequoia) removed right-click → Open as a Gatekeeper bypass, so first
+unblock the binary from Terminal:
 
 ```
 xattr -d com.apple.quarantine ./vessel
@@ -46,9 +59,13 @@ Signing/notarization is intentionally deferred.
 ## Features
 
 - Captures and searches OpenAI Chat/Responses, Anthropic Messages, Ollama, and unknown
-  traffic; live history, sessions/tags, filters, health, warnings, and themes.
-- Replay and Compare direct replay pairs. Same wire format only in v0.1: OpenAI-compatible
-  backends compare broadly; cross-provider transformations are deliberately not performed.
+  traffic; live history, sessions and tags, filters, backend health, warnings, and
+  light/dark themes.
+- Replay any captured request against another backend or model — or fan it out across
+  several models or parameter values — and compare every response and its metrics beside
+  the original. Score responses 1–5; Reports ranks models and parameter sets by score.
+- Reports: tokens, requests, tok/s, duration, cache efficiency, and warnings by model, tag,
+  or backend, plus context growth over a session. Export any filtered list to CSV or JSONL.
 - Copy as curl and a read-only MCP endpoint (`/vessel/mcp`) for searches, request detail,
   stats, and sessions from your own AI tools.
 
@@ -171,7 +188,8 @@ To run Ollama in the same compose stack, uncomment the commented service in
 selects portable mode; a fresh download creates one under `%LOCALAPPDATA%\vessel-proxy`
 (Windows), `~/.config/vessel-proxy` (Linux/XDG), or
 `~/Library/Application Support/vessel-proxy` (macOS). `vessel.db` lives alongside it.
-`vessel --help` prints the resolved paths.
+`vessel --help` prints the resolved paths; `--version` prints the build; `--no-open` skips
+the first-run browser.
 
 <!-- config-fields: backends.authEnv backends.baseUrl backends.injectStreamUsage backends.type capture.maxBodyMb defaultBackend listen mcp.enabled retention.maxDbSizeMb retention.maxRequests timeouts.activitySeconds warnings.slowTtftMs -->
 
@@ -186,7 +204,7 @@ selects portable mode; a fresh download creates one under `%LOCALAPPDATA%\vessel
 | `timeouts.activitySeconds` | Maximum no-byte-movement interval (default `1800`). |
 | `retention.maxRequests` / `retention.maxDbSizeMb` | Local history caps (defaults `10000` / `500`). |
 | `capture.maxBodyMb` | Per-body capture cap (default `32`); forwarding is never truncated. |
-| `warnings.slowTtftMs` | Slow-TTFT threshold; `0` disables it. |
+| `warnings.slowTtftMs` | Slow-TTFT threshold in ms (default `5000`); `0` disables it. |
 | `mcp.enabled` | Enables the read-only MCP endpoint (default `true`). |
 
 Example:
@@ -202,11 +220,61 @@ Example:
 }
 ```
 
-## Replay auth
+## Replay and Compare
+
+Open any captured request and choose **Replay** to send it again — to the same backend,
+a different one, or a different model. Replay stays within one wire format: any
+OpenAI-compatible backend can stand in for another, but Ollama-native ⇄ Anthropic is not
+translated. The one rename that would otherwise make replays fail is applied for you —
+`max_tokens` ↔ `max_completion_tokens` for OpenAI Chat — and shown as `(auto)` in the
+parameter diff.
+
+A replay can fan out: up to 8 variations in one go, either several models or one
+parameter swept across several values (temperature `0.2, 0.7, 1.0`). Members run one after
+another so timings aren’t polluted by contention, and the dialog says how many requests it
+will send — and how many go to keyed backends — before anything goes out. Compare shows
+each response beside the original with metric deltas and the parameters that differed.
+
+Score any response 1–5 from Compare (keys `1`–`5`; `←`/`→` move between columns, `0`
+clears). Reports ranks models and parameter sets by mean score and how often each came
+top. In the request list, `↑`/`↓` move the selection.
+
+Replays carry the original’s tags, land in the current session, and link back to the
+original. Their `X-Vessel-Replay-*` headers are stripped before forwarding like every
+other `X-Vessel-*` header.
+
+### Replay auth
 
 Vessel never stores keys. Replay reads the credential from the environment of the Vessel
 process: `OPENAI_API_KEY` for OpenAI, `ANTHROPIC_API_KEY` for Anthropic, or the backend’s
 `authEnv` name for another compatible backend.
+
+## Reports and export
+
+**Reports** charts the current scope — session, tags, dates — as tokens, requests, tok/s,
+and duration by model, tag, or backend; cache efficiency; warnings by type; context growth
+across a session; and the score leaderboards. **Export**, in the filter bar, writes exactly
+the filtered list (the row count is shown first) to CSV, or to JSONL with bodies included
+if you want them.
+
+## Warnings
+
+Rows carry a warning count; the Overview tab names each one.
+
+| Warning | Meaning |
+| --- | --- |
+| `cold_load` | Ollama loaded the model for this request — a slow duration, not slow generation. |
+| `slow_ttft` | Time to first token exceeded `warnings.slowTtftMs`, and no cold load explains it. |
+| `truncated_response` | The response was cut short by the output limit (`length` / `max_tokens`). |
+| `tokens_estimated` | The backend reported no usage; counts are estimated (chars ÷ 4). |
+| `usage_injected` | Vessel added `stream_options.include_usage` (the opt-in `injectStreamUsage`). |
+| `tool_call_in_text` | The request declared tools, but the model wrote a tool call as plain text instead of a structured call. Detection only — nothing is rewritten. |
+| `path_missing_v1` | 404 from an OpenAI-compatible backend on a path without `/v1/` — put `/v1` in the client’s `base_url`. |
+| `stream_incomplete` | A streamed response never reached its terminal marker. |
+| `client_disconnect` | The client went away before the exchange completed. |
+| `body_truncated` | The stored body hit `capture.maxBodyMb`; forwarding was not truncated. |
+| `http_error` / `proxy_error` | Non-2xx from the backend / Vessel could not reach it. |
+| `parse_error` | Format detection or parsing failed; the row was kept as `raw` with bytes intact. |
 
 ## Privacy and data
 
