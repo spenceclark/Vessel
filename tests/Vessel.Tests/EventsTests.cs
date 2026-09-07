@@ -892,4 +892,23 @@ public class EventsTests
         List<(string Event, string Data)> moreEvents = await active.ReadEventsAsync(1, cts.Token);
         Assert.NotEmpty(moreEvents);
     }
+
+    // #61 — with a UI tab's SSE connection open (its heartbeat kept the request in flight
+    // forever), the events endpoint must end the instant shutdown begins instead of riding
+    // out Kestrel's graceful-shutdown drain, which is what made Ctrl+C appear to hang.
+    [Fact]
+    public async Task Shutdown_WithSseSubscriberConnected_CompletesPromptly()
+    {
+        TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        using HttpResponseMessage subscriber = await client.GetAsync(
+            $"{vessel.BaseUrl}/vessel/api/events", HttpCompletionOption.ResponseHeadersRead, CT);
+        await Task.Delay(50, CT); // let the subscription register
+
+        TimeSpan elapsed = await vessel.StopAndMeasureAsync();
+        Assert.True(elapsed < TimeSpan.FromSeconds(2), $"shutdown with an open SSE connection took {elapsed}");
+
+        await vessel.DisposeAsync();
+    }
 }

@@ -30,6 +30,17 @@ public static class VesselApp
         builder.Logging.AddSimpleConsole(o => o.SingleLine = true);
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
         builder.Logging.AddFilter("Vessel", LogLevel.Information);
+        // #62 — Program.cs owns startup-failure reporting with one friendly line; without
+        // this, the host logs its own "Hosting failed to start" with a full stack first, and
+        // the async console logger interleaves it with our line.
+        builder.Logging.AddFilter("Microsoft.Extensions.Hosting.Internal.Host", LogLevel.None);
+        builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.None);
+
+        // #61 — a foreground process dying on Ctrl+C is expected to cut in-flight proxied
+        // streams; the default 30s of graceful-shutdown politeness is not what anyone wants.
+        // The events endpoint now ends the instant shutdown begins (ApplicationStopping), so
+        // this is a backstop for anything else, not the primary fix.
+        builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(3));
 
         ConfigLoader.TryParseListen(config.Listen, out System.Net.IPAddress address, out int port);
         builder.WebHost.ConfigureKestrel(kestrel =>

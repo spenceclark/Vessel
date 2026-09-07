@@ -14,13 +14,19 @@ public static class EventsEndpoint
     public static async Task Handle(HttpContext context)
     {
         var hub = context.RequestServices.GetRequiredService<CaptureEvents>();
+        var lifetime = context.RequestServices.GetRequiredService<IHostApplicationLifetime>();
 
         context.Response.Headers.CacheControl = "no-cache";
         context.Response.Headers["X-Accel-Buffering"] = "no";
         context.Response.ContentType = "text/event-stream";
         await context.Response.Body.FlushAsync(context.RequestAborted);
 
-        CancellationToken aborted = context.RequestAborted;
+        // #61 — linked to ApplicationStopping, not just the client's own disconnect: without
+        // this, an open tab's heartbeat kept this request in flight forever, and Kestrel's
+        // graceful shutdown then waited out the full HostOptions.ShutdownTimeout on Ctrl+C.
+        using CancellationTokenSource stoppingCts = CancellationTokenSource.CreateLinkedTokenSource(
+            context.RequestAborted, lifetime.ApplicationStopping);
+        CancellationToken aborted = stoppingCts.Token;
         using CaptureSubscription subscription = hub.Subscribe();
 
         // H0b(1) — the hello frame is the first thing on the wire, before any lifecycle frame,
