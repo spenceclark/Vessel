@@ -1,24 +1,29 @@
 <!doctype html>
 <html lang="en">
-  <head>
+
+<head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="vessel is a local-first observability proxy for LLM traffic: capture, search, replay, and compare every prompt across Ollama, OpenAI, and Anthropic backends. One binary, no account, nothing leaves your machine.">
+    <meta name="description"
+        content="vessel is a local-first observability proxy for LLM traffic: capture, search, replay, and compare every prompt across Ollama, OpenAI, and Anthropic backends. One binary, no account, nothing leaves your machine.">
     <title>vessel — local LLM proxy: capture, replay, and compare Ollama, OpenAI, and Anthropic requests</title>
     <link rel="canonical" href="https://vesselproxy.app/">
     <link rel="icon" href="favicon.svg">
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="vessel">
     <meta property="og:title" content="vessel — see what your agents are actually doing">
-    <meta property="og:description" content="Capture, search, replay, and compare every LLM prompt — locally. One binary, no account, nothing leaves your machine.">
+    <meta property="og:description"
+        content="Capture, search, replay, and compare every LLM prompt — locally. One binary, no account, nothing leaves your machine.">
     <meta property="og:url" content="https://vesselproxy.app">
     <meta property="og:image" content="https://vesselproxy.app/og-card.png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
-    <meta property="og:image:alt" content="vessel — local-first LLM observability. Capture, search, replay, and compare every prompt.">
+    <meta property="og:image:alt"
+        content="vessel — local-first LLM observability. Capture, search, replay, and compare every prompt.">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="vessel — see what your agents are actually doing">
-    <meta name="twitter:description" content="Capture, search, replay, and compare every LLM prompt — locally. One binary, no account, nothing leaves your machine.">
+    <meta name="twitter:description"
+        content="Capture, search, replay, and compare every LLM prompt — locally. One binary, no account, nothing leaves your machine.">
     <meta name="twitter:image" content="https://vesselproxy.app/og-card.png">
     <script type="application/ld+json">
     {
@@ -34,60 +39,481 @@
       "codeRepository": "https://github.com/spenceclark/Vessel"
     }
     </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Does it change my requests?",
+          "acceptedAnswer": { "@type": "Answer", "text": "No. Byte-for-byte, with only X-Vessel-* headers stripped. injectStreamUsage is the single opt-in exception, and it's flagged on the row." }
+        },
+        {
+          "@type": "Question",
+          "name": "Where does the data go?",
+          "acceptedAnswer": { "@type": "Answer", "text": "A SQLite file next to the config. Nothing leaves the machine; auth headers are redacted at rest; keys are never stored." }
+        },
+        {
+          "@type": "Question",
+          "name": "Which backends?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Ollama native, any OpenAI-compatible server (LM Studio, llama.cpp, vLLM, OpenRouter, the OpenAI API itself), and Anthropic Messages. Unknown formats pass through and are stored raw." }
+        }
+      ]
+    }
+    </script>
     <style>
-      @font-face { font-family: InterVariable; src: url('./fonts/inter-latin.woff2') format('woff2'); font-display: swap; }
-      @font-face { font-family: 'JetBrains Mono Variable'; src: url('./fonts/jetbrains-mono-latin.woff2') format('woff2'); font-display: swap; }
-      :root { --canvas:#0b0d10; --surface:#14171c; --surface-2:#1b1f26; --border:#262c36; --text:#e6eaf0; --secondary:#a8b1bd; --muted:#6b7684; --accent:#2dd4bf; --accent-fg:#0b0d10; --warn:#fbbf24; --font-ui:InterVariable,system-ui,sans-serif; --font-mono:'JetBrains Mono Variable',ui-monospace,monospace; }
-      @media (prefers-color-scheme:light) { :root { --canvas:#eef1f4; --surface:#fff; --surface-2:#f5f7f9; --border:#dde3e9; --text:#171c23; --secondary:#4b5563; --muted:#8b95a1; --accent:#0d9488; --accent-fg:#fff; } }
-      * { box-sizing:border-box; } body { margin:0; min-height:100vh; background:var(--canvas); color:var(--text); font:14px/1.5 var(--font-ui); }
-      main { width:min(960px,calc(100% - 32px)); margin:0 auto; padding:24px 0 64px; } header { display:flex; align-items:center; gap:9px; font-size:20px; font-weight:650; letter-spacing:-.02em; } .mark { width:24px; height:24px; }
-      .panel { background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:0 1px 2px rgb(0 0 0 /.3),0 4px 16px rgb(0 0 0 /.15); }
-      .hero { margin-top:64px; padding:48px; } h1 { max-width:700px; margin:0; font-size:clamp(34px,7vw,64px); line-height:1.05; letter-spacing:-.045em; font-weight:600; } .lead { max-width:610px; margin:20px 0 28px; color:var(--secondary); font-size:17px; }
-      .actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center; } a.button { display:inline-flex; min-height:40px; align-items:center; border-radius:8px; padding:0 14px; background:var(--accent); color:var(--accent-fg); font-weight:600; text-decoration:none; } a.text-link { color:var(--secondary); text-decoration:none; } a.text-link:hover { color:var(--accent); }
-      .download-note { color:var(--muted); font:11px/16px var(--font-mono); } #compare { display:block; width:100%; aspect-ratio:1594/1008; margin-top:32px; border:1px solid var(--border); border-radius:8px; } .features { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; margin-top:12px; } .feature { padding:20px; } .feature h2 { margin:0 0 8px; font-size:14px; font-weight:600; } .feature p { margin:0; color:var(--secondary); }
-      .quickstart { margin-top:12px; padding:22px; } .hero .label { margin-top:24px; }
-      .install-name { margin-top:14px; color:var(--secondary); font-size:12.5px; } .install-row { display:flex; align-items:center; gap:10px; margin-top:6px; padding:6px 6px 6px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2); } .install-row code { flex:1; margin:0; padding:4px 0; border:0; background:none; } .copy { flex:none; min-height:30px; padding:0 14px; border:1px solid var(--border); border-radius:999px; background:var(--surface); color:var(--text); font:500 12px var(--font-ui); cursor:pointer; } .copy:hover { border-color:var(--accent); color:var(--accent); } .label { color:var(--muted); font-size:11px; font-weight:550; letter-spacing:.06em; text-transform:uppercase; } code { display:block; overflow:auto; white-space:pre; margin-top:8px; padding:12px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2); color:var(--text); font:12.5px/18px var(--font-mono); } footer { margin-top:28px; color:var(--muted); font-size:12.5px; } @media(max-width:680px) { .hero { margin-top:32px; padding:28px; } .features { grid-template-columns:1fr; } }
+        @font-face {
+            font-family: InterVariable;
+            src: url('./fonts/inter-latin.woff2') format('woff2');
+            font-display: swap;
+        }
+
+        @font-face {
+            font-family: 'JetBrains Mono Variable';
+            src: url('./fonts/jetbrains-mono-latin.woff2') format('woff2');
+            font-display: swap;
+        }
+
+        :root {
+            --canvas: #0b0d10;
+            --surface: #14171c;
+            --surface-2: #1b1f26;
+            --border: #262c36;
+            --text: #e6eaf0;
+            --secondary: #a8b1bd;
+            --muted: #6b7684;
+            --accent: #2dd4bf;
+            --accent-fg: #0b0d10;
+            --warn: #fbbf24;
+            --font-ui: InterVariable, system-ui, sans-serif;
+            --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+        }
+
+        @media (prefers-color-scheme:light) {
+            :root {
+                --canvas: #eef1f4;
+                --surface: #fff;
+                --surface-2: #f5f7f9;
+                --border: #dde3e9;
+                --text: #171c23;
+                --secondary: #4b5563;
+                --muted: #8b95a1;
+                --accent: #0d9488;
+                --accent-fg: #fff;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: var(--canvas);
+            color: var(--text);
+            font: 14px/1.5 var(--font-ui);
+        }
+
+        main {
+            width: min(960px, calc(100% - 32px));
+            margin: 0 auto;
+            padding: 24px 0 64px;
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            font-size: 20px;
+            font-weight: 650;
+            letter-spacing: -.02em;
+        }
+
+        .mark {
+            width: 24px;
+            height: 24px;
+        }
+
+        .panel {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            box-shadow: 0 1px 2px rgb(0 0 0 /.3), 0 4px 16px rgb(0 0 0 /.15);
+        }
+
+        .hero {
+            margin-top: 64px;
+            padding: 48px;
+        }
+
+        h1 {
+            max-width: 700px;
+            margin: 0;
+            font-size: clamp(34px, 7vw, 64px);
+            line-height: 1.05;
+            letter-spacing: -.045em;
+            font-weight: 600;
+        }
+
+        .lead {
+            max-width: 610px;
+            margin: 20px 0 28px;
+            color: var(--secondary);
+            font-size: 17px;
+        }
+
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+
+        a.button {
+            display: inline-flex;
+            min-height: 40px;
+            align-items: center;
+            border-radius: 8px;
+            padding: 0 14px;
+            background: var(--accent);
+            color: var(--accent-fg);
+            font-weight: 600;
+            text-decoration: none;
+        }
+
+        a.text-link {
+            color: var(--secondary);
+            text-decoration: none;
+        }
+
+        a.text-link:hover {
+            color: var(--accent);
+        }
+
+        .download-note {
+            color: var(--muted);
+            font: 11px/16px var(--font-mono);
+        }
+
+        #compare {
+            display: block;
+            width: 100%;
+            aspect-ratio: 1594/1008;
+            margin-top: 32px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .feature {
+            padding: 20px;
+        }
+
+        .feature h2 {
+            margin: 0 0 8px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .feature p {
+            margin: 0;
+            color: var(--secondary);
+        }
+
+        .prose {
+            margin-top: 12px;
+            padding: 28px;
+        }
+
+        .prose h2 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+            letter-spacing: -.025em;
+        }
+
+        .prose h3 {
+            margin: 28px 0 10px;
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .prose p {
+            margin: 12px 0 0;
+            max-width: 720px;
+            color: var(--secondary);
+        }
+
+        .prose ul {
+            margin: 0;
+            padding-left: 20px;
+            max-width: 720px;
+            color: var(--secondary);
+        }
+
+        .prose a {
+            color: inherit;
+            text-decoration-color: var(--accent);
+            text-underline-offset: 2px;
+        }
+
+        .prose a:hover {
+            color: var(--accent);
+        }
+
+        .prose li+li {
+            margin-top: 6px;
+        }
+
+        .prose :is(p, li) code {
+            display: inline;
+            margin: 0;
+            padding: 1px 5px;
+            font-size: 12px;
+        }
+
+        .quickstart {
+            margin-top: 12px;
+            padding: 22px;
+        }
+
+        .hero .label {
+            margin-top: 24px;
+        }
+
+        .install-name {
+            margin-top: 14px;
+            color: var(--secondary);
+            font-size: 12.5px;
+        }
+
+        .install-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 6px;
+            padding: 6px 6px 6px 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--surface-2);
+        }
+
+        .install-row code {
+            flex: 1;
+            margin: 0;
+            padding: 4px 0;
+            border: 0;
+            background: none;
+        }
+
+        .copy {
+            flex: none;
+            min-height: 30px;
+            padding: 0 14px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: var(--surface);
+            color: var(--text);
+            font: 500 12px var(--font-ui);
+            cursor: pointer;
+        }
+
+        .copy:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .label {
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 550;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+        }
+
+        code {
+            display: block;
+            overflow: auto;
+            white-space: pre;
+            margin-top: 8px;
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--surface-2);
+            color: var(--text);
+            font: 12.5px/18px var(--font-mono);
+        }
+
+        footer {
+            margin-top: 28px;
+            color: var(--muted);
+            font-size: 12.5px;
+        }
+
+        @media(max-width:680px) {
+            .hero {
+                margin-top: 32px;
+                padding: 28px;
+            }
+
+            .features {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
-  </head>
-  <body>
+</head>
+
+<body>
     <main>
-      <header><svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M0 12h4m3 0h10m3 0h4" fill="none" stroke-linecap="round" stroke-width="2" stroke="var(--muted)"/><path d="M7 12h10" stroke="var(--accent)" stroke-linecap="round" stroke-width="2"/></svg>vessel</header>
-      <section class="panel hero">
-        <h1>See what your agents are actually doing.</h1>
-        <p class="lead">vessel sits between your LLM clients and any backend — Ollama, OpenAI, Anthropic, or anything compatible. Change one base URL and every request is captured live: prompts, responses, timing, token counts. Search it, replay it across other models, score what comes back. One small binary. No account. Nothing leaves your machine.</p>
-        <div class="actions"><a id="download" class="button" href="https://github.com/spenceclark/Vessel/releases/latest">Download Vessel</a><a class="text-link" href="https://github.com/spenceclark/Vessel">GitHub →</a></div>
-        <p id="download-note" class="download-note">Finding the latest release for your operating system…</p>
-        <div class="label">Or install with a package manager</div>
-        <div class="install-name">Homebrew — macOS (Apple Silicon) and Linux</div>
-        <div class="install-row"><code>brew trust spenceclark/tap &amp;&amp; brew install spenceclark/tap/vessel</code><button type="button" class="copy">Copy</button></div>
-        <div class="install-name">Scoop — Windows</div>
-        <div class="install-row"><code>scoop bucket add spenceclark https://github.com/spenceclark/scoop-bucket &amp;&amp; scoop install vessel</code><button type="button" class="copy">Copy</button></div>
-        <video id="compare" src="assets/compare.mp4" autoplay loop muted playsinline preload="auto" aria-label="Vessel Compare view: an original response and its replay against a different model, side by side"></video>
-      </section>
-      <section class="features">
-        <article class="panel feature"><h2>Drop-in capture</h2><p>Change one base URL. Every request and response — streamed or not — captured byte-for-byte with timing, TTFT, and token counts. Unknown traffic passes through untouched.</p></article>
-        <article class="panel feature"><h2>Find the one that went wrong</h2><p>Full-text search across prompts and responses. Filter by model, backend, or agent tag. Truncations, errors, cold model loads, and tool calls a model fumbled into plain text are badged, not buried.</p></article>
-        <article class="panel feature"><h2>Tag agents, name runs</h2><p>Each agent sends its own tag and each run its own session — a header, a path prefix, or a LangGraph callback. Filter, compare, and report per agent, per run.</p></article>
-        <article class="panel feature"><h2>Replay, fan out, compare</h2><p>Re-send a captured request to a different backend or model — or to eight at once, or one model across a sweep of temperatures — and see every response beside the original with timing and token deltas.</p></article>
-        <article class="panel feature"><h2>Score it, rank it, report it</h2><p>Rate responses 1–5 as you compare; Reports ranks models and parameter sets by score and win rate, and charts tokens, tok/s, duration, cache efficiency, and warnings by model, tag, or backend. Export any filtered list to CSV or JSONL.</p></article>
-        <article class="panel feature"><h2>Ask your AI about it</h2><p>A built-in read-only MCP server lets Claude Code — or any MCP client — search and inspect your captured traffic directly. &ldquo;Why did my agent stall?&rdquo; is now a question you can just ask.</p></article>
-      </section>
-      <section class="panel quickstart"><div class="label">Quickstart</div><code>OLLAMA_HOST=127.0.0.1:4550 ollama run llama3.2
-# or any SDK: base_url = "http://127.0.0.1:4550/b/openai/v1"</code></section>
-      <footer>MIT licensed · local-first — your prompts never leave your machine</footer>
+        <header><svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="4" y="5" width="16" height="14" rx="4" fill="none" stroke="currentColor" stroke-width="2" />
+                <path d="M0 12h4m3 0h10m3 0h4" fill="none" stroke-linecap="round" stroke-width="2"
+                    stroke="var(--muted)" />
+                <path d="M7 12h10" stroke="var(--accent)" stroke-linecap="round" stroke-width="2" />
+            </svg>vessel</header>
+        <section class="panel hero">
+            <h1>See what your agents are actually doing.</h1>
+            <p class="lead">vessel sits between your LLM clients and any backend — Ollama, OpenAI, Anthropic, or
+                anything compatible. Change one base URL and every request is captured live: prompts, responses, timing,
+                token counts. Search it, replay it across other models, score what comes back. One small binary. No
+                account. Nothing leaves your machine.</p>
+            <div class="actions"><a id="download" class="button"
+                    href="https://github.com/spenceclark/Vessel/releases/latest">Download Vessel</a><a class="text-link"
+                    href="https://github.com/spenceclark/Vessel">GitHub →</a></div>
+            <p id="download-note" class="download-note">Finding the latest release for your operating system…</p>
+            <div class="label">Or install with a package manager</div>
+            <div class="install-name">Homebrew — macOS (Apple Silicon) and Linux</div>
+            <div class="install-row">
+                <code>brew trust spenceclark/tap &amp;&amp; brew install spenceclark/tap/vessel</code><button
+                    type="button" class="copy">Copy</button>
+            </div>
+            <div class="install-name">Scoop — Windows</div>
+            <div class="install-row">
+                <code>scoop bucket add spenceclark https://github.com/spenceclark/scoop-bucket &amp;&amp; scoop install vessel</code><button
+                    type="button" class="copy">Copy</button>
+            </div>
+            <video id="compare" src="assets/compare.mp4" autoplay loop muted playsinline preload="auto"
+                aria-label="Vessel Compare view: an original response and its replay against a different model, side by side"></video>
+        </section>
+        <section class="features">
+            <article class="panel feature">
+                <h2>Drop-in capture</h2>
+                <p>Change one base URL. Every request and response — streamed or not — captured byte-for-byte with
+                    timing, TTFT, and token counts. Unknown traffic passes through untouched.</p>
+            </article>
+            <article class="panel feature">
+                <h2>Find the one that went wrong</h2>
+                <p>Full-text search across prompts and responses. Filter by model, backend, or agent tag. Truncations,
+                    errors, cold model loads, and tool calls a model fumbled into plain text are badged, not buried.</p>
+            </article>
+            <article class="panel feature">
+                <h2>Tag agents, name runs</h2>
+                <p>Each agent sends its own tag and each run its own session — a header, a path prefix, or a LangGraph
+                    callback. Filter, compare, and report per agent, per run.</p>
+            </article>
+            <article class="panel feature">
+                <h2>Replay, fan out, compare</h2>
+                <p>Re-send a captured request to a different backend or model — or to eight at once, or one model across
+                    a sweep of temperatures — and see every response beside the original with timing and token deltas.
+                </p>
+            </article>
+            <article class="panel feature">
+                <h2>Score it, rank it, report it</h2>
+                <p>Rate responses 1–5 as you compare; Reports ranks models and parameter sets by score and win rate, and
+                    charts tokens, tok/s, duration, cache efficiency, and warnings by model, tag, or backend. Export any
+                    filtered list to CSV or JSONL.</p>
+            </article>
+            <article class="panel feature">
+                <h2>Ask your AI about it</h2>
+                <p>A built-in read-only MCP server lets Claude Code — or any MCP client — search and inspect your
+                    captured traffic directly. &ldquo;Why did my agent stall?&rdquo; is now a question you can just ask.
+                </p>
+            </article>
+        </section>
+        <section class="panel quickstart">
+            <div class="label">Quickstart</div><code>OLLAMA_HOST=127.0.0.1:4550 ollama run llama3.2
+# or any SDK: base_url = "http://127.0.0.1:4550/b/openai/v1"</code>
+        </section>
+        <section class="panel prose">
+            <h2>How Vessel is different</h2>
+            <p>Vessel is a developer tool in the Fiddler / Wireshark family, not a telemetry platform: it watches the
+                wire between your client and the model, and never touches the request.</p>
+            <h3>Vessel vs <a href="https://langfuse.com/" target="_blank">Langfuse</a> (and <a
+                    href="https://www.helicone.ai/" target="_blank">Helicone</a>, <a href="https://arize.com/phoenix/"
+                    target="_blank">Phoenix</a>, <a href="https://smith.langchain.com/" target="_blank">LangSmith</a>)
+            </h3>
+            <ul>
+                <li>Application-level vs wire-level. They instrument your code with an SDK and show you spans; Vessel
+                    observes the HTTP and shows you bytes. No SDK, no language binding &mdash; anything with a base URL,
+                    including tools you didn&rsquo;t write (Open WebUI, aider, Cline).</li>
+                <li>Language-neutral. Langfuse is Python/TypeScript SDKs; Vessel is one base URL from any language, or a
+                    header, or a path prefix.</li>
+                <li>Scope. They&rsquo;re multi-user, hosted-or-self-hosted, with dashboards and evals for a team. Vessel
+                    is single-binary, single-user, local SQLite. If you need team dashboards and prompt management, use
+                    them; Vessel exports CSV/JSONL if you later want to feed one.</li>
+                <li>A dev tool, not an enterprise reporting package.</li>
+            </ul>
+            <h3>Vessel vs <a href="https://www.litellm.ai/" target="_blank">LiteLLM</a> (and other gateways)</h3>
+            <ul>
+                <li>A gateway <em>routes and transforms</em>: load-balancing, key management, format translation,
+                    retries. Vessel deliberately forwards byte-for-byte and never mutates. Different job; they stack
+                    &mdash; put Vessel in front of LiteLLM to see what the gateway actually sent.</li>
+                <li>If your question is &ldquo;what did my agent send?&rdquo;, a gateway&rsquo;s logs are one more layer
+                    between you and the answer.</li>
+            </ul>
+            <h3>Vessel vs <a href="https://www.mitmproxy.org/" target="_blank">mitmproxy</a> / <a
+                    href="https://www.charlesproxy.com/" target="_blank">Charles</a> / <a href="https://proxyman.com/"
+                    target="_blank">Proxyman</a></h3>
+            <ul>
+                <li>They&rsquo;re general HTTP interceptors: you get raw JSON and streaming chunks, and you do the
+                    parsing. Vessel speaks the three wire formats natively &mdash; it reassembles the stream, counts
+                    tokens (exact when the backend reports them), measures TTFT, flags cold loads and truncations, and
+                    lets you replay and compare. Wireshark has dissectors; this is the LLM dissector.</li>
+                <li>No certificate install, no MITM: Vessel is a reverse proxy the client is pointed at.</li>
+            </ul>
+            <h3>Vessel vs &ldquo;just log it in my code&rdquo;</h3>
+            <ul>
+                <li>Works before you&rsquo;ve written any code, and for code that isn&rsquo;t yours.</li>
+                <li>Sees what actually went on the wire after the SDK&rsquo;s defaults, retries, and transformations
+                    &mdash; the &ldquo;is it my code or the model?&rdquo; question that logging inside the code
+                    can&rsquo;t answer.</li>
+            </ul>
+        </section>
+        <section class="panel prose">
+            <h2>Frequently asked questions</h2>
+            <h3>Does it change my requests?</h3>
+            <p>No. Byte-for-byte, with only <code>X-Vessel-*</code> headers stripped. <code>injectStreamUsage</code> is
+                the single opt-in exception, and it&rsquo;s flagged on the row.</p>
+            <h3>Where does the data go?</h3>
+            <p>A SQLite file next to the config. Nothing leaves the machine; auth headers are redacted at rest; keys are
+                never stored.</p>
+            <h3>Which backends?</h3>
+            <p>Ollama native, any OpenAI-compatible server (LM Studio, llama.cpp, vLLM, OpenRouter, the OpenAI API
+                itself), and Anthropic Messages. Unknown formats pass through and are stored raw.</p>
+        </section>
+        <footer>MIT licensed · local-first — your prompts never leave your machine</footer>
     </main>
     <script>
-      const repository = 'spenceclark/Vessel';
-      const button = document.getElementById('download'); const note = document.getElementById('download-note');
-      const os = navigator.userAgent.includes('Windows') ? 'win-x64' : navigator.userAgent.includes('Mac') ? 'osx-arm64' : 'linux-x64'; // macOS builds are Apple Silicon only; Intel Macs build from source
-      fetch(`https://api.github.com/repos/${repository}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
-        .then(response => response.ok ? response.json() : Promise.reject(response.status))
-        .then(release => { const asset = release.assets.find(item => item.name.includes(`-${os}.`) && !item.name.endsWith('.sha256')); if (!asset) throw new Error('asset missing'); button.href = asset.browser_download_url; button.textContent = `Download for ${os}`; note.textContent = os === 'osx-arm64' ? `Latest ${release.tag_name} — Apple Silicon build; Intel Macs build from source.` : `Latest ${release.tag_name}`; })
-        .catch(() => { note.textContent = 'Choose your platform from the latest GitHub release.'; });
-      for (const copy of document.querySelectorAll('.copy')) copy.addEventListener('click', async () => {
-        try { await navigator.clipboard.writeText(copy.previousElementSibling.textContent); copy.textContent = 'Copied'; } catch { copy.textContent = 'Select & copy'; }
-        setTimeout(() => { copy.textContent = 'Copy'; }, 1500);
-      });
+        const repository = 'spenceclark/Vessel';
+        const button = document.getElementById('download'); const note = document.getElementById('download-note');
+        const os = navigator.userAgent.includes('Windows') ? 'win-x64' : navigator.userAgent.includes('Mac') ? 'osx-arm64' : 'linux-x64'; // macOS builds are Apple Silicon only; Intel Macs build from source
+        fetch(`https://api.github.com/repos/${repository}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
+            .then(response => response.ok ? response.json() : Promise.reject(response.status))
+            .then(release => { const asset = release.assets.find(item => item.name.includes(`-${os}.`) && !item.name.endsWith('.sha256')); if (!asset) throw new Error('asset missing'); button.href = asset.browser_download_url; button.textContent = `Download for ${os}`; note.textContent = os === 'osx-arm64' ? `Latest ${release.tag_name} — Apple Silicon build; Intel Macs build from source.` : `Latest ${release.tag_name}`; })
+            .catch(() => { note.textContent = 'Choose your platform from the latest GitHub release.'; });
+        for (const copy of document.querySelectorAll('.copy')) copy.addEventListener('click', async () => {
+            try { await navigator.clipboard.writeText(copy.previousElementSibling.textContent); copy.textContent = 'Copied'; } catch { copy.textContent = 'Select & copy'; }
+            setTimeout(() => { copy.textContent = 'Copy'; }, 1500);
+        });
     </script>
-  </body>
+</body>
+
 </html>
