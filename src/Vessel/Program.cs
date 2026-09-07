@@ -100,6 +100,20 @@ catch (Exception ex) when (IsDatabaseFailure(ex))
     await app.DisposeAsync();
     return 1;
 }
+catch (Exception ex)
+{
+    // #62 — Program.cs owns startup-failure reporting; the host's own "Hosting failed to
+    // start" log (with full stack) is suppressed via logging filters in VesselApp.Build so
+    // this is the only line a busy-port-or-database miss doesn't already cover.
+    Console.Error.WriteLine($"vessel: failed to start — {ex.GetBaseException().Message}");
+    await app.DisposeAsync();
+    return 1;
+}
+
+// #62 review — startup succeeded, so stop suppressing the host's own hosting-lifecycle
+// logging: a mid-run BackgroundService fault or shutdown diagnostic should still show its
+// stack trace, unlike the startup-failure log this suppression exists to avoid duplicating.
+app.AllowHostLifecycleLogging();
 
 string listen = app.ListenAddress();
 var registry = app.Services.GetRequiredService<Vessel.Proxy.BackendRegistry>();
@@ -108,8 +122,17 @@ string backendSummary = string.Join(", ", registry.All
     .Select(b => b.IsDefault ? $"{b.Name} (default, {b.BaseUrl})" : $"{b.Name} ({b.BaseUrl})"));
 
 ILogger startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Vessel");
-startupLogger.LogInformation("Vessel {Version} listening on {Listen} - backends: {Backends}",
-    Vessel.Api.StatusEndpoint.Version, listen, backendSummary);
+
+// #62 — printed directly, not through the logger: every start (not just the first) should
+// show the UI URL, and the buffered console logger otherwise interleaves unpredictably with
+// this. The commit hash stays out of the banner; `--version` still prints the full string.
+string shortVersion = Vessel.Api.StatusEndpoint.Version.Split('+')[0];
+Console.WriteLine($"Vessel {shortVersion} listening on {listen} - backends: {backendSummary}");
+// #62 review — MCP is disableable (config.Mcp.Enabled); advertising a URL that 404s would
+// mislead, so only show it when it actually works. Matches the non-loopback warning below,
+// which already gates its own MCP wording on the same flag.
+string mcpHint = config.Mcp.Enabled ? $"     MCP  {listen}/vessel/mcp" : "";
+Console.WriteLine($"UI  {listen}/vessel/{mcpHint}     Ctrl+C to stop");
 
 foreach (string warning in ConfigLoader.CollectWarnings(config))
 {
@@ -135,8 +158,6 @@ if (nonLoopback)
 if (created)
 {
     Console.WriteLine($"Created default config at {paths.ConfigPath}");
-    Console.WriteLine($"Vessel listening on {listen}  ->  default backend: {registry.Default.Name} ({registry.Default.BaseUrl})");
-    Console.WriteLine($"Point your client at {listen} - UI at {listen}/vessel/");
 
     if (!noOpen && !ConfigLoader.IsRunningInContainer)
     {

@@ -30,6 +30,22 @@ public static class VesselApp
         builder.Logging.AddSimpleConsole(o => o.SingleLine = true);
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
         builder.Logging.AddFilter("Vessel", LogLevel.Information);
+        // #62 — Program.cs owns startup-failure reporting with one friendly line; without
+        // this, the host logs its own "Hosting failed to start" with a full stack first, and
+        // the async console logger interleaves it with our line. Gated by a flag Program.cs
+        // clears right after a successful StartAsync (not a static LogLevel.None) so this
+        // stays scoped to the startup window — a later mid-run BackgroundService fault still
+        // logs its stack trace under this same category, which is the actual bug report.
+        var startupLogGate = new StartupLogGate();
+        builder.Logging.AddFilter("Microsoft.Extensions.Hosting.Internal.Host", _ => !startupLogGate.Suppressed);
+        builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", _ => !startupLogGate.Suppressed);
+        builder.Services.AddSingleton(startupLogGate);
+
+        // #61 — a foreground process dying on Ctrl+C is expected to cut in-flight proxied
+        // streams; the default 30s of graceful-shutdown politeness is not what anyone wants.
+        // The events endpoint now ends the instant shutdown begins (ApplicationStopping), so
+        // this is a backstop for anything else, not the primary fix.
+        builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(3));
 
         ConfigLoader.TryParseListen(config.Listen, out System.Net.IPAddress address, out int port);
         builder.WebHost.ConfigureKestrel(kestrel =>
@@ -204,4 +220,20 @@ public static class VesselApp
         var uri = new Uri(app.ListenAddress());
         app.Services.GetRequiredService<ConfigStore>().RecordBoundListen(System.Net.IPAddress.Parse(uri.Host), uri.Port);
     }
+
+    /// <summary>
+    /// #62 review — call once <c>StartAsync</c> has returned successfully, so the host's own
+    /// hosting-lifecycle logging (background-service faults, shutdown diagnostics) is no
+    /// longer suppressed for the rest of the process. Before this call, only Program's own
+    /// startup-failure line is meant to be seen.
+    /// </summary>
+    public static void AllowHostLifecycleLogging(this WebApplication app) =>
+        app.Services.GetRequiredService<StartupLogGate>().Suppressed = false;
+}
+
+/// <summary>#62 review — mutable so the log filter closure in <see cref="VesselApp.Build"/> can
+/// be toggled off after startup instead of suppressing the category for the process lifetime.</summary>
+public sealed class StartupLogGate
+{
+    public bool Suppressed { get; set; } = true;
 }

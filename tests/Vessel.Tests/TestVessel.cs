@@ -11,6 +11,7 @@ public sealed class TestVessel : IAsyncDisposable
 {
     private string _tempDir = null!;
     private WebApplication _app = null!;
+    private bool _stopped;
 
     public StubBackend Stub { get; private set; } = null!;
 
@@ -55,9 +56,24 @@ public sealed class TestVessel : IAsyncDisposable
         return vessel;
     }
 
+    /// <summary>#61 — stops the app and reports how long graceful shutdown took, for tests
+    /// pinning that it completes promptly rather than waiting out the shutdown timeout.</summary>
+    public async Task<TimeSpan> StopAndMeasureAsync()
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        await _app.StopAsync();
+        stopwatch.Stop();
+        _stopped = true;
+        return stopwatch.Elapsed;
+    }
+
     public async ValueTask DisposeAsync()
     {
-        await _app.StopAsync();
+        if (!_stopped)
+        {
+            await _app.StopAsync();
+        }
+
         await _app.DisposeAsync();
         await Stub.DisposeAsync();
         try
