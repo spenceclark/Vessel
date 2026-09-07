@@ -90,6 +90,49 @@ Both compose: `/b/ollama/t/planner/api/chat`. Routing precedence is `/b/{backend
 then `X-Vessel-Backend`, then the default backend. Vessel strips its own `X-Vessel-*`
 headers before forwarding — backends never see them.
 
+### From LangChain / LangGraph
+
+LangChain chat models don't expose per-request headers, but nothing above needs them.
+Per-agent tags ride on the path — one model instance per agent:
+
+```python
+planner = init_chat_model('ollama:llama3.2', base_url='http://127.0.0.1:4550/t/planner')
+```
+
+For per-run sessions (and node tags from one shared model), stamp the outgoing request
+from a callback. LangGraph puts the node name in run metadata; put the `thread_id` there
+too, and it becomes the Vessel session:
+
+```python
+import contextvars, httpx
+from langchain_core.callbacks import BaseCallbackHandler
+
+_vessel: contextvars.ContextVar[dict | None] = contextvars.ContextVar('vessel', default=None)
+
+class VesselCallback(BaseCallbackHandler):
+    def on_chat_model_start(self, serialized, messages, *, metadata=None, **kwargs):
+        md = metadata or {}
+        _vessel.set({k: v for k, v in {
+            'X-Vessel-Tags': md.get('langgraph_node'),
+            'X-Vessel-Session': md.get('thread_id'),
+        }.items() if v})
+
+def _stamp(request: httpx.Request):
+    request.headers.update(_vessel.get() or {})
+
+llm = init_chat_model('ollama:llama3.2', base_url='http://127.0.0.1:4550',
+                      client_kwargs={'event_hooks': {'request': [_stamp]}})
+
+thread_id = str(uuid.uuid4())
+graph.invoke(state, config={'configurable': {'thread_id': thread_id},
+                            'metadata': {'thread_id': thread_id},
+                            'callbacks': [VesselCallback()]})
+```
+
+`ChatOpenAI` takes the hook as `http_client=httpx.Client(event_hooks=…)` instead of
+`client_kwargs`; for `ainvoke`, give the async client an `async def` hook. A complete
+four-agent LangGraph example is in [`docs/examples/langgraph.py`](docs/examples/langgraph.py).
+
 ## Query your traffic from AI tools (MCP)
 
 Vessel serves a read-only [MCP](https://modelcontextprotocol.io) endpoint, so tools
