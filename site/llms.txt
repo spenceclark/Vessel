@@ -1,0 +1,9 @@
+# vessel
+
+> Local-first observability proxy for LLM traffic. Capture, search, replay, and compare every prompt across Ollama, OpenAI, and Anthropic backends. One binary, no account, nothing leaves your machine.
+
+vessel sits between your LLM clients and any backend. Point a base URL at it and every request is captured live: prompts, responses, timing, token counts. Search it, replay it against other models, score what comes back. MIT licensed.
+
+- [Homepage](https://vesselproxy.app/)
+- [README](https://github.com/spenceclark/Vessel#readme)
+- [Releases](https://github.com/spenceclark/Vessel/releases/latest)
