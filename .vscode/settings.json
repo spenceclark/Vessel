@@ -46,5 +46,8 @@
     "dotnet.inlayHints.enableInlayHintsForParameters": false,
     "dotnet.inlayHints.enableInlayHintsForLiteralParameters": false,
 
-    "editor.semanticHighlighting.enabled": true
+    "editor.semanticHighlighting.enabled": true,
+    "[html]": {
+        "editor.defaultFormatter": "vscode.html-language-features"
+    }
 }
