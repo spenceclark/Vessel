@@ -35,6 +35,16 @@ public sealed class CaptureWriterService(
 
     public static readonly TimeSpan FlushInterval = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>
+    /// #61 review — the token <see cref="StopAsync"/> receives is shared with Kestrel's own
+    /// connection drain, which can legitimately spend the whole host shutdown budget waiting
+    /// out a slow in-flight proxied stream; by the time this service is stopped, that token
+    /// may already be cancelled. The writer's own drain — complete the channel, flush
+    /// whatever batch is left — is milliseconds of work once signaled, so it gets its own
+    /// bounded wait instead of inheriting an already-exhausted deadline.
+    /// </summary>
+    public static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(3);
+
     private Task _loop = Task.CompletedTask;
 
     private int _consecutiveFailures;
@@ -55,7 +65,7 @@ public sealed class CaptureWriterService(
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         channel.Complete();
-        await _loop.WaitAsync(cancellationToken);
+        await _loop.WaitAsync(DrainTimeout);
     }
 
     private async Task RunAsync()

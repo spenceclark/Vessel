@@ -110,6 +110,11 @@ catch (Exception ex)
     return 1;
 }
 
+// #62 review — startup succeeded, so stop suppressing the host's own hosting-lifecycle
+// logging: a mid-run BackgroundService fault or shutdown diagnostic should still show its
+// stack trace, unlike the startup-failure log this suppression exists to avoid duplicating.
+app.AllowHostLifecycleLogging();
+
 string listen = app.ListenAddress();
 var registry = app.Services.GetRequiredService<Vessel.Proxy.BackendRegistry>();
 string backendSummary = string.Join(", ", registry.All
@@ -123,7 +128,11 @@ ILogger startupLogger = app.Services.GetRequiredService<ILoggerFactory>().Create
 // this. The commit hash stays out of the banner; `--version` still prints the full string.
 string shortVersion = Vessel.Api.StatusEndpoint.Version.Split('+')[0];
 Console.WriteLine($"Vessel {shortVersion} listening on {listen} - backends: {backendSummary}");
-Console.WriteLine($"UI  {listen}/vessel/     MCP  {listen}/vessel/mcp     Ctrl+C to stop");
+// #62 review — MCP is disableable (config.Mcp.Enabled); advertising a URL that 404s would
+// mislead, so only show it when it actually works. Matches the non-loopback warning below,
+// which already gates its own MCP wording on the same flag.
+string mcpHint = config.Mcp.Enabled ? $"     MCP  {listen}/vessel/mcp" : "";
+Console.WriteLine($"UI  {listen}/vessel/{mcpHint}     Ctrl+C to stop");
 
 foreach (string warning in ConfigLoader.CollectWarnings(config))
 {

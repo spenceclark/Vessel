@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Vessel.Capture;
 using Xunit;
 
@@ -899,7 +900,7 @@ public class EventsTests
     [Fact]
     public async Task Shutdown_WithSseSubscriberConnected_CompletesPromptly()
     {
-        TestVessel vessel = await TestVessel.StartAsync();
+        await using TestVessel vessel = await TestVessel.StartAsync();
         using var client = new HttpClient();
 
         using HttpResponseMessage subscriber = await client.GetAsync(
@@ -908,7 +909,50 @@ public class EventsTests
 
         TimeSpan elapsed = await vessel.StopAndMeasureAsync();
         Assert.True(elapsed < TimeSpan.FromSeconds(2), $"shutdown with an open SSE connection took {elapsed}");
+    }
 
-        await vessel.DisposeAsync();
+    // #61 review — a proxied stream (not Vessel's own events feed) is an ordinary Kestrel
+    // connection with no special shutdown handling, so it legitimately rides out the full
+    // ShutdownTimeout before being force-aborted. That used to starve CaptureWriterService
+    // and RequestModelSnifferService of any time to drain: they stop *after* Kestrel in the
+    // host's LIFO order, so by the time they ran, the shared shutdown token was already
+    // cancelled, and `_loop.WaitAsync(cancellationToken)` threw immediately — an
+    // AggregateException escaping StopAsync on an entirely ordinary Ctrl+C. Both services now
+    // drain on their own independent timeout instead of the shared, possibly-exhausted one.
+    [Fact]
+    public async Task Shutdown_DuringActiveProxyStream_DrainsBothServicesWithoutThrowing()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        using HttpResponseMessage stream = await client.GetAsync(
+            $"{vessel.BaseUrl}/sse?n=20&delayMs=500", HttpCompletionOption.ResponseHeadersRead, CT);
+        await Task.Delay(200, CT); // let the proxied response start streaming
+
+        TimeSpan elapsed = await vessel.StopAndMeasureAsync();
+
+        // Bounded by ShutdownTimeout (Kestrel force-aborting the slow stream) plus each
+        // service's own DrainTimeout, run sequentially — generous enough to not be flaky
+        // while still catching a regression back to the unbounded 30s default.
+        Assert.True(elapsed < TimeSpan.FromSeconds(8), $"shutdown during an active proxy stream took {elapsed}");
+    }
+
+    // #62 review — the host's own "Hosting failed to start" log must be suppressed only for
+    // the startup window, not the process lifetime: a later BackgroundService fault under the
+    // same "Microsoft.Extensions.Hosting.Internal.Host" category (the MCP SDK's own
+    // IdleTrackingBackgroundService, say) needs its stack trace visible, since that is the
+    // genuine bug report #62 says must never be swallowed. Pinned directly against the gate
+    // rather than forcing a real fault through the MCP SDK's internals.
+    [Fact]
+    public async Task StartupLogGate_SuppressesHostCategoryOnlyUntilAllowed()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+
+        ILoggerFactory factory = vessel.Services.GetRequiredService<ILoggerFactory>();
+        ILogger hostLogger = factory.CreateLogger("Microsoft.Extensions.Hosting.Internal.Host");
+        Assert.False(hostLogger.IsEnabled(LogLevel.Critical), "the startup window should still suppress this category");
+
+        vessel.Services.GetRequiredService<StartupLogGate>().Suppressed = false;
+        Assert.True(hostLogger.IsEnabled(LogLevel.Critical), "a mid-run fault under this category must surface once startup has succeeded");
     }
 }

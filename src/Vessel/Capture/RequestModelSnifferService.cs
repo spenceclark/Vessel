@@ -18,6 +18,15 @@ public sealed class RequestModelSnifferService(
 
     private Task _loop = Task.CompletedTask;
 
+    /// <summary>
+    /// #61 review — mirrors <see cref="CaptureWriterService.DrainTimeout"/>: the token
+    /// <see cref="StopAsync"/> receives is shared with Kestrel's own connection drain and may
+    /// already be cancelled by the time this runs, but this loop's own drain (complete the
+    /// channel, let the reader exit) is near-instant once signaled, so it gets its own bounded
+    /// wait rather than inheriting an already-exhausted deadline.
+    /// </summary>
+    public static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(3);
+
     /// <summary>Fire-and-forget from the request path — never blocks, never throws out.</summary>
     public void Enqueue(long seq, byte[]? body) => _channel.Writer.TryWrite((seq, body));
 
@@ -30,7 +39,7 @@ public sealed class RequestModelSnifferService(
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         _channel.Writer.TryComplete();
-        await _loop.WaitAsync(cancellationToken);
+        await _loop.WaitAsync(DrainTimeout);
     }
 
     private async Task RunAsync()
