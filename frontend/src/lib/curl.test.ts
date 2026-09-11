@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import { execFile } from 'node:child_process'
 import { createServer } from 'node:http'
 import { promisify } from 'node:util'
