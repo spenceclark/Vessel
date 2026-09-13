@@ -2,6 +2,23 @@
 
 All notable changes are documented here. Vessel follows Semantic Versioning.
 
+## 0.2.1 — 2026-09-13
+
+Post-0.2.0 fixes.
+
+### Fixed
+
+- Ctrl+C no longer hangs on shutdown, and the startup console output is clearer (#64).
+- The live request feed reconnects when the browser's EventSource enters CLOSED instead
+  of silently going stale (#75).
+- A backend connection failure logs one clean warning line instead of a YARP stack
+  trace (#76).
+
+### Changed
+
+- Dependency bumps: Microsoft.Data.Sqlite 10.0.12, lucide-react 1.43.0,
+  @tanstack/react-virtual 3.14.11 (#68, #69, #72).
+
 ## 0.2.0 — 2026-09-07
 
 Named sessions, multi-replay with scoring, reports, export, and package-manager installs.
