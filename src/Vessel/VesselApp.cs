@@ -30,6 +30,10 @@ public static class VesselApp
         builder.Logging.AddSimpleConsole(o => o.SingleLine = true);
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
         builder.Logging.AddFilter("Vessel", LogLevel.Information);
+        // #74 — YARP logs a multi-line warning with a full stack trace for every forwarder
+        // failure, even the ones ProxyHandler already turns into a clean 502/504 response.
+        // Error hides that without hiding anything YARP considers more serious than a warning.
+        builder.Logging.AddFilter("Yarp.ReverseProxy", LogLevel.Error);
         // #62 — Program.cs owns startup-failure reporting with one friendly line; without
         // this, the host logs its own "Hosting failed to start" with a full stack first, and
         // the async console logger interleaves it with our line. Gated by a flag Program.cs

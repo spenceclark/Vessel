@@ -368,6 +368,7 @@ public sealed class ProxyHandler
                 // R08 — what lands in the response buffer from here on is Vessel's, not the
                 // backend's; enrichment must not read it as a completion.
                 capture.ResponseAuthoredByVessel = true;
+                _logger.LogWarning("backend '{Backend}' ({BaseUrl}) timed out", backend.Name, backend.BaseUrl);
                 await VesselErrors.Write(
                     context, StatusCodes.Status504GatewayTimeout, VesselErrors.UpstreamTimeout,
                     $"backend '{backend.Name}' ({backend.BaseUrl}) timed out");
@@ -383,6 +384,8 @@ public sealed class ProxyHandler
             default:
                 capture.Error = error.ToString();
                 capture.ResponseAuthoredByVessel = true;
+                _logger.LogWarning(
+                    "backend '{Backend}' ({BaseUrl}) is unreachable: {Error}", backend.Name, backend.BaseUrl, error);
                 await VesselErrors.Write(
                     context, StatusCodes.Status502BadGateway, VesselErrors.UpstreamUnreachable,
                     $"backend '{backend.Name}' ({backend.BaseUrl}) is unreachable: {error}");
