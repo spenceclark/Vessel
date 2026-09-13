@@ -76,7 +76,9 @@ export function useEvents(handlers: EventHandlers) {
     let source: EventSource
     let reconnectTimer: number | undefined
     let lastId: number | null = null
-    let hasConnectedBefore = false
+    // True once any frames may have been missed since the list's REST snapshot: after a first
+    // open, or after a source was abandoned — including one that failed before ever opening.
+    let recoverOnOpen = false
 
     /**
      * Decodes one frame, reporting any gap in the publish sequence before dispatching it with
@@ -114,20 +116,21 @@ export function useEvents(handlers: EventHandlers) {
 
       source.addEventListener('open', () => {
         setConnected(true)
-        if (hasConnectedBefore) {
+        if (recoverOnOpen) {
           // Whatever happened during the gap was missed, and ids restart relative to a new
           // server process — reset rather than reporting a spurious gap on the next frame.
           lastId = null
           handlersRef.current.onReconnect()
         }
 
-        hasConnectedBefore = true
+        recoverOnOpen = true
       })
 
       source.addEventListener('error', () => {
         setConnected(false)
         if (source.readyState === EventSource.CLOSED) {
           source.close()
+          recoverOnOpen = true
           reconnectTimer = window.setTimeout(connect, RECONNECT_DELAY_MS)
         }
       })

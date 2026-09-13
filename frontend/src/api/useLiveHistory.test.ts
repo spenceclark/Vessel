@@ -522,6 +522,40 @@ describe('useLiveHistory', () => {
     expect(FakeEventSource.latest().closed).toBe(true)
   })
 
+  // #73 review — a source that fails before its first open: rows that completed while no feed
+  // was connected are only reachable through the refetch, so the replacement's first open must
+  // still run recovery.
+  it('recovers when the initial EventSource closes before it ever opened', async () => {
+    let serverRows = [summary(7)]
+    const { queryClient, rendered } = setup({ listFetch: async () => listPage(serverRows) })
+
+    await waitFor(() => expect(cachedRowIds(queryClient)).toEqual([7]))
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+
+    // Completed server-side while the feed was never up.
+    serverRows = [summary(8), summary(7)]
+    serverActive({ active: [], logPosition: 2 })
+    const dead = FakeEventSource.latest()
+    vi.useFakeTimers()
+    try {
+      act(() => {
+        dead.failPermanently()
+        vi.advanceTimersByTime(3000)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(FakeEventSource.latest()).not.toBe(dead)
+    act(() => {
+      FakeEventSource.latest().open()
+    })
+
+    await waitFor(() => expect(cachedRowIds(queryClient)).toContain(8))
+
+    rendered.unmount()
+  })
+
   // R22/F1 — a burst of gaps must coalesce into a single recovery, not one per gap (the storm
   // the review warned about). The debounce + single-flight guard collapse them.
   it('coalesces a burst of gaps into one reconciliation', async () => {
