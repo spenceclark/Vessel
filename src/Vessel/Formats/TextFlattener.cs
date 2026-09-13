@@ -224,7 +224,7 @@ public static class TextFlattener
         foreach (JsonNode? choice in choices)
         {
             JsonObject? message = JsonUtil.Object(choice)?["message"] as JsonObject;
-            Append(sb, JsonUtil.Str(message?["reasoning_content"]));
+            Append(sb, JsonUtil.Str(message?["reasoning_content"]) ?? JsonUtil.Str(message?["reasoning"]));
             Append(sb, FlattenContent(message?["content"]));
             AppendToolCalls(sb, message?["tool_calls"]);
         }

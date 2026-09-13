@@ -1,0 +1,14 @@
+{
+  "format": "openai-chat",
+  "model": "qwen3.5",
+  "tokensIn": 40,
+  "tokensOut": 25,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": "tool_calls",
+  "tokPerSec": null,
+  "warnings": [],
+  "promptText": "user: pick a seat",
+  "responseText": "Row 1 Seat A has extra leg room and is a window seat.\n[tool_call final_result_SeatPreference] {\"row\":1,\"seat\":\"A\"}"
+}

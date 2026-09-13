@@ -63,7 +63,9 @@ function requestMessage(m: any): RenderMessage {
 
 function assistantMessageBlocks(msg: any): RenderMessage {
   const blocks: RenderBlock[] = []
-  if (msg.reasoning_content) blocks.push({ kind: 'thinking', text: msg.reasoning_content })
+  // vLLM/SGLang use `reasoning_content`; Ollama's OpenAI-compatible endpoint uses `reasoning`.
+  const reasoning = msg.reasoning_content ?? msg.reasoning
+  if (reasoning) blocks.push({ kind: 'thinking', text: reasoning })
   if (msg.content) blocks.push({ kind: 'markdown', text: msg.content })
   appendToolCalls(blocks, msg.tool_calls)
   return { role: 'assistant', blocks }
