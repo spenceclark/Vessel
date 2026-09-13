@@ -29,10 +29,12 @@ import { useLiveHistory } from './useLiveHistory'
 
 class FakeEventSource {
   static instances: FakeEventSource[] = []
+  static readonly CLOSED = 2
 
   readonly url: string
   private readonly listeners = new Map<string, Set<(e: MessageEvent<string>) => void>>()
   closed = false
+  readyState = 0
 
   constructor(url: string) {
     this.url = url
@@ -59,6 +61,12 @@ class FakeEventSource {
 
   open() {
     for (const fn of this.listeners.get('open') ?? []) fn(new MessageEvent('open') as MessageEvent<string>)
+  }
+
+  /** An error the browser gives up on (e.g. a non-200 response): the source is left CLOSED. */
+  failPermanently() {
+    this.readyState = FakeEventSource.CLOSED
+    for (const fn of this.listeners.get('error') ?? []) fn(new MessageEvent('error') as MessageEvent<string>)
   }
 
   static latest() {
@@ -476,6 +484,42 @@ describe('useLiveHistory', () => {
     await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(0))
 
     rendered.unmount()
+  })
+
+  // #73 — a browser that leaves the EventSource CLOSED never retries; the hook must reconnect
+  // itself, and the recreated source's first open must still run recovery.
+  it('recreates a CLOSED EventSource and reconciles on its open', async () => {
+    const { rendered } = setup({ listFetch: async () => listPage([summary(7)]) })
+
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+    act(() => {
+      FakeEventSource.latest().open() // first connect
+      FakeEventSource.latest().emit('started', startedEvent(1, summary(7)), 1)
+    })
+    await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(1))
+
+    serverActive({ active: [], logPosition: 2 })
+    const dead = FakeEventSource.latest()
+    vi.useFakeTimers()
+    try {
+      act(() => {
+        dead.failPermanently()
+        vi.advanceTimersByTime(3000)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(dead.closed).toBe(true)
+    expect(FakeEventSource.latest()).not.toBe(dead)
+    act(() => {
+      FakeEventSource.latest().open()
+    })
+
+    await waitFor(() => expect(rendered.result.current.live.inFlight).toHaveLength(0))
+
+    rendered.unmount()
+    expect(FakeEventSource.latest().closed).toBe(true)
   })
 
   // R22/F1 — a burst of gaps must coalesce into a single recovery, not one per gap (the storm

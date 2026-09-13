@@ -45,6 +45,9 @@ export interface EventHandlers {
   onReconnect: () => void
 }
 
+/** Matches the browser's default SSE `retry`. */
+const RECONNECT_DELAY_MS = 3000
+
 /**
  * D5/D6 — the SSE subscription, and nothing else: it decodes frames, tracks connectivity,
  * and reports loss. All state derived from these events (the in-flight map, cache merging,
@@ -70,23 +73,10 @@ export function useEvents(handlers: EventHandlers) {
   })
 
   useEffect(() => {
-    const source = new EventSource('/vessel/api/events')
+    let source: EventSource
+    let reconnectTimer: number | undefined
     let lastId: number | null = null
     let hasConnectedBefore = false
-
-    source.addEventListener('open', () => {
-      setConnected(true)
-      if (hasConnectedBefore) {
-        // Whatever happened during the gap was missed, and ids restart relative to a new
-        // server process — reset rather than reporting a spurious gap on the next frame.
-        lastId = null
-        handlersRef.current.onReconnect()
-      }
-
-      hasConnectedBefore = true
-    })
-
-    source.addEventListener('error', () => setConnected(false))
 
     /**
      * Decodes one frame, reporting any gap in the publish sequence before dispatching it with
@@ -114,32 +104,66 @@ export function useEvents(handlers: EventHandlers) {
       dispatch(JSON.parse(event.data) as T, usable ? parsed : Number.POSITIVE_INFINITY)
     }
 
-    source.addEventListener('started', (e: MessageEvent<string>) =>
-      receive<StartedEvent>(e, (data, id) => handlersRef.current.onStarted(data, id)),
-    )
-    source.addEventListener('request_ready', (e: MessageEvent<string>) =>
-      receive<RequestReadyEvent>(e, (data, id) => handlersRef.current.onRequestReady(data, id)),
-    )
-    source.addEventListener('first_token', (e: MessageEvent<string>) =>
-      receive<FirstTokenEvent>(e, (data, id) => handlersRef.current.onFirstToken(data, id)),
-    )
-    source.addEventListener('completed', (e: MessageEvent<string>) =>
-      receive<CompletedEvent>(e, (data, id) => handlersRef.current.onCompleted(data, id)),
-    )
-    // `cleared` is a real published frame (it carries an `id:`), so it flows through `receive`
-    // and participates in gap detection — a dropped clear is detectable like any other loss.
-    // Global/before clears carry an empty payload; session deletion carries its exact id.
-    source.addEventListener('cleared', (e: MessageEvent<string>) =>
-      receive<ClearedEvent>(e, (data, id) => handlersRef.current.onCleared(data, id)),
-    )
-    // `hello` deliberately carries no `id:` (see the server), so it must NOT go through
-    // `receive` — it is server identity, not a lifecycle frame, and must never move the gap
-    // watermark.
-    source.addEventListener('hello', (e: MessageEvent<string>) =>
-      handlersRef.current.onHello(JSON.parse(e.data) as HelloEvent),
-    )
+    // #73 — the browser's built-in retry is not guaranteed: a single non-200 (or non-event-stream)
+    // response leaves the EventSource CLOSED and it never tries again, freezing the list while
+    // the polled header keeps counting. Reconnection is owned here instead. The gap state lives
+    // outside `connect`, so a recreated source's `open` still reports `onReconnect` and the list
+    // recovers.
+    function connect() {
+      source = new EventSource('/vessel/api/events')
 
-    return () => source.close()
+      source.addEventListener('open', () => {
+        setConnected(true)
+        if (hasConnectedBefore) {
+          // Whatever happened during the gap was missed, and ids restart relative to a new
+          // server process — reset rather than reporting a spurious gap on the next frame.
+          lastId = null
+          handlersRef.current.onReconnect()
+        }
+
+        hasConnectedBefore = true
+      })
+
+      source.addEventListener('error', () => {
+        setConnected(false)
+        if (source.readyState === EventSource.CLOSED) {
+          source.close()
+          reconnectTimer = window.setTimeout(connect, RECONNECT_DELAY_MS)
+        }
+      })
+
+      source.addEventListener('started', (e: MessageEvent<string>) =>
+        receive<StartedEvent>(e, (data, id) => handlersRef.current.onStarted(data, id)),
+      )
+      source.addEventListener('request_ready', (e: MessageEvent<string>) =>
+        receive<RequestReadyEvent>(e, (data, id) => handlersRef.current.onRequestReady(data, id)),
+      )
+      source.addEventListener('first_token', (e: MessageEvent<string>) =>
+        receive<FirstTokenEvent>(e, (data, id) => handlersRef.current.onFirstToken(data, id)),
+      )
+      source.addEventListener('completed', (e: MessageEvent<string>) =>
+        receive<CompletedEvent>(e, (data, id) => handlersRef.current.onCompleted(data, id)),
+      )
+      // `cleared` is a real published frame (it carries an `id:`), so it flows through `receive`
+      // and participates in gap detection — a dropped clear is detectable like any other loss.
+      // Global/before clears carry an empty payload; session deletion carries its exact id.
+      source.addEventListener('cleared', (e: MessageEvent<string>) =>
+        receive<ClearedEvent>(e, (data, id) => handlersRef.current.onCleared(data, id)),
+      )
+      // `hello` deliberately carries no `id:` (see the server), so it must NOT go through
+      // `receive` — it is server identity, not a lifecycle frame, and must never move the gap
+      // watermark.
+      source.addEventListener('hello', (e: MessageEvent<string>) =>
+        handlersRef.current.onHello(JSON.parse(e.data) as HelloEvent),
+      )
+    }
+
+    connect()
+
+    return () => {
+      window.clearTimeout(reconnectTimer)
+      source.close()
+    }
   }, [])
 
   return { connected }
