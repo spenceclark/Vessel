@@ -89,6 +89,19 @@ public class TextFlattenerTests
         Assert.Equal("""[code_execution_tool_result] {"type":"code_execution_result","stdout":"hi","files":[{}]}""", text);
     }
 
+    // PR #89 review — JSON values keep non-ASCII characters rather than \uXXXX escapes, or
+    // FTS can't match them.
+    [Fact]
+    public void CompactedJson_PreservesNonAsciiCharacters()
+    {
+        Assert.Equal(
+            """[server_tool_use web_search] {"query":"café"}""",
+            Flatten("""[{"type":"server_tool_use","id":"s1","name":"web_search","input":{"query":"café"}}]"""));
+        Assert.Equal(
+            """[code_execution_tool_result] {"stdout":"日本語"}""",
+            Flatten("""[{"type":"code_execution_tool_result","tool_use_id":"s3","content":{"stdout":"日本語"}}]"""));
+    }
+
     [Fact]
     public void TextWithCitations_FlattensTextOnly()
     {

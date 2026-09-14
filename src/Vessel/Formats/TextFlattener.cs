@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Vessel.Formats;
@@ -392,7 +394,7 @@ public static class TextFlattener
 
         JsonNode copy = node.DeepClone();
         RemoveEncrypted(copy);
-        return copy.ToJsonString();
+        return Compact(copy);
     }
 
     private static void RemoveEncrypted(JsonNode? node)
@@ -461,7 +463,12 @@ public static class TextFlattener
         sb.Append(text);
     }
 
-    private static string Compact(JsonNode? node) => node?.ToJsonString() ?? "";
+    // The default encoder writes non-ASCII as \uXXXX escapes, which FTS can't match (`café`
+    // would index as `café`). This text is never embedded in HTML, so relaxed escaping
+    // is safe. ponytail: characters outside the BMP (emoji) are still escaped by this encoder.
+    private static readonly JsonSerializerOptions _compactOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    private static string Compact(JsonNode? node) => node?.ToJsonString(_compactOptions) ?? "";
 
     private static string? NullIfEmpty(StringBuilder sb) => sb.Length == 0 ? null : sb.ToString();
 }
