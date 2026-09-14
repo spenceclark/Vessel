@@ -1,6 +1,7 @@
 import type { RequestDetail } from '@/api/types'
 import { openAiImageSource } from './imageSource'
 import type { RenderBlock, RenderedView, RenderMessage } from './types'
+import { extractTools } from './tools'
 
 /**
  * D4 — `openai-responses`. Structurally different from `openai-chat`: request `input`
@@ -28,13 +29,10 @@ export function extractOpenAiResponsesRequest(detail: RequestDetail): RenderedVi
       }
     }
 
-    const params: { k: string; v: string }[] = []
-    if (Array.isArray(req.tools) && req.tools.length > 0) {
-      params.push({ k: 'tools', v: JSON.stringify(req.tools, null, 2) })
-    }
+    const tools = extractTools('openai-responses', req.tools)
 
-    if (messages.length === 0 && !system && params.length === 0) return null
-    return { system, messages, params }
+    if (messages.length === 0 && !system && tools.length === 0) return null
+    return { system, messages, params: [], tools }
   } catch {
     return null
   }

@@ -1,6 +1,7 @@
 import type { RequestDetail } from '@/api/types'
 import { anthropicImageSource } from './imageSource'
 import type { RenderBlock, RenderedView, RenderMessage } from './types'
+import { extractTools } from './tools'
 
 /**
  * D4 — `anthropic-messages`. `system` + `messages[]` content blocks (`tool_use`,
@@ -17,13 +18,10 @@ export function extractAnthropicRequest(detail: RequestDetail): RenderedView | n
     const messages: RenderMessage[] = (Array.isArray(req.messages) ? req.messages : [])
       .map((m: any) => toRenderMessage(m?.role ?? 'user', m?.content))
 
-    const params: { k: string; v: string }[] = []
-    if (Array.isArray(req.tools) && req.tools.length > 0) {
-      params.push({ k: 'tools', v: JSON.stringify(req.tools, null, 2) })
-    }
+    const tools = extractTools('anthropic-messages', req.tools)
 
-    if (messages.length === 0 && !system && params.length === 0) return null
-    return { system, messages, params }
+    if (messages.length === 0 && !system && tools.length === 0) return null
+    return { system, messages, params: [], tools }
   } catch {
     return null
   }

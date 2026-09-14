@@ -27,8 +27,31 @@ export interface RenderMessage {
   blocks: RenderBlock[]
 }
 
+export interface ToolParam {
+  name: string
+  type: string // 'string' | 'integer' | 'string | null' | 'object' | 'array<string>' | 'enum' …
+  required: boolean
+  description?: string
+  defaultJson?: string // JSON.stringify(default) when present
+  enumValues?: string[]
+  children?: ToolParam[] // nested object properties / array item object properties
+}
+
+// #81 — one declared tool, normalized across formats. Server tools (Anthropic
+// `web_search_20250305`, Responses `web_search_preview`, …) have no schema, only config.
+export interface ToolDef {
+  name: string
+  kind: 'function' | 'server' | 'unknown'
+  serverType?: string
+  description?: string
+  params: ToolParam[]
+  config?: { k: string; v: string }[]
+  rawJson: string
+}
+
 export interface RenderedView {
   system?: string
   messages: RenderMessage[]
   params: { k: string; v: string }[]
+  tools?: ToolDef[]
 }

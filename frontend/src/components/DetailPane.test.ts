@@ -198,3 +198,74 @@ describe('DetailPane — raw-stream fallback (R24)', () => {
     expect(screen.getAllByRole('button', { name: 'Compare' })).toHaveLength(4)
   })
 })
+
+describe('DetailPane — Tools tab (#81)', () => {
+  const withTools = detail({
+    id: 1,
+    format: 'anthropic-messages',
+    requestBody: {
+      text: JSON.stringify({
+        messages: [
+          { role: 'user', content: 'go' },
+          { role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: 'read_file', input: {} }] },
+          { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'x' }] },
+          {
+            role: 'assistant',
+            content: [
+              { type: 'tool_use', id: 'b', name: 'read_file', input: {} },
+              { type: 'server_tool_use', id: 's', name: 'web_search', input: { query: 'q' } },
+            ],
+          },
+        ],
+        tools: [
+          { name: 'read_file', description: 'Read a file', input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
+          { name: 'write_file', input_schema: { type: 'object', properties: {} } },
+          { type: 'web_search_20250305', name: 'web_search', max_uses: 3, allowed_domains: null },
+        ],
+      }),
+    },
+  })
+  const withoutTools = detail({ id: 2, format: 'anthropic-messages', requestBody: { text: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }) } })
+
+  function renderSwitchable() {
+    vi.spyOn(api, 'getRequest').mockImplementation(async (id: number) => (id === 1 ? withTools : withoutTools))
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } } })
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client: queryClient }, children)
+    const view = render(createElement(DetailPane, { id: 1 }), { wrapper })
+    return { rerender: (id: number) => view.rerender(createElement(DetailPane, { id })) }
+  }
+
+  it('hides the tab when the request declares no tools', async () => {
+    renderPane(withoutTools)
+    await screen.findByRole('tab', { name: 'Overview' })
+    expect(screen.queryByRole('tab', { name: /Tools/ })).toBeNull()
+  })
+
+  it('shows the tab with the tool count', async () => {
+    renderPane(withTools)
+    expect(await screen.findByRole('tab', { name: 'Tools (3)' })).toBeTruthy()
+  })
+
+  it('counts calls from prior tool_use and server_tool_use turns', async () => {
+    renderPane(withTools)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Tools (3)' }))
+
+    expect(screen.getByText('2 calls')).toBeTruthy() // read_file
+    expect(screen.getByText('0 calls')).toBeTruthy() // write_file
+    expect(screen.getByText('1 call')).toBeTruthy() // web_search (server tool)
+    expect(screen.getByText('server')).toBeTruthy()
+    expect(screen.getByText('max_uses')).toBeTruthy()
+    expect(screen.queryByText('allowed_domains')).toBeNull()
+  })
+
+  it('falls back to Overview when the selection changes to a request without tools', async () => {
+    const { rerender } = renderSwitchable()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Tools (3)' }))
+    expect(screen.getByRole('tab', { name: 'Tools (3)' }).getAttribute('aria-selected')).toBe('true')
+
+    rerender(2)
+
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Overview' }).getAttribute('aria-selected')).toBe('true'))
+    expect(screen.queryByRole('tab', { name: /Tools/ })).toBeNull()
+  })
+})

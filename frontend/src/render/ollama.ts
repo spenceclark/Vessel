@@ -2,6 +2,7 @@ import type { RequestDetail } from '@/api/types'
 import { formatMs } from '@/lib/format'
 import { ollamaImageSource } from './imageSource'
 import type { RenderBlock, RenderedView, RenderMessage } from './types'
+import { extractTools } from './tools'
 
 const METRIC_KEYS = [
   'done_reason',
@@ -46,8 +47,10 @@ export function extractOllamaRequest(detail: RequestDetail): RenderedView | null
       }
     }
 
-    if (messages.length === 0) return null
-    return { messages, params: [] }
+    const tools = detail.format === 'ollama-chat' ? extractTools('ollama-chat', req.tools) : []
+
+    if (messages.length === 0 && tools.length === 0) return null
+    return { messages, params: [], tools }
   } catch {
     return null
   }
