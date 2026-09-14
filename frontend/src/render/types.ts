@@ -15,12 +15,28 @@ export type ImageSource =
   | { kind: 'unknown' }
 
 export type RenderBlock =
-  | { kind: 'markdown'; text: string }
-  | { kind: 'text'; text: string }
+  | { kind: 'markdown'; text: string; citations?: Citation[] }
+  | { kind: 'text'; text: string; citations?: Citation[] }
   | { kind: 'image'; label: string; source: ImageSource }
-  | { kind: 'toolUse'; id?: string; name: string; argsJson: string }
+  | { kind: 'toolUse'; id?: string; name: string; argsJson: string; server?: boolean }
   | { kind: 'toolResult'; forId?: string; content: string }
+  // #82 — Anthropic server-tool results (`web_search_tool_result`, …). `items` is empty for
+  // tool types we don't have a shape for; `rawJson` always carries the block.
+  | { kind: 'serverToolResult'; forId?: string; toolType: string; error?: string; items: ServerToolItem[]; rawJson: string }
   | { kind: 'thinking'; text: string }
+
+export interface Citation {
+  url?: string
+  title?: string
+  citedText?: string
+}
+
+export interface ServerToolItem {
+  title?: string
+  url?: string
+  meta?: string
+  snippet?: string
+}
 
 export interface RenderMessage {
   role: string

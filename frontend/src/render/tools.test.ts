@@ -141,14 +141,14 @@ describe('extractTools', () => {
 })
 
 describe('countToolCalls', () => {
-  it('counts toolUse blocks and anthropic server_tool_use text blocks', () => {
+  it('counts toolUse blocks, including anthropic server tools', () => {
     const request = {
       messages: [
         {
           role: 'assistant',
           blocks: [
             { kind: 'toolUse' as const, name: 'read_file', argsJson: '{}' },
-            { kind: 'text' as const, text: JSON.stringify({ id: 's1', type: 'server_tool_use', name: 'web_search', input: {} }) },
+            { kind: 'toolUse' as const, id: 's1', name: 'web_search', argsJson: '{}', server: true },
           ],
         },
       ],

@@ -105,9 +105,9 @@ function joinTypes(parts: string[]): string {
 const BUILTIN_CALL = 'builtin:'
 
 /**
- * Calls per tool name across the request's prior turns and the response. Anthropic
- * `server_tool_use` and Responses built-in call items aren't typed by the renderers (they
- * fall through as JSON text), so they're read back from that text.
+ * Calls per tool name across the request's prior turns and the response. Responses
+ * built-in call items aren't typed by the renderers (they fall through as JSON text), so
+ * they're read back from that text.
  */
 export function countToolCalls(views: (RenderedView | null | undefined)[]): Map<string, number> {
   const counts = new Map<string, number>()
@@ -124,7 +124,7 @@ export function countToolCalls(views: (RenderedView | null | undefined)[]): Map<
 }
 
 function countRawItem(text: string, add: (key: string) => void) {
-  if (!text.includes('"server_tool_use"') && !text.includes('_call"')) return
+  if (!text.includes('_call"')) return
   let item: unknown
   try {
     item = JSON.parse(text)
@@ -133,7 +133,7 @@ function countRawItem(text: string, add: (key: string) => void) {
   }
   if (!isRecord(item) || typeof item.type !== 'string') return
 
-  if (item.type === 'server_tool_use' || item.type === 'custom_tool_call') {
+  if (item.type === 'custom_tool_call') {
     if (typeof item.name === 'string') add(item.name)
   } else if (item.type.endsWith('_call')) {
     add(BUILTIN_CALL + item.type.slice(0, -'_call'.length))
