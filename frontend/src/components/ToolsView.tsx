@@ -2,7 +2,7 @@ import { Fragment, useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
 import type { RenderedView } from '@/render'
 import type { ToolDef, ToolParam } from '@/render/types'
-import { countToolCalls } from '@/render/tools'
+import { countToolCalls, toolCallCount } from '@/render/tools'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { PrettyJson } from '@/components/PrettyJson'
@@ -39,7 +39,7 @@ export function ToolsView({
         <Input icon={<Search />} placeholder="Filter tools" aria-label="Filter tools" value={filter} onChange={(e) => setFilter(e.target.value)} />
       )}
       {shown.map(({ tool, index }) => (
-        <ToolCard key={index} tool={tool} calls={callCounts.get(tool.name) ?? 0} />
+        <ToolCard key={index} tool={tool} calls={toolCallCount(tool, callCounts)} />
       ))}
       {shown.length === 0 && <div className="text-sm text-text-muted">No tools match.</div>}
     </div>

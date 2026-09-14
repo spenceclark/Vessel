@@ -167,7 +167,7 @@ Settings merge shallowly â€” model, then agent, then `run(..., model_settings=â€
 later `extra_headers` replaces an earlier one rather than adding to it. Send the session
 and tag together at whichever level you set them: a new session per run means passing
 both headers to `run`. A two-agent example (one delegating to the other) is in
-[`docs/examples/pydantic_ai.py`](docs/examples/pydantic_ai.py).
+[`docs/examples/pydantic_ai_example.py`](docs/examples/pydantic_ai_example.py).
 
 ## Query your traffic from AI tools (MCP)
 

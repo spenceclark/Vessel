@@ -100,30 +100,56 @@ function joinTypes(parts: string[]): string {
   return parts.length === 0 || parts.includes('unknown') ? 'unknown' : parts.join(' | ')
 }
 
+// Responses built-in call items (`web_search_call`, `file_search_call`, …) carry no tool
+// name, so they're counted under their base type and matched to the declared tool's type.
+const BUILTIN_CALL = 'builtin:'
+
 /**
  * Calls per tool name across the request's prior turns and the response. Anthropic
- * `server_tool_use` blocks aren't typed by the renderer (they fall through as JSON text),
- * so their name is read back from that text.
+ * `server_tool_use` and Responses built-in call items aren't typed by the renderers (they
+ * fall through as JSON text), so they're read back from that text.
  */
 export function countToolCalls(views: (RenderedView | null | undefined)[]): Map<string, number> {
   const counts = new Map<string, number>()
-  const add = (name: string) => counts.set(name, (counts.get(name) ?? 0) + 1)
+  const add = (key: string) => counts.set(key, (counts.get(key) ?? 0) + 1)
   for (const view of views) {
     for (const message of view?.messages ?? []) {
       for (const block of message.blocks) {
         if (block.kind === 'toolUse') add(block.name)
-        else if (block.kind === 'text' && block.text.includes('"server_tool_use"')) {
-          try {
-            const parsed = JSON.parse(block.text)
-            if (parsed?.type === 'server_tool_use' && typeof parsed.name === 'string') add(parsed.name)
-          } catch {
-            // Not a JSON block.
-          }
-        }
+        else if (block.kind === 'text') countRawItem(block.text, add)
       }
     }
   }
   return counts
+}
+
+function countRawItem(text: string, add: (key: string) => void) {
+  if (!text.includes('"server_tool_use"') && !text.includes('_call"')) return
+  let item: unknown
+  try {
+    item = JSON.parse(text)
+  } catch {
+    return
+  }
+  if (!isRecord(item) || typeof item.type !== 'string') return
+
+  if (item.type === 'server_tool_use' || item.type === 'custom_tool_call') {
+    if (typeof item.name === 'string') add(item.name)
+  } else if (item.type.endsWith('_call')) {
+    add(BUILTIN_CALL + item.type.slice(0, -'_call'.length))
+  }
+}
+
+/** Calls for one declared tool: by name, plus built-in call items whose base type matches (`web_search` → `web_search_preview`). */
+export function toolCallCount(tool: ToolDef, counts: Map<string, number>): number {
+  let calls = counts.get(tool.name) ?? 0
+  if (tool.kind !== 'server' || !tool.serverType) return calls
+  for (const [key, n] of counts) {
+    if (!key.startsWith(BUILTIN_CALL)) continue
+    const base = key.slice(BUILTIN_CALL.length)
+    if (tool.serverType === base || tool.serverType.startsWith(`${base}_`)) calls += n
+  }
+  return calls
 }
 
 function str(v: unknown): string | undefined {

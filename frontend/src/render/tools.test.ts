@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { countToolCalls, extractTools } from './tools'
+import { countToolCalls, extractTools, toolCallCount } from './tools'
 import { extractAnthropicRequest } from './anthropic'
-import { extractOpenAiResponsesRequest } from './openaiResponses'
+import { extractOpenAiResponsesRequest, extractOpenAiResponsesResponse } from './openaiResponses'
 import type { RequestDetail } from '@/api/types'
 
 /** #81 — declared tool lists normalized into structured defs for the Tools tab. */
@@ -158,6 +158,40 @@ describe('countToolCalls', () => {
     const counts = countToolCalls([request, response, null])
     expect(counts.get('read_file')).toBe(2)
     expect(counts.get('web_search')).toBe(1)
+  })
+})
+
+describe('toolCallCount — Responses built-in tools (PR #86 review)', () => {
+  it('maps built-in call items from input and output back to the declared tools', () => {
+    const d = {
+      ...detail('openai-responses', {
+        input: [
+          { role: 'user', content: 'find it' },
+          { type: 'web_search_call', id: 'ws0', status: 'completed', action: { type: 'search', query: 'earlier' } },
+        ],
+        tools: [
+          { type: 'web_search_preview' },
+          { type: 'file_search', vector_store_ids: ['vs_1'] },
+          { type: 'computer_use_preview', display_width: 1024 },
+          { type: 'function', name: 'web_search', parameters: {} },
+        ],
+      }),
+      responseBody: {
+        text: JSON.stringify({
+          output: [
+            { type: 'web_search_call', id: 'ws1', status: 'completed' },
+            { type: 'file_search_call', id: 'fs1', status: 'completed', queries: ['q'] },
+            { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'done' }] },
+          ],
+        }),
+      },
+    }
+    const request = extractOpenAiResponsesRequest(d)
+    const counts = countToolCalls([request, extractOpenAiResponsesResponse(d)])
+    const calls = request!.tools!.map((t) => [t.name, toolCallCount(t, counts)])
+
+    // The same-named function tool isn't credited with the built-in's calls.
+    expect(calls).toEqual([['web_search_preview', 2], ['file_search', 1], ['computer_use_preview', 0], ['web_search', 0]])
   })
 })
 
