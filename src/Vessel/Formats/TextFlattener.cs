@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Vessel.Formats;
@@ -6,8 +8,9 @@ namespace Vessel.Formats;
 /// <summary>
 /// D9 — flattens prompts and responses into plain text for FTS and list preview (not for
 /// display). Text blocks verbatim; tool definitions skipped; tool-use/tool-result blocks
-/// contribute name + stringified args/result; images contribute nothing (base64 never
-/// enters FTS). Reasoning/thinking text is included. Empty results collapse to null so
+/// contribute name + stringified args/result; Anthropic server-tool blocks contribute the
+/// call input, search result titles/URLs, and fetched document text (never
+/// <c>encrypted_*</c> fields); images contribute nothing (base64 never enters FTS). Reasoning/thinking text is included. Empty results collapse to null so
 /// the FTS row is skipped.
 /// </summary>
 public static class TextFlattener
@@ -317,12 +320,104 @@ public static class TextFlattener
                 case "tool_result":
                     Append(sb, $"[tool_result] {FlattenContent(obj?["content"])}".Trim());
                     break;
+                case "server_tool_use":
+                    Append(sb, $"[server_tool_use {JsonUtil.Str(obj?["name"])}] {Compact(obj?["input"])}".Trim());
+                    break;
+                case "web_search_tool_result":
+                    AppendWebSearchResult(sb, obj?["content"]);
+                    break;
+                case "web_fetch_tool_result":
+                    AppendWebFetchResult(sb, JsonUtil.Object(obj?["content"]));
+                    break;
+                case string type when type.EndsWith("_tool_result", StringComparison.Ordinal):
+                    Append(sb, $"[{type}] {CompactWithoutEncrypted(obj?["content"])}".Trim());
+                    break;
 
                 // image / image_url / input_audio and unknown parts contribute nothing.
             }
         }
 
         return sb.Length == 0 ? null : sb.ToString();
+    }
+
+    // #83 — Anthropic server-tool results. `encrypted_content` is an opaque provider blob and
+    // never enters FTS.
+    private static void AppendWebSearchResult(StringBuilder sb, JsonNode? content)
+    {
+        if (ErrorCode(content) is string error)
+        {
+            Append(sb, $"[web_search_error] {error}".Trim());
+            return;
+        }
+
+        foreach (JsonNode? result in JsonUtil.Array(content) ?? [])
+        {
+            JsonObject? r = JsonUtil.Object(result);
+            Append(sb, $"[web_search_result] {JsonUtil.Str(r?["title"])} — {JsonUtil.Str(r?["url"])}".Trim());
+        }
+    }
+
+    // The fetched document's text is included in full (issue #83 decision (a)); MCP output is
+    // already windowed, and tool_result content is indexed in full too.
+    private static void AppendWebFetchResult(StringBuilder sb, JsonObject? content)
+    {
+        if (ErrorCode(content) is string error)
+        {
+            Append(sb, $"[web_fetch_error] {error}".Trim());
+            return;
+        }
+
+        JsonObject? document = JsonUtil.Object(content?["content"]);
+        Append(sb, $"[web_fetch_result] {JsonUtil.Str(content?["url"])} — {JsonUtil.Str(document?["title"])}".Trim());
+
+        JsonObject? source = JsonUtil.Object(document?["source"]);
+        if (JsonUtil.Str(source?["type"]) == "text")
+        {
+            Append(sb, JsonUtil.Str(source?["data"]));
+        }
+    }
+
+    private static string? ErrorCode(JsonNode? content)
+    {
+        JsonObject? obj = JsonUtil.Object(content);
+        return JsonUtil.Str(obj?["type"])?.EndsWith("_error", StringComparison.Ordinal) == true
+            ? JsonUtil.Str(obj?["error_code"]) ?? ""
+            : null;
+    }
+
+    private static string CompactWithoutEncrypted(JsonNode? node)
+    {
+        if (node is null)
+        {
+            return "";
+        }
+
+        JsonNode copy = node.DeepClone();
+        RemoveEncrypted(copy);
+        return Compact(copy);
+    }
+
+    private static void RemoveEncrypted(JsonNode? node)
+    {
+        if (node is JsonObject obj)
+        {
+            foreach (string key in obj.Select(p => p.Key).Where(k => k.StartsWith("encrypted_", StringComparison.Ordinal)).ToList())
+            {
+                obj.Remove(key);
+            }
+
+            foreach ((string _, JsonNode? child) in obj)
+            {
+                RemoveEncrypted(child);
+            }
+        }
+        else if (node is JsonArray array)
+        {
+            foreach (JsonNode? child in array)
+            {
+                RemoveEncrypted(child);
+            }
+        }
     }
 
     private static void AppendToolCalls(StringBuilder sb, JsonNode? toolCalls)
@@ -368,7 +463,12 @@ public static class TextFlattener
         sb.Append(text);
     }
 
-    private static string Compact(JsonNode? node) => node?.ToJsonString() ?? "";
+    // The default encoder writes non-ASCII as \uXXXX escapes, which FTS can't match (`café`
+    // would index as `café`). This text is never embedded in HTML, so relaxed escaping
+    // is safe. ponytail: characters outside the BMP (emoji) are still escaped by this encoder.
+    private static readonly JsonSerializerOptions _compactOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    private static string Compact(JsonNode? node) => node?.ToJsonString(_compactOptions) ?? "";
 
     private static string? NullIfEmpty(StringBuilder sb) => sb.Length == 0 ? null : sb.ToString();
 }

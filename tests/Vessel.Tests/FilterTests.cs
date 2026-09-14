@@ -183,6 +183,70 @@ public class FilterTests
         Assert.Equal([responseRow.Id], RowIds(await ListAsync(fx, "q=zzresponseneedle")));
     }
 
+    // #83 — server-tool activity in the conversation is searchable: the query the agent
+    // searched and the URL it fetched both land in the FTS row.
+    [Fact]
+    public async Task Fts_MatchesAnthropicServerToolQueryAndFetchedUrl()
+    {
+        await using VesselFixture fx = await NewFixtureAsync();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{fx.VesselBaseUrl}/v1/messages?servertoolcase")
+        {
+            Content = new StringContent(
+                """
+                {"model":"claude-haiku-4-5","max_tokens":10,"messages":[
+                  {"role":"user","content":"look it up"},
+                  {"role":"assistant","content":[
+                    {"type":"server_tool_use","id":"s1","name":"web_search","input":{"query":"zzsearchedterm"}},
+                    {"type":"web_search_tool_result","tool_use_id":"s1","content":[{"type":"web_search_result","title":"T","url":"https://a.example","encrypted_content":"zzencryptedblob"}]},
+                    {"type":"server_tool_use","id":"s2","name":"web_fetch","input":{"url":"https://zzfetchedhost.example/page"}},
+                    {"type":"web_fetch_tool_result","tool_use_id":"s2","content":{"type":"web_fetch_result","url":"https://zzfetchedhost.example/page","content":{"type":"document","source":{"type":"text","data":"zzfetchedbody"},"title":"Page"}}}
+                  ]},
+                  {"role":"user","content":"thanks"}
+                ]}
+                """,
+                Encoding.UTF8, "application/json"),
+        };
+        await fx.Client.SendAsync(request, CT);
+
+        CapturedRow row = await CaptureDb.WaitForRow(fx.DbPath, r => r.Path.Contains("servertoolcase"));
+
+        Assert.Equal([row.Id], RowIds(await ListAsync(fx, "q=zzsearchedterm")));
+        Assert.Equal([row.Id], RowIds(await ListAsync(fx, "q=zzfetchedhost")));
+        Assert.Equal([row.Id], RowIds(await ListAsync(fx, "q=zzfetchedbody")));
+        Assert.Empty(RowIds(await ListAsync(fx, "q=zzencryptedblob")));
+    }
+
+    // PR #89 review — a non-ASCII server-tool query must be findable by the same term, not
+    // only by its \uXXXX-escaped form.
+    [Fact]
+    public async Task Fts_MatchesNonAsciiServerToolQuery()
+    {
+        await using VesselFixture fx = await NewFixtureAsync();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{fx.VesselBaseUrl}/v1/messages?nonasciitoolcase")
+        {
+            Content = new StringContent(
+                """
+                {"model":"claude-haiku-4-5","max_tokens":10,"messages":[
+                  {"role":"user","content":"look it up"},
+                  {"role":"assistant","content":[
+                    {"type":"server_tool_use","id":"s1","name":"web_search","input":{"query":"zzcafé"}},
+                    {"type":"code_execution_tool_result","tool_use_id":"s2","content":{"stdout":"日本語"}}
+                  ]},
+                  {"role":"user","content":"thanks"}
+                ]}
+                """,
+                Encoding.UTF8, "application/json"),
+        };
+        await fx.Client.SendAsync(request, CT);
+
+        CapturedRow row = await CaptureDb.WaitForRow(fx.DbPath, r => r.Path.Contains("nonasciitoolcase"));
+
+        Assert.Equal([row.Id], RowIds(await ListAsync(fx, "q=" + Uri.EscapeDataString("zzcafé"))));
+        Assert.Equal([row.Id], RowIds(await ListAsync(fx, "q=" + Uri.EscapeDataString("日本語"))));
+    }
+
     // V2: hostile input must never surface an FTS syntax error — every operator becomes
     // literal text once quoted.
     [Fact]
