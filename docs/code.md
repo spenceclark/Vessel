@@ -87,7 +87,8 @@ configured budget), sniff format (`FormatDetector`: URL path first, then payload
 configured backend `type` is only a hint), run the adapter, then estimate missing
 token counts (`TokenEstimator`, chars/4, flagged), compute tok/s (Ollama's exact
 `eval_count/eval_duration` when present, else wire-span for streamed rows, else null),
-and assemble warnings. `IFormatAdapter` implementations — `OpenAiChatAdapter`,
+and assemble warnings (`ToolCallInTextDetector` and `RepetitionDetector` over the response
+text; `slow_ttft` / `slow_response` from the configured thresholds). `IFormatAdapter` implementations — `OpenAiChatAdapter`,
 `OpenAiResponsesAdapter`, `AnthropicMessagesAdapter`, `OllamaAdapter` (chat and
 generate modes) — fold SSE/NDJSON streams back into a reassembled message
 (`SseParser`, `NdjsonParser`) and extract model, tokens (incl. cache read/write),

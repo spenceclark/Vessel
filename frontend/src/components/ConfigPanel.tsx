@@ -163,6 +163,7 @@ export function ConfigPanel() {
     if (config.retention.maxDbSizeMb <= 0) return 'Max DB size (MB) must be positive.'
     if (config.capture.maxBodyMb <= 0) return 'Max body size (MB) must be positive.'
     if (config.warnings.slowTtftMs < 0) return 'Slow TTFT threshold cannot be negative.'
+    if (config.warnings.slowResponseMs < 0) return 'Slow response threshold cannot be negative.'
     return null
   }
 
@@ -305,6 +306,11 @@ export function ConfigPanel() {
             label="Slow TTFT threshold (ms)"
             value={draft.warnings.slowTtftMs}
             onChange={(v) => setDraft((d) => (d ? { ...d, warnings: { ...d.warnings, slowTtftMs: v } } : d))}
+          />
+          <NumberField
+            label="Slow response threshold (ms)"
+            value={draft.warnings.slowResponseMs}
+            onChange={(v) => setDraft((d) => (d ? { ...d, warnings: { ...d.warnings, slowResponseMs: v } } : d))}
           />
         </div>
       </div>

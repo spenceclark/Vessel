@@ -386,4 +386,19 @@ public class ConfigLoaderTests : IDisposable
         (VesselConfig config, _) = ConfigLoader.LoadOrCreate(path);
         Assert.Equal("Ollama", config.DefaultBackend);
     }
+    [Fact]
+    public void NegativeSlowResponseMs_Throws()
+    {
+        string path = PathFor("vessel.json");
+        File.WriteAllText(path, """
+            {
+              "defaultBackend": "ollama",
+              "backends": { "ollama": { "baseUrl": "http://localhost:11434" } },
+              "warnings": { "slowResponseMs": -1 }
+            }
+            """);
+
+        var ex = Assert.Throws<ConfigException>(() => ConfigLoader.LoadOrCreate(path));
+        Assert.Contains("warnings.slowResponseMs", ex.Message);
+    }
 }

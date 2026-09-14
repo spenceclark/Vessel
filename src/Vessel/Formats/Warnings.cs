@@ -37,6 +37,19 @@ public static class Warnings
     /// <summary>Time to first token exceeded the configured threshold (not explained by a cold load).</summary>
     public const string SlowTtft = "slow_ttft";
 
+    /// <summary>
+    /// A non-streamed response's total duration exceeded the configured threshold. There's no
+    /// TTFT to split it, so the time includes any queueing at the backend (a single-parallel
+    /// Ollama serves concurrent requests one after another).
+    /// </summary>
+    public const string SlowResponse = "slow_response";
+
+    /// <summary>
+    /// The tail of the response text is degenerate looping output (e.g. <c>1/1/1/…</c>) —
+    /// see <c>RepetitionDetector</c>. Detection only.
+    /// </summary>
+    public const string RepetitiveOutput = "repetitive_output";
+
     /// <summary>Vessel added <c>stream_options.include_usage</c> to this request (D11) — the stored
     /// request bytes are the client's originals; this marks why a usage chunk appeared.</summary>
     public const string UsageInjected = "usage_injected";
@@ -63,8 +76,8 @@ public static class Warnings
     private static readonly string[] _order =
     [
         TruncatedResponse, HttpError, ProxyError, ClientDisconnect, TokensEstimated,
-        StreamIncomplete, ParseError, BodyTruncated, ColdLoad, SlowTtft, UsageInjected,
-        ToolCallInText, PathMissingV1,
+        StreamIncomplete, ParseError, BodyTruncated, ColdLoad, SlowTtft, SlowResponse, UsageInjected,
+        ToolCallInText, RepetitiveOutput, PathMissingV1,
     ];
 
     /// <summary>Deduplicates and orders codes into the canonical sequence for storage.</summary>
