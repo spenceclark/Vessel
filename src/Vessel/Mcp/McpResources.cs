@@ -33,8 +33,7 @@ public sealed class McpResources
     [Description("One session marker with its totals and its 20 most recent requests.")]
     public static string Session(SqliteReadStore store, long id)
     {
-        SessionInfo session = store.ListSessions().FirstOrDefault(s => s.Id == id)
-            ?? throw NotFound($"vessel://sessions/{id}");
+        SessionInfo session = store.GetSession(id) ?? throw NotFound($"vessel://sessions/{id}");
         McpSearchRow[] recent = store.ListRequests(SessionRecentRequests, before: null, id, includePreview: true)
             .Rows.Select(McpTools.SearchRow).ToArray();
         return JsonSerializer.Serialize(

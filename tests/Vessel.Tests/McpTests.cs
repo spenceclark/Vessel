@@ -276,6 +276,52 @@ public sealed class McpTests
             () => client.ReadResourceAsync("vessel://sessions/999999", cancellationToken: CT).AsTask());
     }
 
+    // #87 review — a retained session older than list_sessions' 500-marker window is still
+    // readable by URI; the cap only bounds discovery.
+    [Fact]
+    public async Task M7b_SessionResource_ReadsRetainedSessionOutsideListingWindow()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        long oldSession = InsertSessions(vessel.DbPath, SessionLimits.MaxMarkers + 1);
+        Seed(vessel.DbPath, oldSession, "stub", "old-session-model", [], 200, null, null, "old prompt", "old answer");
+
+        await using McpClient client = await Connect(vessel.BaseUrl);
+        IList<McpClientResource> resources = await client.ListResourcesAsync(cancellationToken: CT);
+        Assert.DoesNotContain($"vessel://sessions/{oldSession}", resources.Select(r => r.Uri));
+
+        ReadResourceResult read = await client.ReadResourceAsync($"vessel://sessions/{oldSession}", cancellationToken: CT);
+        using JsonDocument session = JsonDocument.Parse(Assert.IsType<TextResourceContents>(Assert.Single(read.Contents)).Text);
+        Assert.Equal(oldSession, session.RootElement.GetProperty("session").GetProperty("id").GetInt64());
+        Assert.Equal(1, session.RootElement.GetProperty("session").GetProperty("requestCount").GetInt64());
+        Assert.Equal(1, session.RootElement.GetProperty("recentRequests").GetArrayLength());
+    }
+
+    /// <summary>Inserts <paramref name="count"/> non-current session markers; returns the oldest id.</summary>
+    private static long InsertSessions(string dbPath, int count)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+        }.ToString());
+        connection.Open();
+        using SqliteTransaction transaction = connection.BeginTransaction();
+        long? oldest = null;
+        for (int i = 0; i < count; i++)
+        {
+            using SqliteCommand command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "INSERT INTO sessions (started_at, name, is_current) VALUES ($started, $name, 0) RETURNING id";
+            command.Parameters.AddWithValue("$started", DateTime.UtcNow.ToString("O"));
+            command.Parameters.AddWithValue("$name", $"bulk {i}");
+            long id = Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+            oldest ??= id;
+        }
+
+        transaction.Commit();
+        return oldest!.Value;
+    }
+
     [Fact]
     public async Task M5_McpEnabled_LiveConfigGateAndStatus_LeaveProxyUnaffected()
     {
