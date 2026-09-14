@@ -150,6 +150,25 @@ graph.invoke(state, config={'configurable': {'thread_id': thread_id},
 `client_kwargs`; for `ainvoke`, give the async client an `async def` hook. A complete
 four-agent LangGraph example is in [`docs/examples/langgraph.py`](docs/examples/langgraph.py).
 
+### From Pydantic AI
+
+Pydantic AI sends per-request headers through `extra_headers` in model settings, so tags
+and sessions are plain headers — set them on each agent, even when agents share a model:
+
+```python
+session_id = str(uuid.uuid4())
+model = OpenAIChatModel('llama3.2', provider=OllamaProvider(base_url='http://127.0.0.1:4550/v1'))
+
+planner = Agent(model, model_settings={'extra_headers': {
+    'X-Vessel-Session': session_id, 'X-Vessel-Tags': 'planner'}})
+```
+
+Settings merge shallowly — model, then agent, then `run(..., model_settings=…)` — so a
+later `extra_headers` replaces an earlier one rather than adding to it. Send the session
+and tag together at whichever level you set them: a new session per run means passing
+both headers to `run`. A two-agent example (one delegating to the other) is in
+[`docs/examples/pydantic_ai.py`](docs/examples/pydantic_ai.py).
+
 ## Query your traffic from AI tools (MCP)
 
 Vessel serves a read-only [MCP](https://modelcontextprotocol.io) endpoint, so tools
