@@ -44,17 +44,54 @@ export function ToolCallCard({
           <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-text-muted" strokeWidth={1.75} />
         )}
       </button>
-      {!collapsed && (
-        <pre
-          className={cn(
-            'max-h-64 overflow-auto whitespace-pre-wrap break-words border-t border-border px-2 py-1.5 font-mono text-xs text-text',
-          )}
-        >
-          {prettyOrRaw(content)}
-        </pre>
-      )}
+      {!collapsed && <ToolContent content={content} />}
     </div>
   )
+}
+
+const BODY_CLASS = 'max-h-64 overflow-auto border-t border-border px-2 py-1.5 font-mono text-xs text-text'
+
+/**
+ * #85 — a plain JSON object renders as a field list so multi-line strings (`code`,
+ * `stdout`, …) show real newlines instead of escaped `\n`. Top level only; anything else
+ * (arrays, primitives, unparseable text) stays pretty-printed or verbatim.
+ */
+function ToolContent({ content }: { content: string }) {
+  const fields = objectFields(content)
+  if (!fields) {
+    return <pre className={cn(BODY_CLASS, 'whitespace-pre-wrap break-words')}>{prettyOrRaw(content)}</pre>
+  }
+
+  return (
+    <div className={cn(BODY_CLASS, 'flex flex-col gap-1.5')}>
+      {fields.map(([key, value]) => {
+        // Strings verbatim; an empty string still shows as `""` so it isn't mistaken for missing.
+        const text = typeof value === 'string' && value !== '' ? value : JSON.stringify(value, null, 2)
+        return text.includes('\n') ? (
+          <div key={key}>
+            <div className="text-text-muted">{key}</div>
+            <pre className="whitespace-pre-wrap break-words pl-3">{text}</pre>
+          </div>
+        ) : (
+          <div key={key} className="flex gap-3">
+            <span className="shrink-0 text-text-muted">{key}</span>
+            <pre className="min-w-0 whitespace-pre-wrap break-words">{text}</pre>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function objectFields(content: string): [string, unknown][] | null {
+  try {
+    const parsed: unknown = JSON.parse(content)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+    const entries = Object.entries(parsed)
+    return entries.length > 0 ? entries : null
+  } catch {
+    return null
+  }
 }
 
 /**
