@@ -42,6 +42,7 @@ function isValidBlock(b: unknown): b is RenderBlock {
   switch (b.kind) {
     case 'markdown':
     case 'text':
+      return typeof b.text === 'string' && (b.citations === undefined || isArrayOfOptionalStrings(b.citations, ['url', 'title', 'citedText']))
     case 'thinking':
       return typeof b.text === 'string'
     case 'image':
@@ -50,10 +51,19 @@ function isValidBlock(b: unknown): b is RenderBlock {
       return (
         typeof b.name === 'string' &&
         typeof b.argsJson === 'string' &&
-        (b.id === undefined || typeof b.id === 'string')
+        (b.id === undefined || typeof b.id === 'string') &&
+        (b.server === undefined || typeof b.server === 'boolean')
       )
     case 'toolResult':
       return typeof b.content === 'string' && (b.forId === undefined || typeof b.forId === 'string')
+    case 'serverToolResult':
+      return (
+        typeof b.toolType === 'string' &&
+        typeof b.rawJson === 'string' &&
+        (b.forId === undefined || typeof b.forId === 'string') &&
+        (b.error === undefined || typeof b.error === 'string') &&
+        isArrayOfOptionalStrings(b.items, ['title', 'url', 'meta', 'snippet'])
+      )
     default:
       return false
   }
@@ -71,6 +81,10 @@ function isValidImageSource(s: unknown): boolean {
     default:
       return false
   }
+}
+
+function isArrayOfOptionalStrings(v: unknown, keys: string[]): boolean {
+  return Array.isArray(v) && v.every((x) => isRecord(x) && keys.every((k) => x[k] === undefined || typeof x[k] === 'string'))
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

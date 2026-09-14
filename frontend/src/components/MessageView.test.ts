@@ -101,6 +101,44 @@ describe('MessageView — captured-content resource policy', () => {
   })
 })
 
+describe('MessageView — server tool results (#82)', () => {
+  const serverResult: RenderedView = view({
+    messages: [
+      {
+        role: 'assistant',
+        blocks: [
+          {
+            kind: 'serverToolResult',
+            forId: 's1',
+            toolType: 'web_search',
+            items: [{ title: 'Example page', url: 'http://127.0.0.1:9/page', meta: '2 days ago' }],
+            rawJson: '{}',
+          },
+        ],
+      },
+    ],
+  })
+
+  it('renders the result card collapsed by default', () => {
+    render(createElement(MessageView, { view: serverResult }))
+
+    expect(screen.getByText('web_search · 1 result')).toBeTruthy()
+    expect(screen.queryByText('Example page')).toBeNull()
+  })
+
+  it('renders result URLs as text, never as links', () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    render(createElement(MessageView, { view: serverResult }))
+
+    fireEvent.click(screen.getByText('web_search · 1 result'))
+
+    expect(screen.getByText('Example page')).toBeTruthy()
+    expect(screen.getByText('http://127.0.0.1:9/page')).toBeTruthy()
+    expect(document.querySelectorAll('a').length).toBe(0)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
+
 /**
  * ui-spec.md §9.1 — "pretty-print JSON-only text blocks": whole-block only. A block
  * counts as JSON here only if its *entire* trimmed text parses as one JSON object or

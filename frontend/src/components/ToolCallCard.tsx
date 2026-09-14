@@ -1,6 +1,10 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Reply, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { PrettyJson } from '@/components/PrettyJson'
+import type { ServerToolItem } from '@/render/types'
 
 /**
  * D4 — a tool call (use) or its result, collapsible. `kind="use"` and `kind="result"`
@@ -12,11 +16,13 @@ export function ToolCallCard({
   id,
   name,
   content,
+  server,
 }: {
   kind: 'use' | 'result'
   id?: string
   name?: string
   content: string
+  server?: boolean
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const Icon = kind === 'use' ? Wrench : Reply
@@ -30,6 +36,7 @@ export function ToolCallCard({
       >
         <Icon className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.75} />
         <span className="font-medium text-text">{kind === 'use' ? (name ?? 'tool call') : 'tool result'}</span>
+        {server && <Badge variant="info">server</Badge>}
         {id && <span className="truncate font-mono text-text-muted">#{id}</span>}
         {collapsed ? (
           <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-text-muted" strokeWidth={1.75} />
@@ -45,6 +52,79 @@ export function ToolCallCard({
         >
           {prettyOrRaw(content)}
         </pre>
+      )}
+    </div>
+  )
+}
+
+/**
+ * #82 — an Anthropic server-tool result (`web_search`, `web_fetch`, …), collapsed by
+ * default since a single search can carry many results. R03/R18: URLs are plain text,
+ * never links or fetched.
+ */
+export function ServerToolResultCard({
+  forId,
+  toolType,
+  error,
+  items,
+  rawJson,
+}: {
+  forId?: string
+  toolType: string
+  error?: string
+  items: ServerToolItem[]
+  rawJson: string
+}) {
+  const [collapsed, setCollapsed] = useState(true)
+  const [raw, setRaw] = useState(false)
+
+  return (
+    <div className="rounded-control border border-border bg-surface-2">
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs"
+      >
+        <Reply className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.75} />
+        <span className="font-medium text-text">
+          {toolType}
+          {!error && items.length > 0 && ` · ${items.length} ${items.length === 1 ? 'result' : 'results'}`}
+        </span>
+        {error && <Badge variant="danger">{error}</Badge>}
+        {forId && <span className="truncate font-mono text-text-muted">#{forId}</span>}
+        {collapsed ? (
+          <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-text-muted" strokeWidth={1.75} />
+        ) : (
+          <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-text-muted" strokeWidth={1.75} />
+        )}
+      </button>
+      {!collapsed && (
+        <div className="flex flex-col items-start gap-2 border-t border-border px-2 py-1.5 text-xs">
+          {items.length > 0 && (
+            <ol className="flex w-full flex-col gap-2">
+              {items.map((item, i) => (
+                <li key={i} className="flex flex-col gap-0.5">
+                  {item.title && <span className="font-medium text-text">{item.title}</span>}
+                  {item.url && <span className="break-all font-mono text-text-muted">{item.url}</span>}
+                  {item.meta && <span className="text-text-muted">{item.meta}</span>}
+                  {item.snippet && (
+                    <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-text-secondary">
+                      {item.snippet}
+                    </pre>
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
+          <Button variant="ghost" onClick={() => setRaw((r) => !r)}>
+            {raw ? 'Hide raw' : 'Raw'}
+          </Button>
+          {raw && (
+            <div className="w-full">
+              <PrettyJson body={{ text: rawJson }} />
+            </div>
+          )}
+        </div>
       )}
     </div>
   )

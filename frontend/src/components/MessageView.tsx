@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 import type { ImageSource, RenderBlock, RenderedView, RenderMessage } from '@/render'
 import { tryPrettyJson } from '@/render/prettyJson'
 import { Badge } from '@/components/ui/badge'
-import { ToolCallCard } from '@/components/ToolCallCard'
+import { ServerToolResultCard, ToolCallCard } from '@/components/ToolCallCard'
 
 const CLAMP_LENGTH = 4000
 
@@ -40,6 +40,11 @@ export function MessageView({ view }: { view: RenderedView }) {
 }
 
 function MessageCard({ message }: { message: RenderMessage }) {
+  // #82 — citations are numbered across the whole message and listed once at the end.
+  const blockCitations = message.blocks.map((b) => ((b.kind === 'markdown' || b.kind === 'text') && b.citations) || [])
+  const citations = blockCitations.flat()
+  const citeStarts = blockCitations.map((_, i) => blockCitations.slice(0, i).reduce((n, c) => n + c.length, 0))
+
   return (
     <Card role={message.role}>
       {message.blocks.length === 0 ? (
@@ -47,8 +52,22 @@ function MessageCard({ message }: { message: RenderMessage }) {
       ) : (
         <div className="flex flex-col gap-2">
           {message.blocks.map((block, i) => (
-            <Block key={i} block={block} />
+            <Block key={i} block={block} citeStart={citeStarts[i]} />
           ))}
+          {citations.length > 0 && (
+            <ol className="flex flex-col gap-1 border-t border-border pt-2 text-xs">
+              {citations.map((c, i) => (
+                <li key={i} className="flex flex-col gap-0.5">
+                  <span>
+                    <span className="text-text-muted">[{i + 1}]</span>{' '}
+                    <span className="text-text">{c.title ?? c.url ?? 'source'}</span>
+                    {c.title && c.url && <span className="break-all font-mono text-text-muted"> · {c.url}</span>}
+                  </span>
+                  {c.citedText && <span className="line-clamp-2 pl-5 text-text-muted">"{c.citedText}"</span>}
+                </li>
+              ))}
+            </ol>
+          )}
         </div>
       )}
     </Card>
@@ -64,16 +83,24 @@ function Card({ role, children }: { role: string; children: ReactNode }) {
   )
 }
 
-function Block({ block }: { block: RenderBlock }) {
+function Block({ block, citeStart }: { block: RenderBlock; citeStart: number }) {
   switch (block.kind) {
     case 'markdown': {
       const pretty = tryPrettyJson(block.text)
-      return pretty !== null ? <JsonBlock text={pretty} /> : <ClampedMarkdown text={block.text} />
+      if (pretty !== null) return <JsonBlock text={pretty} />
+      // Escaped so markdown renders a literal `[n]` rather than parsing a link reference.
+      const markers = block.citations?.map((_, i) => `\\[${citeStart + i + 1}\\]`).join('')
+      return <ClampedMarkdown text={markers ? `${block.text.trimEnd()} ${markers}` : block.text} />
     }
     case 'text': {
       const pretty = tryPrettyJson(block.text)
       if (pretty !== null) return <JsonBlock text={pretty} />
-      return <pre className="whitespace-pre-wrap break-words font-mono text-base text-text">{block.text}</pre>
+      const markers = block.citations?.map((_, i) => `[${citeStart + i + 1}]`).join('')
+      return (
+        <pre className="whitespace-pre-wrap break-words font-mono text-base text-text">
+          {markers ? `${block.text.trimEnd()} ${markers}` : block.text}
+        </pre>
+      )
     }
     case 'thinking':
       return (
@@ -87,9 +114,11 @@ function Block({ block }: { block: RenderBlock }) {
     case 'image':
       return <ImageBlock label={block.label} source={block.source} />
     case 'toolUse':
-      return <ToolCallCard kind="use" id={block.id} name={block.name} content={block.argsJson} />
+      return <ToolCallCard kind="use" id={block.id} name={block.name} content={block.argsJson} server={block.server} />
     case 'toolResult':
       return <ToolCallCard kind="result" id={block.forId} content={block.content} />
+    case 'serverToolResult':
+      return <ServerToolResultCard {...block} />
   }
 }
 

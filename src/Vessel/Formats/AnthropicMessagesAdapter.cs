@@ -169,9 +169,10 @@ public sealed class AnthropicMessagesAdapter : IFormatAdapter
                 case "thinking":
                     return new JsonObject { ["type"] = "thinking", ["thinking"] = Thinking.ToString() };
                 case "tool_use":
+                case "server_tool_use":
                     return new JsonObject
                     {
-                        ["type"] = "tool_use",
+                        ["type"] = JsonUtil.Str(Start?["type"]),
                         ["id"] = JsonUtil.Str(Start?["id"]),
                         ["name"] = JsonUtil.Str(Start?["name"]),
                         ["input"] = JsonUtil.Parse(Json.ToString()) ?? new JsonObject(),
