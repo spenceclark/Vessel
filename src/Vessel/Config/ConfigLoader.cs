@@ -242,6 +242,11 @@ public static class ConfigLoader
             throw new ConfigException($"config '{path}': warnings.slowTtftMs must be zero or positive (0 disables)");
         }
 
+        if (config.Warnings.SlowResponseMs < 0)
+        {
+            throw new ConfigException($"config '{path}': warnings.slowResponseMs must be zero or positive (0 disables)");
+        }
+
         if (config.Mcp is null)
         {
             throw new ConfigException($"config '{path}': mcp is null");

@@ -98,6 +98,12 @@ public sealed class WarningsConfig
     /// </summary>
     public int SlowTtftMs { get; set; } = 5000;
 
+    /// <summary>
+    /// #84 — a response with no TTFT (non-streamed) whose total duration exceeds this (ms)
+    /// gets the <c>slow_response</c> warning. <c>0</c> disables the check.
+    /// </summary>
+    public int SlowResponseMs { get; set; } = 120000;
+
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }

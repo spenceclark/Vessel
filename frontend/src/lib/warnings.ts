@@ -10,8 +10,10 @@ const WARNING_LABELS: Record<string, string> = {
   body_truncated: 'Body truncated',
   cold_load: 'Cold model load',
   slow_ttft: 'Slow TTFT',
+  slow_response: 'Slow response',
   usage_injected: 'Usage injected',
   tool_call_in_text: 'Tool call in text',
+  repetitive_output: 'Repetitive output',
   path_missing_v1: 'Missing /v1 in base_url',
 }
 
@@ -23,6 +25,8 @@ export function warningLabel(code: string): string {
 // warning codes are self-explanatory from the label alone, so this stays sparse.
 const WARNING_HINTS: Record<string, string> = {
   path_missing_v1: "OpenAI-compatible backends expect /v1 in the client's base_url.",
+  slow_response: 'Non-streamed total duration, including any time queued at the backend.',
+  repetitive_output: 'The end of the response is looping text; the model may have degenerated.',
 }
 
 export function warningHint(code: string): string | undefined {

@@ -32,7 +32,7 @@ function renderConfigPanel(
       timeouts: { activitySeconds: 1800 },
       retention: { maxRequests: 10_000, maxDbSizeMb: 500 },
       capture: { maxBodyMb: 32 },
-      warnings: { slowTtftMs: 1000 },
+      warnings: { slowTtftMs: 1000, slowResponseMs: 120000 },
       mcp: { enabled: true },
     },
     restartRequired: [],

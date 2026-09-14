@@ -210,7 +210,7 @@ selects portable mode; a fresh download creates one under `%LOCALAPPDATA%\vessel
 `vessel --help` prints the resolved paths; `--version` prints the build; `--no-open` skips
 the first-run browser.
 
-<!-- config-fields: backends.authEnv backends.baseUrl backends.injectStreamUsage backends.type capture.maxBodyMb defaultBackend listen mcp.enabled retention.maxDbSizeMb retention.maxRequests timeouts.activitySeconds warnings.slowTtftMs -->
+<!-- config-fields: backends.authEnv backends.baseUrl backends.injectStreamUsage backends.type capture.maxBodyMb defaultBackend listen mcp.enabled retention.maxDbSizeMb retention.maxRequests timeouts.activitySeconds warnings.slowResponseMs warnings.slowTtftMs -->
 
 | Field | Meaning |
 | --- | --- |
@@ -224,6 +224,7 @@ the first-run browser.
 | `retention.maxRequests` / `retention.maxDbSizeMb` | Local history caps (defaults `10000` / `500`). |
 | `capture.maxBodyMb` | Per-body capture cap (default `32`); forwarding is never truncated. |
 | `warnings.slowTtftMs` | Slow-TTFT threshold in ms (default `5000`); `0` disables it. |
+| `warnings.slowResponseMs` | Slow non-streamed response threshold in ms (default `120000`); `0` disables it. |
 | `mcp.enabled` | Enables the read-only MCP endpoint (default `true`). |
 
 Example:
@@ -284,6 +285,8 @@ Rows carry a warning count; the Overview tab names each one.
 | --- | --- |
 | `cold_load` | Ollama loaded the model for this request — a slow duration, not slow generation. |
 | `slow_ttft` | Time to first token exceeded `warnings.slowTtftMs`, and no cold load explains it. |
+| `slow_response` | A non-streamed response took longer than `warnings.slowResponseMs`. The duration includes any time queued at the backend. |
+| `repetitive_output` | The end of the response is degenerate looping text (e.g. `1/1/1/…`). Detection only. |
 | `truncated_response` | The response was cut short by the output limit (`length` / `max_tokens`). |
 | `tokens_estimated` | The backend reported no usage; counts are estimated (chars ÷ 4). |
 | `usage_injected` | Vessel added `stream_options.include_usage` (the opt-in `injectStreamUsage`). |

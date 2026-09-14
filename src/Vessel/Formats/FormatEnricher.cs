@@ -20,6 +20,7 @@ public sealed class FormatEnricher
     private readonly ConfigStore? _configStore;
     private IReadOnlyDictionary<string, string> _backendTypes = new Dictionary<string, string>();
     private int _slowTtftMs;
+    private int _slowResponseMs;
 
     /// <summary>R05 — decoded output shares the capture cap (D01); derived with the rest of the config-dependent state.</summary>
     private long _maxDecodedBytes;
@@ -47,7 +48,7 @@ public sealed class FormatEnricher
         RebuildFrom(new ConfigSnapshot(config, 0));
     }
 
-    /// <summary>D7 — live: re-derives <see cref="_backendTypes"/>/<see cref="_slowTtftMs"/> whenever <paramref name="configStore"/> publishes a new snapshot.</summary>
+    /// <summary>D7 — live: re-derives <see cref="_backendTypes"/> and the warning thresholds whenever <paramref name="configStore"/> publishes a new snapshot.</summary>
     public FormatEnricher(ConfigStore configStore, ILogger<FormatEnricher>? logger = null)
         : this(configStore, DefaultAdapters(), logger)
     {
@@ -68,6 +69,7 @@ public sealed class FormatEnricher
     {
         VesselConfig config = snapshot.Config;
         _slowTtftMs = config.Warnings.SlowTtftMs;
+        _slowResponseMs = config.Warnings.SlowResponseMs;
         _maxDecodedBytes = CaptureBudget.MaxDecodedBytes(config);
         _backendTypes = config.Backends.ToDictionary(
             kvp => kvp.Key, kvp => kvp.Value.Type, StringComparer.OrdinalIgnoreCase);
@@ -191,6 +193,11 @@ public sealed class FormatEnricher
             result.Warnings.Add(Warnings.ToolCallInText);
         }
 
+        if (RepetitionDetector.IsRepetitive(result.ResponseText))
+        {
+            result.Warnings.Add(Warnings.RepetitiveOutput);
+        }
+
         string? warningsJson = SerializeWarnings(
             BuildWarnings(record, result.Warnings, format, result.StopReason, estimated, decodeTruncated));
 
@@ -307,6 +314,13 @@ public sealed class FormatEnricher
         if (_slowTtftMs > 0 && record.TtftMs > _slowTtftMs && !warnings.Contains(Warnings.ColdLoad))
         {
             warnings.Add(Warnings.SlowTtft);
+        }
+
+        // #84 — no TTFT to split total time; a disconnect or proxy failure already explains it.
+        if (_slowResponseMs > 0 && record.TtftMs is null && record.DurationMs > _slowResponseMs
+            && !warnings.Contains(Warnings.ClientDisconnect) && !warnings.Contains(Warnings.ProxyError))
+        {
+            warnings.Add(Warnings.SlowResponse);
         }
 
         return warnings;

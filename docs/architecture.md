@@ -265,6 +265,9 @@ Adapters attach warning flags used for UI badges:
 - Token counts estimated rather than reported.
 - Anomalously high TTFT (threshold configurable; Ollama `load_duration` shown when it's
   the cause — "model was cold-loading" is the answer to half of all slow-request mysteries).
+- Long total duration on a non-streamed response, which has no TTFT (threshold
+  configurable; includes time queued at the backend).
+- Degenerate looping output at the end of the response text.
 
 ### 5.4 Token estimation
 
@@ -504,7 +507,7 @@ editable in the UI:
   "timeouts":  { "activitySeconds": 1800 },
   "retention": { "maxRequests": 10000, "maxDbSizeMb": 500 },
   "capture":   { "maxBodyMb": 32 },
-  "warnings":  { "slowTtftMs": 5000 },
+  "warnings":  { "slowTtftMs": 5000, "slowResponseMs": 120000 },
   "mcp":       { "enabled": true },
   "pricing":   {}   // reserved for Phase 7 cost estimates; not read by this binary yet (unknown fields are preserved on save)
 }

@@ -366,7 +366,7 @@ export interface VesselConfigDto {
   timeouts: { activitySeconds: number }
   retention: { maxRequests: number; maxDbSizeMb: number }
   capture: { maxBodyMb: number }
-  warnings: { slowTtftMs: number }
+  warnings: { slowTtftMs: number; slowResponseMs: number }
   mcp: { enabled: boolean }
 }
 

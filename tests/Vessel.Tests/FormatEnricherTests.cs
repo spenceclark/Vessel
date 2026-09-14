@@ -295,4 +295,67 @@ public class FormatEnricherTests
 
         Assert.DoesNotContain(Warnings.PathMissingV1, Warns(enriched));
     }
+    // #84 — slow_response: non-streamed rows have no TTFT, so total duration is the only signal.
+    private const string ChatRequest = """{"model":"m"}""";
+    private const string ChatResponse =
+        """{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":1}}""";
+
+    [Fact]
+    public void SlowResponse_NonStreamedOverThreshold_IsWarned()
+    {
+        var enricher = new FormatEnricher(new VesselConfig(), FormatEnricher.DefaultAdapters());
+        CaptureRecord record = Record("/v1/chat/completions", ChatRequest, ChatResponse) with { DurationMs = 130_000 };
+
+        Assert.Contains(Warnings.SlowResponse, Warns(enricher.Enrich(record)));
+    }
+
+    [Fact]
+    public void SlowResponse_ClientDisconnect_IsNotWarned()
+    {
+        var enricher = new FormatEnricher(new VesselConfig(), FormatEnricher.DefaultAdapters());
+        CaptureRecord record = Record("/v1/chat/completions", ChatRequest, ChatResponse)
+            with { DurationMs = 130_000, Error = Api.VesselErrors.ClientDisconnect };
+
+        string[] warnings = Warns(enricher.Enrich(record));
+        Assert.Contains(Warnings.ClientDisconnect, warnings);
+        Assert.DoesNotContain(Warnings.SlowResponse, warnings);
+    }
+
+    [Fact]
+    public void SlowResponse_StreamedWithTtft_IsNotWarned()
+    {
+        var enricher = new FormatEnricher(new VesselConfig(), FormatEnricher.DefaultAdapters());
+        CaptureRecord record = TestCapture.Record(
+                "/v1/chat/completions",
+                ChatRequest,
+                "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                streamed: true)
+            with { DurationMs = 130_000, TtftMs = 200 };
+
+        Assert.DoesNotContain(Warnings.SlowResponse, Warns(enricher.Enrich(record)));
+    }
+
+    [Fact]
+    public void SlowResponse_ZeroThreshold_IsDisabled()
+    {
+        var config = new VesselConfig();
+        config.Warnings.SlowResponseMs = 0;
+        var enricher = new FormatEnricher(config, FormatEnricher.DefaultAdapters());
+        CaptureRecord record = Record("/v1/chat/completions", ChatRequest, ChatResponse) with { DurationMs = 10_000_000 };
+
+        Assert.DoesNotContain(Warnings.SlowResponse, Warns(enricher.Enrich(record)));
+    }
+
+    [Fact]
+    public void RepetitiveOutput_LoopingResponse_IsWarned()
+    {
+        var enricher = new FormatEnricher(new VesselConfig(), FormatEnricher.DefaultAdapters());
+        string content = string.Concat(Enumerable.Repeat("1/", 5_000));
+        CaptureRecord record = Record(
+            "/v1/chat/completions",
+            ChatRequest,
+            $$"""{"choices":[{"message":{"role":"assistant","content":"{{content}}"},"finish_reason":"stop"}]}""");
+
+        Assert.Contains(Warnings.RepetitiveOutput, Warns(enricher.Enrich(record)));
+    }
 }
