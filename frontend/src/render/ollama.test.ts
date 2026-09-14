@@ -129,3 +129,22 @@ describe('extractOllamaResponse — ollama-generate', () => {
     ])
   })
 })
+
+describe('extractOllamaRequest — ollama-chat tools', () => {
+  it('#81 — native /api/chat tool lists populate `tools`', () => {
+    const request = {
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [{ type: 'function', function: { name: 'search', description: 'Search', parameters: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] } } }],
+    }
+    const view = extractOllamaRequest(detail('ollama-chat', body(JSON.stringify(request)), null))
+    expect(view?.tools).toEqual([
+      expect.objectContaining({ name: 'search', kind: 'function', description: 'Search', params: [{ name: 'q', type: 'string', required: true }] }),
+    ])
+    expect(view?.params.some((p) => p.k === 'tools')).toBe(false)
+  })
+
+  it('generate requests carry no tools', () => {
+    const view = extractOllamaRequest(detail('ollama-generate', body(JSON.stringify({ prompt: 'x', tools: [{ type: 'function', function: { name: 'f' } }] })), null))
+    expect(view?.tools).toEqual([])
+  })
+})

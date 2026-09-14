@@ -122,11 +122,12 @@ frontend/
   src/api/                  # typed client, query keys, SSE hook, live-history model
   src/components/           # StatsBar, FilterBar, RequestList/Row, DetailPane,
                             #   InFlightDetailPane, CompareView, ReplayDialog, banners,
-                            #   MessageView, ToolCallCard, ConfigPanel, DataPanel...
+                            #   MessageView, ToolCallCard, ToolsView, ConfigPanel, DataPanel...
   src/components/ui/        # shadcn-style primitives (button, badge, dialog, tabs,
                             #   popover, input) + Mark, ErrorState, PrettyJson
   src/render/               # per-format rendering of captured bodies into message
                             #   structures (openai, openaiResponses, anthropic, ollama)
+                            #   + tools.ts (declared tool lists → ToolDef)
   src/lib/                  # curl generation, formatting, warnings vocabulary, tags,
                             #   theme, cn() utility
 ```
@@ -431,7 +432,13 @@ selection if the clear reached it (guarding against SQLite id reuse).
 **Rendering captured bodies:** `src/render/` normalizes OpenAI chat, OpenAI
 Responses, Anthropic, and Ollama payloads into a shared message shape
 (`MessageView` renders roles, `ToolCallCard` renders tool calls as readable cards,
-images decode to `data:` previews). Two hard rules there: captured content never
+images decode to `data:` previews). Declared tool lists go through one shared
+`extractTools` (`render/tools.ts`) into `RenderedView.tools` rather than a params entry:
+function tools get a parameter tree walked from their JSON Schema (type unions, enums,
+defaults, nesting capped at depth 4), and schema-less server tools (Anthropic
+`web_search_20250305`, Responses `web_search_preview`) keep only their non-null config.
+`countToolCalls` tallies `toolUse` blocks plus Anthropic `server_tool_use` blocks, read back
+from their JSON text. Two hard rules there: captured content never
 produces a live `src`/`href` (defense in depth behind the CSP served on `/vessel/*`),
 and rendering failures are contained by `RenderErrorBoundary` per pane rather than
 taking down the app.
@@ -440,7 +447,9 @@ taking down the app.
 count-confirmed single-session deletion + reset),
 `FilterBar` (text + facet filters + count-confirmed streamed export),
 `DetailPane`/`InFlightDetailPane` (metrics incl. TTFT and Vessel overhead, headers,
-request/response views with raw and raw-stream toggles, replay dialog with single/models/params
+request/response views with raw and raw-stream toggles, a Tools tab (`ToolsView`, shown
+only when the request declares tools: one card per tool with call count, plain-text
+description, parameter or config table, and a per-card raw toggle), replay dialog with single/models/params
 fan modes and a pre-fire "sends N requests / M paid" line), `CompareView`
 (original + fan members as columns, each with a 1-5 score control and 1-5/0 keyboard
 scoring of the focused column; a pair is the one-member case), `ConfigPanel`/`ThemePanel`/`DataPanel`, plus `BindAddressBanner`,

@@ -1,10 +1,11 @@
 import type { RequestDetail } from '@/api/types'
 import { openAiImageSource } from './imageSource'
 import type { RenderBlock, RenderedView, RenderMessage } from './types'
+import { extractTools } from './tools'
 
 /**
  * D4 — `openai-chat`. Request `messages[]` (incl. `tool` role → toolResult), `tools`
- * summarized as a params entry; response from `choices[0].message`. `tool_calls[].function
+ * as structured defs (#81); response from `choices[0].message`. `tool_calls[].function
  * .arguments` stays a string (OpenAI's own wire convention — not re-parsed here). Split
  * request/response to match DetailPane's separate tabs, each keeping its own raw toggle.
  */
@@ -14,13 +15,10 @@ export function extractOpenAiChatRequest(detail: RequestDetail): RenderedView | 
     if (!req) return null
 
     const messages: RenderMessage[] = (Array.isArray(req.messages) ? req.messages : []).map(requestMessage)
-    const params: { k: string; v: string }[] = []
-    if (Array.isArray(req.tools) && req.tools.length > 0) {
-      params.push({ k: 'tools', v: JSON.stringify(req.tools, null, 2) })
-    }
+    const tools = extractTools('openai-chat', req.tools)
 
-    if (messages.length === 0 && params.length === 0) return null
-    return { messages, params }
+    if (messages.length === 0 && tools.length === 0) return null
+    return { messages, params: [], tools }
   } catch {
     return null
   }

@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Mark } from '@/components/ui/Mark'
 import { PrettyJson } from '@/components/PrettyJson'
 import { MessageView } from '@/components/MessageView'
+import { ToolsView } from '@/components/ToolsView'
 import { RenderErrorBoundary } from '@/components/RenderErrorBoundary'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { DecodeTruncatedNotice } from '@/components/DecodeTruncatedNotice'
@@ -20,7 +21,7 @@ import { Button } from '@/components/ui/button'
 import { ReplayDialog } from '@/components/ReplayDialog'
 import { buildCurl } from '@/lib/curl'
 
-type TabKey = 'overview' | 'request' | 'response' | 'headers'
+type TabKey = 'overview' | 'request' | 'response' | 'tools' | 'headers'
 type ViewMode = 'rendered' | 'raw'
 
 // Stop reasons that indicate something went wrong, distinct from a normal completion
@@ -102,6 +103,10 @@ export function DetailPane({ id, onCompare }: { id: number | null; onCompare?: (
   const responseBodyShown =
     responseInRawView && responseView === 'raw' ? detail.responseRaw : detail.responseBody
   const backend = statusQuery.data?.backends.find((item) => item.name === detail.backend)
+  const tools = requestRendered?.tools ?? []
+  // #81 — the Tools tab only exists for a request that declares tools; selecting one that
+  // doesn't while it's active falls back to Overview.
+  const activeTab: TabKey = tab === 'tools' && tools.length === 0 ? 'overview' : tab
 
   async function copyCurl() {
     if (!statusQuery.data) return
@@ -119,12 +124,13 @@ export function DetailPane({ id, onCompare }: { id: number | null; onCompare?: (
 
   return (
     <>
-      <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} className="flex h-full flex-col">
+      <Tabs value={activeTab} onValueChange={(v) => setTab(v as TabKey)} className="flex h-full flex-col">
         <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="request">Request</TabsTrigger>
             <TabsTrigger value="response">Response</TabsTrigger>
+            {tools.length > 0 && <TabsTrigger value="tools">Tools ({tools.length})</TabsTrigger>}
             <TabsTrigger value="headers">Headers</TabsTrigger>
           </TabsList>
           <Button variant="ghost" onClick={() => setReplayOpen(true)}>Replay</Button>
@@ -187,6 +193,12 @@ export function DetailPane({ id, onCompare }: { id: number | null; onCompare?: (
                 <PrettyJson body={responseBodyShown} emptyLabel="No response body" />
               </>
             )}
+          </TabsContent>
+
+          <TabsContent value="tools">
+            <RenderErrorBoundary key={id} fallback={<PrettyJson body={detail.requestBody} emptyLabel="No request body" />}>
+              <ToolsView tools={tools} request={requestRendered} response={responseRendered} />
+            </RenderErrorBoundary>
           </TabsContent>
 
           <TabsContent value="headers" className="p-3">

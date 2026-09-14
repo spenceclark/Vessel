@@ -281,8 +281,16 @@ The app stops being full-bleed. It becomes **panels floating on a canvas**:
   download as a scope sanity-check. The selected session and every active list filter are
   carried to the streamed download; there is no date-range UI because sessions are the
   run boundary.
-- **Detail panel**: tab strip as panel header, content scrolls. Empty state: centered
-  mark (muted) + one line ("Select a request").
+- **Detail panel**: tab strip as panel header, content scrolls. Tabs: Overview, Request,
+  Response, Tools (n), Headers. **Tools** renders only when the request declares at least
+  one tool (selecting a request without tools while it's active falls back to Overview):
+  one `--surface-2`, radius-control card per tool in declared order — mono name, a neutral
+  `server` badge for schema-less server tools, a call-count badge (info when called,
+  muted at 0), the description as plain text clamped to 3 lines with Show more, then a
+  Name · Type · Req · Default · Description table (nested properties indented, enum
+  values as small chips) or, for server tools, a key/value config table. Each card has
+  its own Rendered/Raw switch. A filter input appears above the cards past 8 tools.
+  Empty state: centered mark (muted) + one line ("Select a request").
 - **History / Reports toggle (Phase 7).** A segmented control (§6 Tabs) in the header
   panel switches the app's one screen between `history` (list + detail, the default
   layout above) and `reports`. Reports replaces the list+detail row with one full-width,

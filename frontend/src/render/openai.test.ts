@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractOpenAiChatResponse } from './openai'
+import { extractOpenAiChatRequest, extractOpenAiChatResponse } from './openai'
 import type { RequestDetail, BodyPayload } from '@/api/types'
 
 /**
@@ -83,5 +83,18 @@ describe('extractOpenAiChatResponse', () => {
       { kind: 'thinking', text: 'thinking...' },
       { kind: 'toolUse', id: 't1', name: 'final_result', argsJson: '{}' },
     ])
+  })
+})
+
+describe('extractOpenAiChatRequest', () => {
+  it('#81 — declared tools populate `tools`, not a params entry', () => {
+    const request = {
+      messages: [{ role: 'user', content: 'weather?' }],
+      tools: [{ type: 'function', function: { name: 'get_weather', parameters: { type: 'object', properties: { city: { type: 'string' } } } } }],
+    }
+    const view = extractOpenAiChatRequest({ ...detail(null), requestBody: body(JSON.stringify(request)) })
+    expect(view?.tools?.map((t) => t.name)).toEqual(['get_weather'])
+    expect(view?.tools?.[0].params).toEqual([{ name: 'city', type: 'string', required: false }])
+    expect(view?.params).toEqual([])
   })
 })
