@@ -14,7 +14,7 @@ public sealed class McpTools
     private const int DefaultSearchLimit = 20;
     private const int MaxSearchLimit = 100;
     private const int DefaultMaxChars = 4_000;
-    private const int MaxChars = 20_000;
+    internal const int MaxChars = 20_000;
 
     [McpServerTool(Name = "search_requests", ReadOnly = true)]
     [Description("Search captured requests using the same full-text and filter semantics as Vessel history. Returns 20 compact, body-free rows by default (maximum 100); use nextBefore as before to page older rows. promptPreview is only a short preview—call get_request for windowed text.")]
@@ -36,13 +36,7 @@ public sealed class McpTools
             boundedLimit, before, sessionId, query, backend, model, format, tag, status, warnedOnly,
             includePreview: true);
 
-        McpSearchRow[] rows = page.Rows.Select(summary => new McpSearchRow(
-            summary.Id, summary.StartedAt, summary.Method, summary.Path, summary.Backend, summary.Model,
-            summary.Tags, summary.StatusCode, summary.Error, summary.DurationMs, summary.TtftMs,
-            summary.TokPerSec, summary.TokensIn, summary.TokensOut, summary.StopReason, summary.Warnings,
-            summary.PromptPreview, summary.Score, summary.ReplayOf, summary.ReplayGroup,
-            summary.ReplayPatch)).ToArray();
-
+        McpSearchRow[] rows = page.Rows.Select(SearchRow).ToArray();
         return Json(new McpSearchResponse(rows, page.NextBefore), McpJsonContext.Default.McpSearchResponse);
     }
 
@@ -60,10 +54,21 @@ public sealed class McpTools
             return Error("include must be 'text' or 'raw'");
         }
 
+        return ReadRequest(store, id, include, maxChars, offset) is McpRequestResponse payload
+            ? Json(payload, McpJsonContext.Default.McpRequestResponse)
+            : Error($"request {id} was not found");
+    }
+
+    /// <summary>
+    /// <c>get_request</c>'s payload, shared with the <c>vessel://requests/{id}</c> resource
+    /// (#87). Null when the request doesn't exist.
+    /// </summary>
+    internal static McpRequestResponse? ReadRequest(SqliteReadStore store, long id, string include, int maxChars, int offset)
+    {
         McpRequestData? request = store.GetMcpRequest(id);
         if (request is null)
         {
-            return Error($"request {id} was not found");
+            return null;
         }
 
         int boundedMaxChars = Math.Clamp(maxChars, 1, MaxChars);
@@ -75,10 +80,16 @@ public sealed class McpTools
             ? WindowText(request.ResponseText, boundedOffset, boundedMaxChars)
             : WindowRaw(request.ResponseBody, boundedOffset, boundedMaxChars);
 
-        var payload = new McpRequestResponse(
+        return new McpRequestResponse(
             Summary(request.Summary), prompt, response, include, boundedOffset, boundedMaxChars);
-        return Json(payload, McpJsonContext.Default.McpRequestResponse);
     }
+
+    internal static McpSearchRow SearchRow(Summary summary) => new(
+        summary.Id, summary.StartedAt, summary.Method, summary.Path, summary.Backend, summary.Model,
+        summary.Tags, summary.StatusCode, summary.Error, summary.DurationMs, summary.TtftMs,
+        summary.TokPerSec, summary.TokensIn, summary.TokensOut, summary.StopReason, summary.Warnings,
+        summary.PromptPreview, summary.Score, summary.ReplayOf, summary.ReplayGroup,
+        summary.ReplayPatch);
 
     [McpServerTool(Name = "get_stats", ReadOnly = true)]
     [Description("Get Vessel totals, failures, averages, token totals, and whether any totals are estimated. sessionId defaults to current; use all for all history or a numeric session id for one session.")]

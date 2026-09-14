@@ -184,6 +184,11 @@ current folder only). The endpoint exposes search, request detail, stats, and
 sessions — read-only, and any MCP client you connect can read your captured prompts.
 Disable it with `mcp.enabled: false`.
 
+Captured requests and sessions are also MCP resources (`vessel://requests/{id}`,
+`vessel://sessions/{id}`), so clients that support resources (such as Claude Code's
+`@` mentions) can attach one to a prompt directly. The 20 most recent requests and 10
+most recent sessions are listed; older ones are reachable by URI.
+
 ## Container / compose
 
 For Docker users, the shipped [`compose.yaml`](compose.yaml) is the canonical setup:

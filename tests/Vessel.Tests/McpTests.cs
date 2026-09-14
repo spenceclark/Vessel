@@ -228,6 +228,54 @@ public sealed class McpTests
         Assert.DoesNotContain("MCP parity", mcpAfterDelete.EnumerateArray().Select(item => item.GetProperty("name").GetString()));
     }
 
+    // #87 — requests and sessions as resources: templates, a bounded recent list, reads that
+    // match get_request with a single 20,000-char window, and a not-found error.
+    [Fact]
+    public async Task M7_Resources_TemplatesListAndRead()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        long sessionId = await CreateSession(vessel.BaseUrl, "resource session");
+        long big = Seed(vessel.DbPath, sessionId, "stub", "resource-model", [], 200, null, null, new string('p', 25_000), "short answer");
+        for (int i = 0; i < 25; i++)
+        {
+            Seed(vessel.DbPath, sessionId, "stub", "resource-model", [], 200, null, null, $"filler {i}", "ok");
+        }
+
+        await using McpClient client = await Connect(vessel.BaseUrl);
+
+        IList<McpClientResourceTemplate> templates = await client.ListResourceTemplatesAsync(cancellationToken: CT);
+        Assert.Equal(
+            ["vessel://requests/{id}", "vessel://sessions/{id}"],
+            templates.Select(t => t.UriTemplate).OrderBy(uri => uri));
+
+        IList<McpClientResource> resources = await client.ListResourcesAsync(cancellationToken: CT);
+        string[] requestUris = resources.Select(r => r.Uri).Where(uri => uri.StartsWith("vessel://requests/", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(20, requestUris.Length);
+        Assert.DoesNotContain($"vessel://requests/{big}", requestUris); // older than the 20 most recent
+        Assert.Contains($"vessel://sessions/{sessionId}", resources.Select(r => r.Uri));
+
+        ReadResourceResult requestRead = await client.ReadResourceAsync($"vessel://requests/{big}", cancellationToken: CT);
+        TextResourceContents requestContents = Assert.IsType<TextResourceContents>(Assert.Single(requestRead.Contents));
+        Assert.Equal("application/json", requestContents.MimeType);
+        McpRequestPayload payload = JsonSerializer.Deserialize<McpRequestPayload>(
+            requestContents.Text, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Equal(20_000, payload.Prompt!.Text!.Length);
+        Assert.True(payload.Prompt.Truncated);
+        Assert.Equal($"truncated at 20000 of {payload.Prompt.TotalChars} — call again with offset=20000", payload.Prompt.Note);
+        Assert.Equal("short answer", payload.Response!.Text);
+
+        ReadResourceResult sessionRead = await client.ReadResourceAsync($"vessel://sessions/{sessionId}", cancellationToken: CT);
+        using JsonDocument session = JsonDocument.Parse(Assert.IsType<TextResourceContents>(Assert.Single(sessionRead.Contents)).Text);
+        Assert.Equal("resource session", session.RootElement.GetProperty("session").GetProperty("name").GetString());
+        Assert.Equal(26, session.RootElement.GetProperty("stats").GetProperty("total").GetInt64());
+        Assert.Equal(20, session.RootElement.GetProperty("recentRequests").GetArrayLength());
+
+        await Assert.ThrowsAsync<ModelContextProtocol.McpProtocolException>(
+            () => client.ReadResourceAsync("vessel://requests/999999", cancellationToken: CT).AsTask());
+        await Assert.ThrowsAsync<ModelContextProtocol.McpProtocolException>(
+            () => client.ReadResourceAsync("vessel://sessions/999999", cancellationToken: CT).AsTask());
+    }
+
     [Fact]
     public async Task M5_McpEnabled_LiveConfigGateAndStatus_LeaveProxyUnaffected()
     {

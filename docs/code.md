@@ -113,7 +113,7 @@ marked JSON error body).
 
 **Mcp/** — `McpEndpoint` mounts the official SDK's Streamable HTTP handler at
 `/vessel/mcp` behind the `mcp.enabled` kill-switch; `McpTools` defines the read-only
-tools; `McpDtos` the wire shapes.
+tools; `McpResources` the read-only resources; `McpDtos` the wire shapes.
 
 ### Frontend layout
 
@@ -390,6 +390,14 @@ history list, compact body-free rows, `nextBefore` cursor), `get_request` (windo
 text/raw bodies, 4k default/20k max chars, paging offset), `get_stats`, and
 `list_sessions`. The server shares the control plane's Host guard and has no
 additional auth — `/vessel/mcp` can read your captured prompts.
+
+**MCP resources** (read-only, `McpResources`): `vessel://requests/{id}` returns
+`get_request`'s text payload with one 20k-char window per body (attachments can't page;
+the truncation note points at `get_request`), and `vessel://sessions/{id}` returns the
+session marker, its `get_stats` totals, and its 20 most recent search rows.
+`resources/list` returns the 20 most recent requests and 10 most recent sessions; older
+ones are reachable through the templates. No `resources/subscribe`: the transport is
+stateless, so the server can't push notifications.
 
 **Utility endpoints beyond the table:** `/.well-known/oauth-*` and
 `/.well-known/openid-configuration` are answered with a marked 404 (reserved control
