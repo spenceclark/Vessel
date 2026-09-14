@@ -139,6 +139,65 @@ describe('MessageView — server tool results (#82)', () => {
   })
 })
 
+describe('MessageView — citations (#82)', () => {
+  const a = { url: 'https://a.example', title: 'Source A' }
+  const b = { url: 'https://b.example', title: 'Source B' }
+
+  it('numbers markers across blocks and lists sources once at the end', () => {
+    render(
+      createElement(MessageView, {
+        view: view({
+          messages: [
+            {
+              role: 'assistant',
+              blocks: [
+                { kind: 'markdown', text: 'First claim.', citations: [a] },
+                { kind: 'markdown', text: 'Uncited.' },
+                { kind: 'text', text: 'Second claim.', citations: [b, a] },
+              ],
+            },
+          ],
+        }),
+      }),
+    )
+
+    expect(screen.getByText('[1]', { selector: 'span.shrink-0' })).toBeTruthy()
+    expect(screen.getByText('[2][3]', { selector: 'span.shrink-0' })).toBeTruthy()
+    const sources = document.querySelectorAll('ol > li')
+    expect([...sources].map((li) => li.textContent)).toEqual([
+      '[1] Source A · https://a.example',
+      '[2] Source B · https://b.example',
+      '[3] Source A · https://a.example',
+    ])
+  })
+
+  it('keeps a cited table intact and still shows its marker', () => {
+    render(
+      createElement(MessageView, {
+        view: view({
+          messages: [{ role: 'assistant', blocks: [{ kind: 'markdown', text: '| a | b |\n|---|---|\n| 1 | 2 |', citations: [a] }] }],
+        }),
+      }),
+    )
+
+    expect([...document.querySelectorAll('td')].map((td) => td.textContent)).toEqual(['1', '2'])
+    expect(screen.getByText('[1]', { selector: 'span.shrink-0' })).toBeTruthy()
+  })
+
+  it('keeps a cited fenced code block intact and still shows its marker', () => {
+    render(
+      createElement(MessageView, {
+        view: view({
+          messages: [{ role: 'assistant', blocks: [{ kind: 'markdown', text: '```\nconst x = 1\n```', citations: [a] }] }],
+        }),
+      }),
+    )
+
+    expect(document.querySelector('.md code')!.textContent).toBe('const x = 1\n')
+    expect(screen.getByText('[1]', { selector: 'span.shrink-0' })).toBeTruthy()
+  })
+})
+
 /**
  * ui-spec.md §9.1 — "pretty-print JSON-only text blocks": whole-block only. A block
  * counts as JSON here only if its *entire* trimmed text parses as one JSON object or

@@ -51,9 +51,22 @@ function MessageCard({ message }: { message: RenderMessage }) {
         <span className="text-xs text-text-muted">(empty)</span>
       ) : (
         <div className="flex flex-col gap-2">
-          {message.blocks.map((block, i) => (
-            <Block key={i} block={block} citeStart={citeStarts[i]} />
-          ))}
+          {message.blocks.map((block, i) =>
+            blockCitations[i].length === 0 ? (
+              <Block key={i} block={block} />
+            ) : (
+              // Markers sit beside the block, never inside the captured text — appending
+              // them would break Markdown that ends in a table row or code fence.
+              <div key={i} className="flex items-end gap-1">
+                <div className="min-w-0 flex-1">
+                  <Block block={block} />
+                </div>
+                <span className="shrink-0 text-xs text-text-muted">
+                  {blockCitations[i].map((_, j) => `[${citeStarts[i] + j + 1}]`).join('')}
+                </span>
+              </div>
+            ),
+          )}
           {citations.length > 0 && (
             <ol className="flex flex-col gap-1 border-t border-border pt-2 text-xs">
               {citations.map((c, i) => (
@@ -83,24 +96,16 @@ function Card({ role, children }: { role: string; children: ReactNode }) {
   )
 }
 
-function Block({ block, citeStart }: { block: RenderBlock; citeStart: number }) {
+function Block({ block }: { block: RenderBlock }) {
   switch (block.kind) {
     case 'markdown': {
       const pretty = tryPrettyJson(block.text)
-      if (pretty !== null) return <JsonBlock text={pretty} />
-      // Escaped so markdown renders a literal `[n]` rather than parsing a link reference.
-      const markers = block.citations?.map((_, i) => `\\[${citeStart + i + 1}\\]`).join('')
-      return <ClampedMarkdown text={markers ? `${block.text.trimEnd()} ${markers}` : block.text} />
+      return pretty !== null ? <JsonBlock text={pretty} /> : <ClampedMarkdown text={block.text} />
     }
     case 'text': {
       const pretty = tryPrettyJson(block.text)
       if (pretty !== null) return <JsonBlock text={pretty} />
-      const markers = block.citations?.map((_, i) => `[${citeStart + i + 1}]`).join('')
-      return (
-        <pre className="whitespace-pre-wrap break-words font-mono text-base text-text">
-          {markers ? `${block.text.trimEnd()} ${markers}` : block.text}
-        </pre>
-      )
+      return <pre className="whitespace-pre-wrap break-words font-mono text-base text-text">{block.text}</pre>
     }
     case 'thinking':
       return (
