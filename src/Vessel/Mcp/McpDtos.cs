@@ -77,9 +77,16 @@ public sealed record McpRequestSummary(
     string? ReplayGroup,
     string? ReplayPatch);
 
+/// <summary>#87 — the <c>vessel://sessions/{id}</c> resource: marker, totals, and most recent requests.</summary>
+public sealed record McpSessionResource(
+    Vessel.Storage.SessionInfo Session,
+    Vessel.Storage.StatsResponse Stats,
+    McpSearchRow[] RecentRequests);
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(McpSearchResponse))]
 [JsonSerializable(typeof(McpRequestResponse))]
 [JsonSerializable(typeof(Vessel.Storage.StatsResponse))]
 [JsonSerializable(typeof(Vessel.Storage.SessionInfo[]))]
+[JsonSerializable(typeof(McpSessionResource))]
 public sealed partial class McpJsonContext : JsonSerializerContext;

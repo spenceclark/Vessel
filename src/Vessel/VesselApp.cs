@@ -67,7 +67,9 @@ public static class VesselApp
             Version = StatusEndpoint.Version,
         })
         .WithHttpTransport(options => options.Stateless = true)
-        .WithTools<McpTools>();
+        .WithTools<McpTools>()
+        .WithResources<McpResources>()
+        .WithListResourcesHandler(McpResources.List);
         builder.Services.AddSingleton(sp => new ConfigStore(config, configPath));
         builder.Services.AddSingleton<BackendRegistry>();
         builder.Services.AddSingleton<ProxyHandler>();

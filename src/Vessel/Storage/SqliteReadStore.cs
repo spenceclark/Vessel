@@ -1118,13 +1118,38 @@ public sealed class SqliteReadStore(string dbPath)
         using SqliteDataReader reader = command.ExecuteReader();
         while (reader.Read())
         {
-            sessions.Add(new SessionInfo(
-                reader.GetInt64(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.GetBoolean(3), reader.GetInt64(4), reader.IsDBNull(5) ? null : reader.GetString(5)));
+            sessions.Add(ReadSessionInfo(reader));
         }
 
         return sessions.ToArray();
     }
+
+    /// <summary>
+    /// #87 review — one session by exact id, regardless of <see cref="ListSessions"/>'s marker
+    /// cap: retention keeps older markers while they still have requests. Null when absent.
+    /// </summary>
+    public SessionInfo? GetSession(long sessionId)
+    {
+        using SqliteConnection connection = Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT s.id, s.started_at, s.name, s.is_current,
+                   COUNT(r.id), MAX(r.started_at)
+            FROM sessions s
+            LEFT JOIN requests r ON r.session_id = s.id
+            WHERE s.id = $id
+            GROUP BY s.id
+            """;
+        command.Parameters.AddWithValue("$id", sessionId);
+
+        using SqliteDataReader reader = command.ExecuteReader();
+        return reader.Read() ? ReadSessionInfo(reader) : null;
+    }
+
+    private static SessionInfo ReadSessionInfo(SqliteDataReader reader) => new(
+        reader.GetInt64(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2),
+        reader.GetBoolean(3), reader.GetInt64(4), reader.IsDBNull(5) ? null : reader.GetString(5));
 
     private static Summary ReadSummary(SqliteDataReader reader, bool includePreview = false) => new(
         Id: reader.GetInt64(0),
