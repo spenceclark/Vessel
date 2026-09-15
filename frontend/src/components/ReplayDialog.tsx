@@ -217,7 +217,7 @@ function ModelField({ detail, value, onChange, disabled }: { detail: RequestDeta
  */
 const PARAM_PLACEMENT: Record<string, { name: string; under?: 'options' }[]> = {
   'openai-chat': ['temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'presence_penalty', 'frequency_penalty', 'seed'].map((name) => ({ name })),
-  'openai-responses': ['temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'presence_penalty', 'frequency_penalty', 'seed'].map((name) => ({ name })),
+  'openai-responses': ['temperature', 'top_p', 'max_output_tokens', 'presence_penalty', 'frequency_penalty', 'seed'].map((name) => ({ name })),
   'anthropic-messages': ['temperature', 'top_p', 'top_k', 'max_tokens'].map((name) => ({ name })),
   'ollama-chat': ['temperature', 'top_p', 'top_k', 'num_predict', 'repeat_penalty', 'seed'].map((name) => ({ name, under: 'options' as const })),
   'ollama-generate': ['temperature', 'top_p', 'top_k', 'num_predict', 'repeat_penalty', 'seed'].map((name) => ({ name, under: 'options' as const })),
