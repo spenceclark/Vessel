@@ -103,4 +103,31 @@ describe('ReplayDialog', () => {
       variations: [{ params: { options: { temperature: 0.9 } } }],
     }))
   })
+
+  it('uses Responses token-limit parameters and sends max_output_tokens in the replay patch', async () => {
+    const replay = vi.spyOn(api, 'replay').mockResolvedValue({ replayGroup: 'fan0', count: 1 })
+    render(createElement(ReplayDialog, {
+      detail: detail({ format: 'openai-responses', path: '/v1/responses' }),
+      backends: [backends[0]], open: true, onClose: () => undefined,
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Params' }))
+
+    expect(screen.getByRole('option', { name: 'max_output_tokens' })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: 'max_tokens' })).toBeNull()
+    expect(screen.queryByRole('option', { name: 'max_completion_tokens' })).toBeNull()
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Parameter' }), {
+      target: { value: 'max_output_tokens' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('0.2, 0.7, 1.0'), {
+      target: { value: '512' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Replay ×1' }))
+
+    await waitFor(() => expect(replay).toHaveBeenCalledWith(1, {
+      variations: [{ params: { max_output_tokens: 512 } }],
+    }))
+  })
 })
