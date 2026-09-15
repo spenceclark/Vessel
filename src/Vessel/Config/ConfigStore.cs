@@ -65,6 +65,20 @@ public sealed class ConfigStore
 
     public VesselConfig Current => Snapshot.Config;
 
+    /// <summary>The address the running process is actually listening on until restart.</summary>
+    public string BoundListen
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _boundListen is { } bound
+                    ? $"{bound.Address}:{bound.Port}"
+                    : _snapshot.Config.Listen;
+            }
+        }
+    }
+
     /// <summary>Bumped on every successful <see cref="Apply"/>. Prefer <see cref="Snapshot"/> when the config that goes with it matters.</summary>
     public int Version => Snapshot.Version;
 
