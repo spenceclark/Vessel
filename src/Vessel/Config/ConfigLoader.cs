@@ -155,6 +155,11 @@ public static class ConfigLoader
                 throw new ConfigException($"config '{path}': backend '{name}' is null");
             }
 
+            if (string.IsNullOrWhiteSpace(backend.Type))
+            {
+                throw new ConfigException($"config '{path}': backend '{name}' type must not be null or empty");
+            }
+
             if (backend.AuthEnv is not null && string.IsNullOrWhiteSpace(backend.AuthEnv))
             {
                 throw new ConfigException($"config '{path}': backend '{name}' authEnv must be a non-empty environment variable name");
