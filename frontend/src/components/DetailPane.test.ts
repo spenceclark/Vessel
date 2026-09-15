@@ -199,6 +199,42 @@ describe('DetailPane — raw-stream fallback (R24)', () => {
   })
 })
 
+describe('DetailPane — rate limits (#101)', () => {
+  it('renders provider-specific rate-limit headers case-insensitively', async () => {
+    renderPane(
+      detail({
+        responseHeaders: {
+          'anthropic-ratelimit-requests-limit': ['50'],
+          'anthropic-ratelimit-requests-remaining': ['49'],
+          'anthropic-ratelimit-requests-reset': ['2026-09-15T00:01:00Z'],
+          'anthropic-ratelimit-input-tokens-limit': ['1000'],
+          'anthropic-ratelimit-output-tokens-remaining': ['900'],
+          'X-RateLimit-Limit-Tokens': ['2000'],
+          'X-RateLimit-Remaining-Tokens': ['1900'],
+        },
+      }),
+    )
+
+    expect(await screen.findByText('Rate limits')).toBeTruthy()
+
+    expect(screen.getByText('requests limit')).toBeTruthy()
+    expect(screen.getByText('50')).toBeTruthy()
+    expect(screen.getByText('requests remaining')).toBeTruthy()
+    expect(screen.getByText('49')).toBeTruthy()
+
+    expect(screen.getByText('input-tokens limit')).toBeTruthy()
+    expect(screen.getByText('1000')).toBeTruthy()
+
+    expect(screen.getByText('output-tokens remaining')).toBeTruthy()
+    expect(screen.getByText('900')).toBeTruthy()
+
+    expect(screen.getByText('tokens limit')).toBeTruthy()
+    expect(screen.getByText('2000')).toBeTruthy()
+    expect(screen.getByText('tokens remaining')).toBeTruthy()
+    expect(screen.getByText('1900')).toBeTruthy()
+  })
+})
+
 describe('DetailPane — Tools tab (#81)', () => {
   const withTools = detail({
     id: 1,
