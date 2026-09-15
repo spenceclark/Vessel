@@ -50,7 +50,7 @@ public static class HostOriginGuard
                 return true;
             }
 
-            if (ConfigLoader.TryParseListen(configStore.Current.Listen, out System.Net.IPAddress configuredAddress, out _)
+            if (ConfigLoader.TryParseListen(configStore.BoundListen, out System.Net.IPAddress configuredAddress, out _)
                 && hostAddress.Equals(configuredAddress))
             {
                 return true;
