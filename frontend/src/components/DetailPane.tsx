@@ -382,15 +382,20 @@ function RateLimitCards({ headers }: { headers: import('@/api/types').HeaderMap 
 
   const groups = new Map<string, { limit?: string; remaining?: string; reset?: string }>()
   for (const [name, values] of Object.entries(headers)) {
-    if (!RATE_LIMIT_PREFIX.test(name)) continue
-    const rest = name.replace(RATE_LIMIT_PREFIX, '')
-    const [kind, ...rest2] = rest.split('-')
-    const group = rest2.join('-') || 'default'
+    const normalizedName = name.toLowerCase()
+    if (!RATE_LIMIT_PREFIX.test(normalizedName)) continue
+
+    const isAnthropic = normalizedName.startsWith('anthropic-ratelimit-')
+    const rest = normalizedName.replace(RATE_LIMIT_PREFIX, '')
+    const parts = rest.split('-')
+
+    const kind = isAnthropic ? parts.pop() : parts.shift()
+    const group = parts.join('-') || 'default'
+
+    if (kind !== 'limit' && kind !== 'remaining' && kind !== 'reset') continue
+
     const entry = groups.get(group) ?? {}
-    const value = values.join(', ')
-    if (kind === 'limit') entry.limit = value
-    else if (kind === 'remaining') entry.remaining = value
-    else if (kind === 'reset') entry.reset = value
+    entry[kind] = values.join(', ')
     groups.set(group, entry)
   }
 
