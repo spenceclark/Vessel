@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using Vessel.Config;
 using Vessel.Storage;
 
 namespace Vessel.Mcp;
@@ -24,8 +25,8 @@ public sealed class McpResources
 
     [McpServerResource(UriTemplate = "vessel://requests/{id}", Name = "request", MimeType = JsonMime)]
     [Description("One captured request: summary plus flattened prompt and response text, each capped at 20,000 characters.")]
-    public static string Request(SqliteReadStore store, long id) =>
-        McpTools.ReadRequest(store, id, "text", McpTools.MaxChars, 0) is McpRequestResponse payload
+    public static string Request(SqliteReadStore store, ConfigStore configStore, long id) =>
+        McpTools.ReadRequest(store, configStore, id, "text", McpTools.MaxChars, 0) is McpRequestResponse payload
             ? JsonSerializer.Serialize(payload, McpJsonContext.Default.McpRequestResponse)
             : throw NotFound($"vessel://requests/{id}");
 

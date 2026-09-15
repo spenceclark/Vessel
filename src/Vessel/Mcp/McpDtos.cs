@@ -38,7 +38,9 @@ public sealed record McpBodyWindow(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Truncated,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Note,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Binary,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Bytes);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Bytes,
+    /// <summary>#94 — the body exceeded <c>capture.maxBodyMb</c> once decoded, so text covers only its start.</summary>
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool DecodeTruncated = false);
 
 /// <summary>Summary plus two bounded bodies for <c>get_request</c>.</summary>
 public sealed record McpRequestResponse(
