@@ -78,6 +78,14 @@ public static class ReplayEndpoint
         var plans = new List<ReplayPlan>(variations.Length);
         for (int index = 0; index < variations.Length; index++)
         {
+            if (variations[index] is null)
+            {
+                await VesselErrors.Write(
+                    context, StatusCodes.Status400BadRequest, VesselErrors.InvalidRequest,
+                    $"replay variation {index} must not be null", variation: index);
+                return;
+            }
+
             if (!TryCompose(detail, backends, snapshot, variations[index], group, out ReplayPlan? plan, out ReplayError? error))
             {
                 await VesselErrors.Write(
