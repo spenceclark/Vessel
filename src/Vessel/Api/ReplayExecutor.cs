@@ -83,6 +83,7 @@ public sealed class ReplayExecutor(IServer server, ILogger<ReplayExecutor> logge
                 request.Headers.TryAddWithoutValidation(ProxyHandler.ReplayFixupsHeader, plan.FixupId);
             }
             request.Headers.TryAddWithoutValidation(ProxyHandler.ReplayGroupHeader, plan.ReplayGroup);
+            request.Headers.TryAddWithoutValidation(ProxyHandler.ReplayTargetHeader, plan.Target);
             if (plan.PatchJson is not null)
             {
                 request.Headers.TryAddWithoutValidation(ProxyHandler.ReplayPatchHeader, plan.PatchJson);
@@ -138,4 +139,6 @@ public sealed record ReplayPlan(
     /// <summary>#48 — the fan id every child of this multi-replay shares.</summary>
     string ReplayGroup = "",
     /// <summary>#48 — compact JSON of the merge patch this variation applied, null when none.</summary>
-    string? PatchJson = null);
+    string? PatchJson = null,
+    /// <summary>#93 — <see cref="ReplayEndpoint.TargetOf"/> of the backend this plan was composed for.</summary>
+    string Target = "");

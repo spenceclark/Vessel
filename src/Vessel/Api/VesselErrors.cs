@@ -22,6 +22,9 @@ public static class VesselErrors
     public const string FormatMismatch = "format_mismatch";
     public const string MissingReplayAuth = "missing_replay_auth";
 
+    /// <summary>#93 — the replay's backend was reconfigured while it was queued (409, capture row only).</summary>
+    public const string ReplayTargetChanged = "replay_target_changed";
+
     /// <summary>R06 — the writer gave up; commands that need it can't be honoured (503).</summary>
     public const string CaptureStopped = "capture_stopped";
 

@@ -200,7 +200,8 @@ public static class ReplayEndpoint
         plan = new ReplayPlan(
             detail.Id, backend.Name, detail.Method, detail.Path, body,
             Header(detail.RequestHeaders, "Content-Type"), Header(detail.RequestHeaders, "Accept"), detail.Tags,
-            authHeaders, TimeSpan.FromSeconds(snapshot.Config.Timeouts.ActivitySeconds), fixupId, group, patchJson);
+            authHeaders, TimeSpan.FromSeconds(snapshot.Config.Timeouts.ActivitySeconds), fixupId, group, patchJson,
+            TargetOf(backend));
         return true;
     }
 
@@ -421,6 +422,17 @@ public static class ReplayEndpoint
         return !string.IsNullOrWhiteSpace(backend.AuthEnv)
             || (type is "anthropic" or "openai" or "auto") && !isLoopback;
     }
+
+    /// <summary>
+    /// #93 — a fingerprint of everything a composed plan's credential, auth headers and dialect
+    /// fix-up were bound to. A queued plan is sent through <c>/b/{name}</c>, which resolves the
+    /// <em>live</em> config; <see cref="ProxyHandler"/> refuses the replay when this no longer
+    /// matches, so a repointed backend never receives a key composed for its old destination.
+    /// Hashed so the destination URL isn't copied into the replay row's stored headers.
+    /// </summary>
+    public static string TargetOf(ResolvedBackend backend) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{backend.Type}\n{backend.BaseUrl}\n{backend.AuthEnv}")))[..32].ToLowerInvariant();
 
     private static bool TryBuildAuth(
         RequestDetail detail, ResolvedBackend backend,

@@ -680,6 +680,84 @@ public sealed class ReplayTests
     }
 
     [Fact]
+    public async Task Fan_RefusesAMemberWhoseBackendWasRepointedWhileTheFanRan()
+    {
+        string env = $"VESSEL_TEST_REPOINT_{Guid.NewGuid():N}";
+        Environment.SetEnvironmentVariable(env, "old-destination-secret");
+        try
+        {
+            await using TestVessel vessel = await TestVessel.StartAsync(config => config.Backends["stub"].AuthEnv = env);
+            using var client = new HttpClient();
+            long original = await CaptureJson(client, vessel, "/slow-headers?ms=1500&repoint-fan", "");
+
+            using HttpResponseMessage accepted = await client.PostAsJsonAsync(
+                $"{vessel.BaseUrl}/vessel/api/requests/{original}/replay",
+                new { variations = new object[] { new { }, new { } } }, CT);
+            Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+
+            // The first member is now waiting on the slow stub; the second is composed but unsent.
+            await Task.Delay(500, CT);
+            RepointStubWithoutAuth(vessel, VesselPlaceholder);
+
+            JsonElement[] members = (await WaitForReplayCount(client, vessel.BaseUrl, original, 2))
+                .EnumerateArray().OrderBy(replay => replay.GetProperty("id").GetInt64()).ToArray();
+            Assert.Equal(200, members[0].GetProperty("statusCode").GetInt32());
+            AssertRefusedAsRepointed(members[1]);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(env, null);
+        }
+    }
+
+    [Fact]
+    public async Task Replay_RefusesAPlanWhoseBackendWasRepointedWhileItWaitedForADispatchSlot()
+    {
+        string env = $"VESSEL_TEST_REPOINT_{Guid.NewGuid():N}";
+        Environment.SetEnvironmentVariable(env, "old-destination-secret");
+        try
+        {
+            await using TestVessel vessel = await TestVessel.StartAsync(config => config.Backends["stub"].AuthEnv = env);
+            using var client = new HttpClient();
+            long slow = await CaptureJson(client, vessel, "/slow-headers?ms=1500&repoint-blocker", "");
+            long queued = await CaptureJson(client, vessel, "/echo?repoint-queued", "");
+
+            for (int i = 0; i < Vessel.Api.ReplayExecutor.MaxConcurrentReplays; i++)
+            {
+                await Replay(client, vessel, slow, "stub");
+            }
+
+            // Every dispatch slot is held by a slow replay, so this one is composed and queued.
+            await Task.Delay(500, CT);
+            await Replay(client, vessel, queued, "stub");
+            RepointStubWithoutAuth(vessel, VesselPlaceholder);
+
+            AssertRefusedAsRepointed(await WaitForReplay(client, vessel.BaseUrl, queued));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(env, null);
+        }
+    }
+
+    // A forwarded request would have failed as upstream_unreachable against the placeholder;
+    // this code is written before forwarding, so the old credential never left Vessel.
+    private static void AssertRefusedAsRepointed(JsonElement replay)
+    {
+        Assert.Equal(409, replay.GetProperty("statusCode").GetInt32());
+        Assert.Equal("replay_target_changed", replay.GetProperty("error").GetString());
+    }
+
+    private static void RepointStubWithoutAuth(TestVessel vessel, string baseUrl)
+    {
+        ConfigStore store = vessel.Services.GetRequiredService<ConfigStore>();
+        VesselConfig config = store.Current;
+        config.Backends["stub"].BaseUrl = baseUrl;
+        config.Backends["stub"].AuthEnv = null;
+        store.Apply(config);
+    }
+
+    [Fact]
     public async Task Status_PublishesTheSameRequiresAuthRuleReplayItselfApplies()
     {
         await using TestVessel vessel = await TestVessel.StartAsync(config =>
