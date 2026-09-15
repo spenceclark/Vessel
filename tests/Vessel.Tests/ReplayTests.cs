@@ -1,6 +1,6 @@
+using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Json;
-using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
@@ -615,6 +615,32 @@ public sealed class ReplayTests
         Assert.Equal(2, error.RootElement.GetProperty("error").GetProperty("variation").GetInt32());
 
         // Nothing fired: the earlier, valid variations must not leave a half-fired fan behind.
+        await Task.Delay(100, CT);
+        Assert.Empty((await GetReplays(client, vessel.BaseUrl, original)).EnumerateArray());
+    }
+
+    [Theory]
+    [InlineData("""{"variations":[null]}""", 0)]
+    [InlineData("""{"variations":[{},null]}""", 1)]
+    public async Task Fan_RejectsNullVariationWithIndex(string payload, int expectedIndex)
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync(config => config.Backends["stub"].Type = "openai");
+        using var client = new HttpClient();
+        long original = await CaptureJson(
+            client, vessel, "/v1/chat/completions?fan-null", "{\"model\":\"m\",\"messages\":[]}");
+
+        using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
+        using HttpResponseMessage rejected = await client.PostAsync(
+            $"{vessel.BaseUrl}/vessel/api/requests/{original}/replay", content, CT);
+
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        Assert.Equal("invalid_request", rejected.Headers.GetValues("X-Vessel-Error").Single());
+
+        using JsonDocument error = JsonDocument.Parse(await rejected.Content.ReadAsStringAsync(CT));
+        Assert.Equal(
+            expectedIndex,
+            error.RootElement.GetProperty("error").GetProperty("variation").GetInt32());
+
         await Task.Delay(100, CT);
         Assert.Empty((await GetReplays(client, vessel.BaseUrl, original)).EnumerateArray());
     }
