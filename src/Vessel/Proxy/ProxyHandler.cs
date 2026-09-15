@@ -136,6 +136,20 @@ public sealed class ProxyHandler
                 return;
             }
 
+            // #93 — a queued replay was composed (credential included) against an earlier
+            // snapshot; this request resolved the live one. Refuse rather than send that
+            // credential and prompt to wherever the backend now points.
+            if (context.Request.Headers[ReplayTargetHeader].FirstOrDefault() is string target
+                && target != ReplayEndpoint.TargetOf(decision.Backend))
+            {
+                capture.Error = VesselErrors.ReplayTargetChanged;
+                capture.ResponseAuthoredByVessel = true;
+                await VesselErrors.Write(
+                    context, StatusCodes.Status409Conflict, VesselErrors.ReplayTargetChanged,
+                    $"backend '{decision.Backend.Name}' was reconfigured after this replay was queued; replay it again");
+                return;
+            }
+
             context.Items[RouteDecision.ItemsKey] = decision;
 
             ForwarderError error = await _forwarder.SendAsync(
@@ -214,6 +228,9 @@ public sealed class ProxyHandler
     public const string ReplayGroupHeader = "X-Vessel-Replay-Group";
 
     public const string ReplayPatchHeader = "X-Vessel-Replay-Patch";
+
+    /// <summary>#93 — <see cref="Api.ReplayEndpoint.TargetOf"/> of the backend a replay was composed for. Stripped like every other <c>X-Vessel-*</c> header.</summary>
+    public const string ReplayTargetHeader = "X-Vessel-Replay-Target";
 
     private static string? ParseFanHeader(IHeaderDictionary headers, string name)
     {

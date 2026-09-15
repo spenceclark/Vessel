@@ -265,6 +265,14 @@ for the whole fan: fired concurrently they contended for a single local backend 
 duration column measured that contention rather than the model. Independent replays are each
 their own fan and still run four at a time.
 
+Because a plan is composed (auth header included) against one config snapshot but sent
+later through `/b/{backend}`, which resolves the live one, each plan also carries
+`X-Vessel-Replay-Target` — a hash of the backend's type, base URL and `authEnv` at compose
+time (issue #93). `ProxyHandler` compares it against the backend it just resolved and, on a
+mismatch, refuses before forwarding with a `409 replay_target_changed` capture row, so a
+backend repointed while a fan runs or a replay waits for a slot never receives a credential
+or prompt composed for its old destination.
+
 Scoring (#49) is a `score` column on the request row (migration v5), 1-5 or NULL — keyed by
 request id rather than by group, so the original of a fan and a pre-v4 single replay are both
 scorable. There is no score table, no history and no author: single-user local tool, latest
