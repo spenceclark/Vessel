@@ -428,9 +428,12 @@ public sealed class SqliteReadStore(string dbPath)
     /// index, then recreates its flattened prompt/response text at read time. The writer
     /// deliberately owns FTS population, but contentless FTS cannot return its columns;
     /// this helper therefore remains strictly on the read side and is never used by the
-    /// proxy or capture writer.
+    /// proxy or capture writer. #94 — bodies decode under the same
+    /// <paramref name="maxDecodedBytes"/> budget as the REST detail read; MCP's character
+    /// window is applied later, so without it a small compressed capture could expand
+    /// without limit.
     /// </summary>
-    public McpRequestData? GetMcpRequest(long id)
+    public McpRequestData? GetMcpRequest(long id, long maxDecodedBytes)
     {
         using SqliteConnection connection = Open();
         using SqliteCommand command = connection.CreateCommand();
@@ -455,20 +458,23 @@ public sealed class SqliteReadStore(string dbPath)
             : JsonNode.Parse(reader.GetString(SummaryColumnCount + 1));
 
         McpBodyData? requestBody = ToMcpBodyData(
-            reader, SummaryColumnCount + 2, ContentEncodingOf(requestHeaders));
-        McpBodyData? responseBody = ToMcpBodyData(
-            reader, summary.Streamed ? SummaryColumnCount + 4 : SummaryColumnCount + 3,
-            ContentEncodingOf(responseHeaders));
+            reader, SummaryColumnCount + 2, ContentEncodingOf(requestHeaders), maxDecodedBytes);
+        McpBodyData? flattenedResponseBody = ToMcpBodyData(
+            reader, SummaryColumnCount + 3, ContentEncodingOf(responseHeaders), maxDecodedBytes);
 
         // Flatten against the reassembled response body, not the wire chunk stream. This
         // is exactly the normal representation the writer's adapters receive for a
-        // streamed row, and makes the same text visible without reading FTS columns.
-        McpBodyData? flattenedResponseBody = ToMcpBodyData(
-            reader, SummaryColumnCount + 3, ContentEncodingOf(responseHeaders));
+        // streamed row, and makes the same text visible without reading FTS columns. Only a
+        // streamed row has a separate raw body to decode.
+        McpBodyData? responseBody = summary.Streamed
+            ? ToMcpBodyData(reader, SummaryColumnCount + 4, ContentEncodingOf(responseHeaders), maxDecodedBytes)
+            : flattenedResponseBody;
         string? promptText = FlattenPrompt(summary.Format, requestBody?.Text);
         string? responseText = FlattenResponse(summary.Format, flattenedResponseBody?.Text);
 
-        return new McpRequestData(summary, requestBody, responseBody, promptText, responseText);
+        return new McpRequestData(
+            summary, requestBody, responseBody, promptText, responseText,
+            flattenedResponseBody?.DecodeTruncated is true);
     }
 
     /// <summary>Replay children of one original, newest first, for the Compare entry points.</summary>
@@ -1222,7 +1228,8 @@ public sealed class SqliteReadStore(string dbPath)
             : new BodyPayload(null, Convert.ToBase64String(raw), truncated, failed);
     }
 
-    private static McpBodyData? ToMcpBodyData(SqliteDataReader reader, int ordinal, string? contentEncoding)
+    private static McpBodyData? ToMcpBodyData(
+        SqliteDataReader reader, int ordinal, string? contentEncoding, long maxDecodedBytes)
     {
         if (reader.IsDBNull(ordinal))
         {
@@ -1230,20 +1237,22 @@ public sealed class SqliteReadStore(string dbPath)
         }
 
         byte[] stored = BodyCompression.Decompress((byte[])reader.GetValue(ordinal));
-        // Captures are already bounded by capture.maxBodyMb. This read-side helper needs
-        // the complete decoded body to report an accurate character count; it never runs
-        // on the proxy or writer paths.
-        BodyDecoder.Result decoded = BodyDecoder.Decode(stored, contentEncoding, long.MaxValue);
+        BodyDecoder.Result decoded = BodyDecoder.Decode(stored, contentEncoding, maxDecodedBytes);
         byte[] bytes = decoded.Bytes ?? stored;
+        bool truncated = decoded.Status == BodyDecoder.DecodeStatus.TruncatedDecode;
 
         try
         {
-            string text = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(bytes);
-            return new McpBodyData(text, null, bytes.LongLength);
+            // A decode cut at the budget can split the last UTF-8 sequence; without flushing,
+            // the decoder drops that incomplete tail instead of calling the whole body binary.
+            Decoder utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetDecoder();
+            char[] chars = new char[utf8.GetCharCount(bytes, 0, bytes.Length, flush: !truncated)];
+            utf8.GetChars(bytes, 0, bytes.Length, chars, 0, flush: !truncated);
+            return new McpBodyData(new string(chars), null, bytes.LongLength, truncated);
         }
         catch (DecoderFallbackException)
         {
-            return new McpBodyData(null, true, bytes.LongLength);
+            return new McpBodyData(null, true, bytes.LongLength, truncated);
         }
     }
 
@@ -1310,7 +1319,7 @@ public sealed class SqliteReadStore(string dbPath)
 public sealed record BackendHealthSeed(string Backend, string StartedAt, string? Error);
 
 /// <summary>Read-only MCP projection of a decoded capture body; binary bytes are never encoded to text.</summary>
-public sealed record McpBodyData(string? Text, bool? Binary, long Bytes);
+public sealed record McpBodyData(string? Text, bool? Binary, long Bytes, bool DecodeTruncated = false);
 
 /// <summary>MCP D3's one read-side record, including text recreated from stored JSON bodies.</summary>
 public sealed record McpRequestData(
@@ -1318,4 +1327,6 @@ public sealed record McpRequestData(
     McpBodyData? RequestBody,
     McpBodyData? ResponseBody,
     string? PromptText,
-    string? ResponseText);
+    string? ResponseText,
+    /// <summary>#94 — the reassembled body <see cref="ResponseText"/> is flattened from hit the decode budget.</summary>
+    bool ResponseTextDecodeTruncated = false);

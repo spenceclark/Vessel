@@ -3,6 +3,7 @@ using System.Text.Json;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Vessel.Capture;
+using Vessel.Config;
 using Vessel.Storage;
 
 namespace Vessel.Mcp;
@@ -41,9 +42,10 @@ public sealed class McpTools
     }
 
     [McpServerTool(Name = "get_request", ReadOnly = true)]
-    [Description("Read one captured request. include=text (default) returns flattened prompt and response text recreated from stored bodies at read time; include=raw returns decoded wire bodies. Each body is windowed to 4,000 characters by default (maximum 20,000), with an in-payload note telling you which offset to request next. Binary is reported by byte count and is never inlined.")]
+    [Description("Read one captured request. include=text (default) returns flattened prompt and response text recreated from stored bodies at read time; include=raw returns decoded wire bodies. Each body is windowed to 4,000 characters by default (maximum 20,000), with an in-payload note telling you which offset to request next. Binary is reported by byte count and is never inlined. decodeTruncated marks a body that exceeded the capture size limit once decoded.")]
     public static CallToolResult GetRequest(
         SqliteReadStore store,
+        ConfigStore configStore,
         [Description("Captured request id.")] long id,
         [Description("text (default) for flattened prompt/response, or raw for decoded wire bodies.")] string include = "text",
         [Description("Characters per prompt/response body window; defaults to 4000 and is capped at 20000.")] int maxChars = DefaultMaxChars,
@@ -54,7 +56,7 @@ public sealed class McpTools
             return Error("include must be 'text' or 'raw'");
         }
 
-        return ReadRequest(store, id, include, maxChars, offset) is McpRequestResponse payload
+        return ReadRequest(store, configStore, id, include, maxChars, offset) is McpRequestResponse payload
             ? Json(payload, McpJsonContext.Default.McpRequestResponse)
             : Error($"request {id} was not found");
     }
@@ -63,9 +65,10 @@ public sealed class McpTools
     /// <c>get_request</c>'s payload, shared with the <c>vessel://requests/{id}</c> resource
     /// (#87). Null when the request doesn't exist.
     /// </summary>
-    internal static McpRequestResponse? ReadRequest(SqliteReadStore store, long id, string include, int maxChars, int offset)
+    internal static McpRequestResponse? ReadRequest(
+        SqliteReadStore store, ConfigStore configStore, long id, string include, int maxChars, int offset)
     {
-        McpRequestData? request = store.GetMcpRequest(id);
+        McpRequestData? request = store.GetMcpRequest(id, CaptureBudget.MaxDecodedBytes(configStore.Current));
         if (request is null)
         {
             return null;
@@ -74,10 +77,10 @@ public sealed class McpTools
         int boundedMaxChars = Math.Clamp(maxChars, 1, MaxChars);
         int boundedOffset = Math.Max(offset, 0);
         McpBodyWindow? prompt = include == "text"
-            ? WindowText(request.PromptText, boundedOffset, boundedMaxChars)
+            ? WindowText(request.PromptText, request.RequestBody?.DecodeTruncated is true, boundedOffset, boundedMaxChars)
             : WindowRaw(request.RequestBody, boundedOffset, boundedMaxChars);
         McpBodyWindow? response = include == "text"
-            ? WindowText(request.ResponseText, boundedOffset, boundedMaxChars)
+            ? WindowText(request.ResponseText, request.ResponseTextDecodeTruncated, boundedOffset, boundedMaxChars)
             : WindowRaw(request.ResponseBody, boundedOffset, boundedMaxChars);
 
         return new McpRequestResponse(
@@ -126,11 +129,18 @@ public sealed class McpTools
         summary.TokensEstimated, summary.StopReason, summary.Warnings, summary.Truncated, summary.Score,
         summary.ReplayOf, summary.ReplayGroup, summary.ReplayPatch);
 
-    private static McpBodyWindow? WindowText(string? text, int offset, int maxChars)
+    private static McpBodyWindow? WindowText(string? text, bool decodeTruncated, int offset, int maxChars)
     {
         if (text is null)
         {
-            return null;
+            // #94 — a body cut at the decode budget is usually unparseable, so there is no
+            // flattened text; say why rather than returning nothing.
+            return decodeTruncated
+                ? new McpBodyWindow(
+                    null, 0, false,
+                    "body exceeded the capture size limit once decoded, so its text could not be recreated — use include=raw for its start",
+                    Binary: false, Bytes: null, DecodeTruncated: true)
+                : null;
         }
 
         int start = Math.Min(offset, text.Length);
@@ -140,7 +150,7 @@ public sealed class McpTools
         return new McpBodyWindow(
             text.Substring(start, length), text.Length, truncated,
             truncated ? $"truncated at {end} of {text.Length} — call again with offset={end}" : null,
-            Binary: false, Bytes: null);
+            Binary: false, Bytes: null, DecodeTruncated: decodeTruncated);
     }
 
     private static McpBodyWindow? WindowRaw(McpBodyData? body, int offset, int maxChars)
@@ -152,10 +162,10 @@ public sealed class McpTools
 
         if (body.Binary is true)
         {
-            return new McpBodyWindow(null, 0, false, null, Binary: true, Bytes: body.Bytes);
+            return new McpBodyWindow(null, 0, false, null, Binary: true, Bytes: body.Bytes, body.DecodeTruncated);
         }
 
-        return WindowText(body.Text, offset, maxChars);
+        return WindowText(body.Text, body.DecodeTruncated, offset, maxChars);
     }
 
     private static CallToolResult Json<T>(T payload, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo) => new()

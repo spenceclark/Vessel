@@ -395,7 +395,9 @@ display under the same byte budget used at capture.
 
 **MCP tools** (read-only, `McpTools`): `search_requests` (same filter semantics as the
 history list, compact body-free rows, `nextBefore` cursor), `get_request` (windowed
-text/raw bodies, 4k default/20k max chars, paging offset), `get_stats`, and
+text/raw bodies, 4k default/20k max chars, paging offset; bodies decode under the same
+`capture.maxBodyMb` budget as REST detail before any windowing, and a cut body is flagged
+`decodeTruncated`), `get_stats`, and
 `list_sessions`. The server shares the control plane's Host guard and has no
 additional auth — `/vessel/mcp` can read your captured prompts.
 

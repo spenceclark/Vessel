@@ -230,6 +230,48 @@ public sealed class McpTests
 
     // #87 — requests and sessions as resources: templates, a bounded recent list, reads that
     // match get_request with a single 20,000-char window, and a not-found error.
+    // #94 — a tiny compressed capture must not decode past capture.maxBodyMb just because MCP
+    // windows characters afterwards; the cut is reported, not presented as the whole body.
+    [Fact]
+    public async Task M3b_GetRequestAndResource_DecodeCompressedBodiesUnderTheCaptureBudget()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync(config => config.Capture.MaxBodyMb = 1);
+        const int budget = 1024 * 1024;
+        byte[] expanded = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            model = "bomb-model",
+            choices = new[] { new { message = new { role = "assistant", content = new string('a', 4 * budget) } } },
+        }));
+        using var compressed = new MemoryStream();
+        using (var gzip = new System.IO.Compression.GZipStream(compressed, System.IO.Compression.CompressionLevel.SmallestSize, leaveOpen: true))
+        {
+            gzip.Write(expanded);
+        }
+
+        Assert.True(compressed.Length < 64 * 1024);
+        long id = Seed(vessel.DbPath, 1, "stub", "bomb-model", [], 200, null, null, "hello", "unused",
+            responseBytes: compressed.ToArray(), responseHeaders: """{"Content-Encoding":["gzip"]}""");
+
+        await using McpClient client = await Connect(vessel.BaseUrl);
+        McpRequestPayload raw = await GetRequest(client, id, "raw", 10, 0);
+        Assert.Equal(budget, raw.Response!.TotalChars);
+        Assert.Equal(10, raw.Response.Text!.Length);
+        Assert.True(raw.Response.DecodeTruncated);
+        Assert.False(raw.Prompt!.DecodeTruncated);
+
+        McpRequestPayload text = await GetRequest(client, id, "text", 10, 0);
+        Assert.True(text.Response!.DecodeTruncated);
+        Assert.Null(text.Response.Text);
+        Assert.Contains("include=raw", text.Response.Note);
+        Assert.Equal("user: hell", text.Prompt!.Text);
+
+        ReadResourceResult read = await client.ReadResourceAsync($"vessel://requests/{id}", cancellationToken: CT);
+        McpRequestPayload resource = JsonSerializer.Deserialize<McpRequestPayload>(
+            Assert.IsType<TextResourceContents>(Assert.Single(read.Contents)).Text,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.True(resource.Response!.DecodeTruncated);
+    }
+
     [Fact]
     public async Task M7_Resources_TemplatesListAndRead()
     {
@@ -452,11 +494,12 @@ public sealed class McpTests
     private static long Seed(
         string dbPath, long? sessionId, string backend, string model, string[] tags, int statusCode, string? error,
         string? warning, string prompt, string response, byte[]? requestBytes = null, long? tokensIn = null,
-        long? tokensOut = null, bool tokensEstimated = false)
+        long? tokensOut = null, bool tokensEstimated = false, byte[]? responseBytes = null,
+        string responseHeaders = "{}")
     {
         byte[] request = requestBytes ?? Encoding.UTF8.GetBytes(
             JsonSerializer.Serialize(new { model, messages = new[] { new { role = "user", content = prompt } } }));
-        byte[] responseBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        responseBytes ??= Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
         {
             model,
             choices = new[] { new { message = new { role = "assistant", content = response } } },
@@ -474,7 +517,7 @@ public sealed class McpTests
                                   streamed, duration_ms, request_headers, response_headers, request_body, response_body,
                                   tokens_in, tokens_out, tokens_estimated, warnings)
             VALUES ($started, $session, $backend, $tags, 'POST', '/v1/chat/completions', 'openai-chat', $model, $status,
-                    $error, 0, 10, '{}', '{}', $request, $response, $tokensIn, $tokensOut, $estimated, $warnings)
+                    $error, 0, 10, '{}', $responseHeaders, $request, $response, $tokensIn, $tokensOut, $estimated, $warnings)
             RETURNING id
             """;
         command.Parameters.AddWithValue("$started", DateTime.UtcNow.ToString("O"));
@@ -484,6 +527,7 @@ public sealed class McpTests
         command.Parameters.AddWithValue("$model", model);
         command.Parameters.AddWithValue("$status", statusCode);
         command.Parameters.AddWithValue("$error", (object?)error ?? DBNull.Value);
+        command.Parameters.AddWithValue("$responseHeaders", responseHeaders);
         command.Parameters.AddWithValue("$request", BodyCompression.Compress(request));
         command.Parameters.AddWithValue("$response", BodyCompression.Compress(responseBytes));
         command.Parameters.AddWithValue("$tokensIn", (object?)tokensIn ?? DBNull.Value);
@@ -659,5 +703,6 @@ public sealed class McpTests
     private sealed record McpSearchPayload(McpSearchRowPayload[] Rows, long? NextBefore);
     private sealed record McpSearchRowPayload(long Id, string? PromptPreview);
     private sealed record McpRequestPayload(McpBodyPayload? Prompt, McpBodyPayload? Response);
-    private sealed record McpBodyPayload(string? Text, long TotalChars, bool Truncated, string? Note, bool Binary, long? Bytes);
+    private sealed record McpBodyPayload(
+        string? Text, long TotalChars, bool Truncated, string? Note, bool Binary, long? Bytes, bool DecodeTruncated);
 }
