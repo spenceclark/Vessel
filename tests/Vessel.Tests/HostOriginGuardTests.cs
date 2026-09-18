@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -71,6 +72,39 @@ public class HostOriginGuardTests
 
         using HttpResponseMessage response = await client.SendAsync(request, CT);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task PendingListenChange_KeepsActuallyBoundHostAllowed()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync();
+        using var client = new HttpClient();
+
+        var authority = new Uri(vessel.BaseUrl);
+        var configStore = vessel.Services.GetRequiredService<ConfigStore>();
+
+        configStore.RecordBoundListen(IPAddress.Parse("192.168.1.10"), authority.Port);
+
+        VesselConfig candidate = configStore.Current;
+        candidate.Listen = $"192.168.1.20:{authority.Port}";
+        configStore.Apply(candidate);
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get, $"{vessel.BaseUrl}/vessel/api/status");
+        request.Headers.Host = $"192.168.1.10:{authority.Port}";
+
+        using HttpResponseMessage response = await client.SendAsync(request, CT);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var pendingRequest = new HttpRequestMessage(
+            HttpMethod.Get, $"{vessel.BaseUrl}/vessel/api/status");
+        pendingRequest.Headers.Host = $"192.168.1.20:{authority.Port}";
+
+        using HttpResponseMessage pendingResponse = await client.SendAsync(pendingRequest, CT);
+
+        Assert.Equal(HttpStatusCode.Forbidden, pendingResponse.StatusCode);
+        Assert.Contains("listen", configStore.PendingRestart);
     }
 
     [Fact]
