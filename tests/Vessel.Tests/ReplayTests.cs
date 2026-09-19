@@ -144,6 +144,43 @@ public sealed class ReplayTests
         }
     }
 
+    // #115 — the TypeSafe catalog preset is `auto` + authEnv: never offered an OpenAI-format
+    // capture from another backend, yet its own System One rows still replay with Bearer auth.
+    [Fact]
+    public async Task Replay_AutoBackendWithAuthEnv_RejectsOpenAiCaptures_AndReplaysSystemOneWithBearer()
+    {
+        string env = $"VESSEL_TEST_TYPESAFE_{Guid.NewGuid():N}";
+        Environment.SetEnvironmentVariable(env, "typesafe-test-secret");
+        try
+        {
+            await using TestVessel vessel = await TestVessel.StartAsync(config =>
+                config.Backends["typesafe"] = new() { BaseUrl = VesselPlaceholder, Type = "auto", AuthEnv = env });
+            VesselConfig config = vessel.Services.GetRequiredService<ConfigStore>().Current;
+            config.Backends["typesafe"].BaseUrl = vessel.Stub.BaseUrl;
+            vessel.Services.GetRequiredService<ConfigStore>().Apply(config);
+
+            using var client = new HttpClient();
+            long chatId = await CaptureJson(client, vessel, "/v1/chat/completions?typesafe-chat", "{\"model\":\"m\",\"messages\":[]}");
+            long systemOneId = await CaptureJson(
+                client, vessel, "/b/typesafe/v1/systemone?typesafe-systemone", "{\"model\":\"jev-latest\",\"state\":\"x\",\"questions\":{}}");
+
+            using HttpResponseMessage rejected = await client.PostAsJsonAsync(
+                $"{vessel.BaseUrl}/vessel/api/requests/{chatId}/replay", new { backend = "typesafe" }, CT);
+            Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+            Assert.Equal("format_mismatch", rejected.Headers.GetValues("X-Vessel-Error").Single());
+
+            await Replay(client, vessel, systemOneId, "typesafe");
+            JsonElement replay = await WaitForReplay(client, vessel.BaseUrl, systemOneId);
+            Assert.True((await ReplayReflect(client, vessel.BaseUrl, replay)).HasAuthorization);
+            Assert.DoesNotContain(
+                "typesafe-test-secret", await DetailText(client, vessel.BaseUrl, replay.GetProperty("id").GetInt64(), "requestHeaders"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(env, null);
+        }
+    }
+
     [Fact]
     public async Task Replay_CompatibilityMatrix_IsEnforcedWithoutDispatchingRejectedTargets()
     {

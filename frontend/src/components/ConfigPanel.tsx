@@ -52,6 +52,27 @@ const BACKEND_CATALOG: readonly BackendCatalogEntry[] = [
     type: 'openai',
     authEnv: 'GEMINI_API_KEY',
   },
+  // #115 — `/api`, not `/api/v1`: clients keep the usual `/v1` base_url, and siblings of
+  // `/api/v1` (the alpha decisions endpoint, #113) stay reachable.
+  {
+    key: 'openrouter',
+    label: 'OpenRouter',
+    name: 'openrouter',
+    baseUrl: 'https://openrouter.ai/api',
+    type: 'openai',
+    authEnv: 'OPENROUTER_API_KEY',
+  },
+  // Not an OpenAI wire format (System One, #113), so not `openai`: that would offer it as a
+  // replay target for every chat/Responses capture. `auto` + authEnv still replays its own
+  // rows with Bearer auth.
+  {
+    key: 'typesafe',
+    label: 'TypeSafe',
+    name: 'typesafe',
+    baseUrl: 'https://api.typesafe.ai',
+    type: 'auto',
+    authEnv: 'TYPESAFE_API_KEY',
+  },
 ]
 
 const CUSTOM_BACKEND_KEY = 'custom'

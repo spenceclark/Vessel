@@ -41,6 +41,9 @@ describe('buildCurl', () => {
   it('mirrors replay auth rules for authEnv, loopback and anthropic targets', () => {
     const custom = buildCurl(detail(), '127.0.0.1:4550', backend({ authEnv: 'GEMINI_API_KEY' }))
     expect(custom).toContain('Authorization: Bearer $GEMINI_API_KEY')
+    // #115 — without the catalog's authEnv an openai-typed backend falls back to $OPENAI_API_KEY.
+    expect(buildCurl(detail(), '127.0.0.1:4550', backend({ baseUrl: 'https://openrouter.ai/api', authEnv: 'OPENROUTER_API_KEY' })))
+      .toContain('Authorization: Bearer $OPENROUTER_API_KEY')
 
     const local = buildCurl(detail(), '127.0.0.1:4550', backend({ baseUrl: 'http://localhost:1234' }))
     expect(local).not.toContain('Authorization:')
