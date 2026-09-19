@@ -89,10 +89,10 @@ describe('ConfigPanel add-backend picker (#9)', () => {
   })
 
   it.each([
-    ['openai', 'https://api.openai.com', 'OPENAI_API_KEY'],
-    ['openrouter', 'https://openrouter.ai/api', 'OPENROUTER_API_KEY'], // #115
-    ['typesafe', 'https://api.typesafe.ai', 'TYPESAFE_API_KEY'], // #115
-  ])('prefills baseUrl/type/authEnv for %s, without disturbing the existing row', async (name, baseUrl, authEnv) => {
+    ['openai', 'https://api.openai.com', 'openai', 'OPENAI_API_KEY'],
+    ['openrouter', 'https://openrouter.ai/api', 'openai', 'OPENROUTER_API_KEY'], // #115
+    ['typesafe', 'https://api.typesafe.ai', 'auto', 'TYPESAFE_API_KEY'], // #115 — not an OpenAI replay target
+  ])('prefills baseUrl/type/authEnv for %s, without disturbing the existing row', async (name, baseUrl, type, authEnv) => {
     renderConfigPanel('dark')
 
     fireEvent.change(await screen.findByLabelText('Add backend'), { target: { value: name } })
@@ -104,7 +104,7 @@ describe('ConfigPanel add-backend picker (#9)', () => {
       .find((el) => (el as HTMLInputElement).value === name)!
       .closest('div.rounded-control') as HTMLElement
     expect((within(row).getByPlaceholderText('http://localhost:11434') as HTMLInputElement).value).toBe(baseUrl)
-    expect((within(row).getByRole('combobox') as HTMLSelectElement).value).toBe('openai')
+    expect((within(row).getByRole('combobox') as HTMLSelectElement).value).toBe(type)
     expect(
       (within(row).getByLabelText(`Authentication environment variable for ${name}`) as HTMLInputElement).value,
     ).toBe(authEnv)

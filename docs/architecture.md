@@ -504,7 +504,7 @@ editable in the UI:
     "anthropic": { "baseUrl": "https://api.anthropic.com", "type": "anthropic", "authEnv": "ANTHROPIC_API_KEY" },
     "gemini":    { "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "type": "openai", "authEnv": "GEMINI_API_KEY" },
     "openrouter": { "baseUrl": "https://openrouter.ai/api", "type": "openai", "authEnv": "OPENROUTER_API_KEY" },
-    "typesafe":  { "baseUrl": "https://api.typesafe.ai", "type": "openai", "authEnv": "TYPESAFE_API_KEY" }
+    "typesafe":  { "baseUrl": "https://api.typesafe.ai", "type": "auto", "authEnv": "TYPESAFE_API_KEY" }
   },
   "timeouts":  { "activitySeconds": 1800 },
   "retention": { "maxRequests": 10000, "maxDbSizeMb": 500 },
@@ -527,9 +527,10 @@ SDKs). OpenRouter's entry stops at `/api` rather than its documented `/api/v1`: 
 the same `/v1` `base_url` they use for every other OpenAI-compatible backend
 (`http://localhost:4550/b/openrouter/v1`), and endpoints that sit beside `/api/v1` — the alpha
 decisions endpoint at `/alpha/decisions` (#113) — stay reachable. TypeSafe's System One API
-(`POST /v1/systemone`) is not an OpenAI wire format; it is typed `openai` because that is what
-makes replay send Bearer `TYPESAFE_API_KEY`, and its traffic is still detected as
-`typesafe-systemone` by path.
+(`POST /v1/systemone`) is not an OpenAI wire format, so its entry is `auto` rather than
+`openai`: an `openai` type would offer it as a replay target for every chat/Responses capture.
+Replay auth does not need the type — any non-Anthropic backend with `authEnv` sends Bearer —
+and `typesafe-systemone` rows replay to their own backend regardless of type.
 
 | Backend | Default endpoint | Wire format | Authentication at default | Auth environment variable when enabled/required |
 | --- | --- | --- | --- | --- |
@@ -543,7 +544,7 @@ makes replay send Bearer `TYPESAFE_API_KEY`, and its traffic is still detected a
 | Anthropic | `https://api.anthropic.com` (443) | Anthropic Messages | required | `ANTHROPIC_API_KEY` |
 | Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` (443) | OpenAI-compatible | required | `GEMINI_API_KEY` (`GOOGLE_API_KEY` also supported) |
 | OpenRouter | `https://openrouter.ai/api` (443) | OpenAI-compatible | required | `OPENROUTER_API_KEY` |
-| TypeSafe | `https://api.typesafe.ai` (443) | System One (`type: openai` for Bearer auth) | required | `TYPESAFE_API_KEY` |
+| TypeSafe | `https://api.typesafe.ai` (443) | System One (`type: auto`) | required | `TYPESAFE_API_KEY` |
 
 ### 9.1 Live apply (Phase 4)
 

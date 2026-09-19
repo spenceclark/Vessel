@@ -154,6 +154,7 @@ public sealed class StubBackend : IAsyncDisposable
         };
         app.Map("/v1/chat/completions", reflectRequest);
         app.Map("/v1/messages", reflectRequest);
+        app.Map("/v1/systemone", reflectRequest);
 
         // D01/R05 — a gzip-encoded JSON response. ?bomb=1 makes the *decoded* size huge from
         // a tiny wire body (highly compressible zeros), which is how the decode budget gets

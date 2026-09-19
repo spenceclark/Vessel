@@ -33,6 +33,23 @@ describe('ReplayDialog', () => {
     await waitFor(() => expect(replay).toHaveBeenCalledWith(1, { backend: 'anthropic-target' }))
   })
 
+  // #115 — the TypeSafe preset is `auto`, so an OpenAI-format capture never lists it as a
+  // target, while its own System One rows still do.
+  it('offers an auto-typed TypeSafe backend only to its own System One rows', () => {
+    const typesafe: StatusBackend = { ...backends[0], name: 'typesafe', baseUrl: 'https://api.typesafe.ai', type: 'auto', default: false, requiresAuth: true }
+    const targets = () => Array.from((screen.getByLabelText('Backend') as HTMLSelectElement).options).map((o) => o.value)
+
+    const rendered = render(createElement(ReplayDialog, {
+      detail: detail({ format: 'openai-chat', path: '/v1/chat/completions' }), backends: [backends[0], typesafe], open: true, onClose: () => undefined,
+    }))
+    expect(targets()).toEqual(['openai-source'])
+
+    rendered.rerender(createElement(ReplayDialog, {
+      detail: detail({ backend: 'typesafe', format: 'typesafe-systemone', path: '/v1/systemone' }), backends: [backends[0], typesafe], open: true, onClose: () => undefined,
+    }))
+    expect(targets()).toEqual(['typesafe'])
+  })
+
   it('treats a blank model as no override and disables override for raw rows', async () => {
     const replay = vi.spyOn(api, 'replay').mockResolvedValue({ replayGroup: 'fan0', count: 1 })
     const sourceOnly = [backends[0]]

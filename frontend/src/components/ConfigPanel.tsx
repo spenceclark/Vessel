@@ -62,13 +62,15 @@ const BACKEND_CATALOG: readonly BackendCatalogEntry[] = [
     type: 'openai',
     authEnv: 'OPENROUTER_API_KEY',
   },
-  // Not an OpenAI wire format (System One, #113); `openai` is what gives replay Bearer auth.
+  // Not an OpenAI wire format (System One, #113), so not `openai`: that would offer it as a
+  // replay target for every chat/Responses capture. `auto` + authEnv still replays its own
+  // rows with Bearer auth.
   {
     key: 'typesafe',
     label: 'TypeSafe',
     name: 'typesafe',
     baseUrl: 'https://api.typesafe.ai',
-    type: 'openai',
+    type: 'auto',
     authEnv: 'TYPESAFE_API_KEY',
   },
 ]
