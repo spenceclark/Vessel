@@ -5,11 +5,16 @@ import type { ImageSource, RenderBlock, RenderedView, RenderMessage } from '@/re
 import { tryPrettyJson } from '@/render/prettyJson'
 import { Badge } from '@/components/ui/badge'
 import { ServerToolResultCard, ToolCallCard } from '@/components/ToolCallCard'
+import { DecisionsView } from '@/components/DecisionsView'
 
 const CLAMP_LENGTH = 4000
 
 /** D4 — renders a normalized `RenderedView`: system block, per-message blocks, params. */
 export function MessageView({ view }: { view: RenderedView }) {
+  // #113 — System One has no messages; every caller (DetailPane, CompareView) routes through
+  // here, so this one branch gives them all the dedicated view.
+  if (view.decisions) return <DecisionsView decisions={view.decisions} />
+
   return (
     <div className="flex flex-col gap-3 p-3">
       {view.system && (

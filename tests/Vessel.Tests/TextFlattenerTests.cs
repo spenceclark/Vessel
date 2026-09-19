@@ -109,4 +109,17 @@ public class TextFlattenerTests
             "Vessel is a proxy.",
             Flatten("""[{"type":"text","text":"Vessel is a proxy.","citations":[{"type":"web_search_result_location","url":"https://a.example","title":"A","cited_text":"a proxy","encrypted_index":"SECRET"}]}]"""));
     }
+
+    // #113 — System One answers: an unknown type, or a known type missing its value, keeps
+    // its JSON rather than being dropped; garbage never throws.
+    [Fact]
+    public void SystemOneAnswers_UnknownOrMalformedAnswer_FlattensToCompactJson()
+    {
+        Assert.Equal(
+            "rank: {\"type\":\"rank\",\"order\":[\"a\",\"b\"]}\nbroken: {\"type\":\"choice\"}\nodd: 5",
+            TextFlattener.SystemOneAnswers(JsonNode.Parse(
+                """{"answers":{"rank":{"type":"rank","order":["a","b"]},"broken":{"type":"choice"},"odd":5}}""")));
+        Assert.Null(TextFlattener.SystemOneAnswers(JsonNode.Parse("""{"answers":[]}""")));
+        Assert.Null(TextFlattener.SystemOneQuestions(JsonNode.Parse("""{"questions":"nope"}""")));
+    }
 }

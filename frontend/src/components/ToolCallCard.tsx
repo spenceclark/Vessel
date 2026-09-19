@@ -56,7 +56,7 @@ const BODY_CLASS = 'max-h-64 overflow-auto border-t border-border px-2 py-1.5 fo
  * `stdout`, …) show real newlines instead of escaped `\n`. Top level only; anything else
  * (arrays, primitives, unparseable text) stays pretty-printed or verbatim.
  */
-function ToolContent({ content }: { content: string }) {
+export function ToolContent({ content }: { content: string }) {
   const fields = objectFields(content)
   if (!fields) {
     return <pre className={cn(BODY_CLASS, 'whitespace-pre-wrap break-words')}>{prettyOrRaw(content)}</pre>

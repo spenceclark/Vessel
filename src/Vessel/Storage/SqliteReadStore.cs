@@ -1264,6 +1264,7 @@ public sealed class SqliteReadStore(string dbPath)
             FormatNames.OpenAiResponses => TextFlattener.ResponsesInput(JsonUtil.Parse(body)),
             FormatNames.AnthropicMessages => TextFlattener.AnthropicPrompt(JsonUtil.Parse(body)),
             FormatNames.OllamaGenerate => TextFlattener.OllamaGeneratePrompt(JsonUtil.Parse(body)),
+            FormatNames.TypeSafeSystemOne => TextFlattener.SystemOneQuestions(JsonUtil.Parse(body)),
             _ => null,
         };
 
@@ -1276,6 +1277,7 @@ public sealed class SqliteReadStore(string dbPath)
             FormatNames.AnthropicMessages => TextFlattener.AnthropicResponse(JsonUtil.Parse(body)),
             FormatNames.OllamaChat => TextFlattener.OllamaChatResponse(JsonUtil.Parse(body)),
             FormatNames.OllamaGenerate => TextFlattener.OllamaGenerateResponse(JsonUtil.Parse(body)),
+            FormatNames.TypeSafeSystemOne => TextFlattener.SystemOneAnswers(JsonUtil.Parse(body)),
             _ => null,
         };
 

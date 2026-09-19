@@ -1,0 +1,14 @@
+{
+  "format": "typesafe-systemone",
+  "model": "typesafe/jev-1.13-20260917",
+  "tokensIn": 389,
+  "tokensOut": 61,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": null,
+  "tokPerSec": null,
+  "warnings": [],
+  "promptText": "state: You have charged me twice and my account is now overdrawn. I need this reversed today.\nurgent (noul): urgent\nDoes this need a reply within the hour?\nTriage a support ticket.\narea (choice): area\nWhich team owns it?\nTriage a support ticket.\nbilling\nbug\naccount\nother",
+  "responseText": "urgent: 0.79\narea: billing (confidence 1)"
+}

@@ -1,0 +1,14 @@
+{
+  "format": "typesafe-systemone",
+  "model": "jev-1.13.0",
+  "tokensIn": 312,
+  "tokensOut": 48,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": null,
+  "tokPerSec": null,
+  "warnings": [],
+  "promptText": "state: My app keeps crashing on login and nobody has replied in three days!\nis_urgent (noul): Is this ticket urgent?\ntrue: Needs a reply within the hour\nfalse: Can wait a day\ndepartment (choice): Which department should handle this?\nbilling: Payments and invoices\ntechnical: Bugs and outages\nsales\nfrustration (score): How frustrated is the customer?\n0: Calm\n1: Frustrated\n2: Very angry",
+  "responseText": "is_urgent: 0.92\ndepartment: technical (confidence 0.82)\nfrustration: 1.6 (confidence 0.78)"
+}

@@ -100,6 +100,7 @@ public sealed class FormatEnricher
         [FormatNames.AnthropicMessages] = new AnthropicMessagesAdapter(),
         [FormatNames.OllamaChat] = new OllamaAdapter(generate: false),
         [FormatNames.OllamaGenerate] = new OllamaAdapter(generate: true),
+        [FormatNames.TypeSafeSystemOne] = new TypeSafeSystemOneAdapter(),
     };
 
     public EnrichedRecord Enrich(CaptureRecord record)

@@ -1,0 +1,16 @@
+{
+  "format": "typesafe-systemone",
+  "model": "jev-latest",
+  "tokensIn": null,
+  "tokensOut": null,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": null,
+  "tokPerSec": null,
+  "warnings": [
+    "http_error"
+  ],
+  "promptText": "state: My app keeps crashing on login.\ndepartment (choice): Which department should handle this?",
+  "responseText": null
+}

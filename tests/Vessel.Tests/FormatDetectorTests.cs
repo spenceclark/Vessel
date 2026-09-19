@@ -13,6 +13,7 @@ public class FormatDetectorTests
     [InlineData("/v1/chat/completions", FormatNames.OpenAiChat)]
     [InlineData("/v1/responses", FormatNames.OpenAiResponses)]
     [InlineData("/v1/messages", FormatNames.AnthropicMessages)]
+    [InlineData("/v1/systemone", FormatNames.TypeSafeSystemOne)]
     [InlineData("/b/x/api/chat?foo=bar", FormatNames.OllamaChat)] // query stripped, suffix still matches
     public void PathSuffix_Wins(string path, string expected) =>
         Assert.Equal(expected, FormatDetector.Detect(path, request: null, responseText: null, backendType: null));
@@ -41,6 +42,24 @@ public class FormatDetectorTests
         JsonNode request = JsonNode.Parse("""{"model":"m","input":"hi"}""")!;
         string response = """{"object":"response","status":"completed","output":[]}""";
         Assert.Equal(FormatNames.OpenAiResponses, FormatDetector.Detect("/proxy/responses-alias", request, response, null));
+    }
+
+    // #113 — OpenRouter serves System One on `/api/alpha/decisions`, which is not matched by
+    // suffix; the payload shape is what catches it, with or without a response (error rows).
+    [Theory]
+    [InlineData("""{"model":"typesafe/jev-1.13-20260917","answers":{"urgent":{"type":"noul","noul":0.79}}}""")]
+    [InlineData(null)]
+    public void PayloadSniff_TypeSafeSystemOne(string? response)
+    {
+        JsonNode request = JsonNode.Parse("""{"state":"x","model":"~typesafe/jev-latest","questions":{"urgent":{"type":"noul"}}}""")!;
+        Assert.Equal(FormatNames.TypeSafeSystemOne, FormatDetector.Detect("/api/alpha/decisions", request, response, null));
+    }
+
+    [Fact]
+    public void PayloadSniff_QuestionsWithoutState_StaysRaw()
+    {
+        JsonNode request = JsonNode.Parse("""{"model":"m","questions":{"urgent":{"type":"noul"}}}""")!;
+        Assert.Equal(FormatNames.Raw, FormatDetector.Detect("/api/alpha/decisions", request, null, null));
     }
 
     // The Responses API's `input` field can be a bare string — same shape an embeddings

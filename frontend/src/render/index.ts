@@ -4,9 +4,10 @@ import { extractOpenAiChatRequest, extractOpenAiChatResponse } from './openai'
 import { extractOpenAiResponsesRequest, extractOpenAiResponsesResponse } from './openaiResponses'
 import { extractAnthropicRequest, extractAnthropicResponse } from './anthropic'
 import { extractOllamaRequest, extractOllamaResponse } from './ollama'
+import { extractTypeSafeRequest, extractTypeSafeResponse } from './typesafe'
 import { sanitizeRenderedView } from './validate'
 
-export type { ImageSource, RenderBlock, RenderedView, RenderMessage } from './types'
+export type { Decision, DecisionAnswer, Decisions, DecisionText, ImageSource, RenderBlock, RenderedView, RenderMessage } from './types'
 
 /** D4 — dispatches by `detail.format`; `raw` and any extraction failure return null (caller falls back to PrettyJson). */
 export function renderRequest(detail: RequestDetail): RenderedView | null {
@@ -28,6 +29,8 @@ function extractRequest(detail: RequestDetail): RenderedView | null {
     case 'ollama-chat':
     case 'ollama-generate':
       return extractOllamaRequest(detail)
+    case 'typesafe-systemone':
+      return extractTypeSafeRequest(detail)
     default:
       return null
   }
@@ -44,6 +47,8 @@ function extractResponse(detail: RequestDetail): RenderedView | null {
     case 'ollama-chat':
     case 'ollama-generate':
       return extractOllamaResponse(detail)
+    case 'typesafe-systemone':
+      return extractTypeSafeResponse(detail)
     default:
       return null
   }

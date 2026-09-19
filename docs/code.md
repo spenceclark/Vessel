@@ -93,6 +93,14 @@ text; `slow_ttft` / `slow_response` from the configured thresholds). `IFormatAda
 generate modes) — fold SSE/NDJSON streams back into a reassembled message
 (`SseParser`, `NdjsonParser`) and extract model, tokens (incl. cache read/write),
 stop reason, flattened prompt/response text, and structured message/tool-call shapes.
+`TypeSafeSystemOneAdapter` (`typesafe-systemone`, #113) is the one non-chat format: TypeSafe
+System One's `state` + typed `questions` in, typed `answers` out, always a single JSON
+document (no streaming, no stop reason). It is detected by the `/systemone` path suffix or by
+payload shape (`questions` object + `state` key, and an `answers` object when a response
+exists) — the shape is what catches OpenRouter's `/api/alpha/decisions`, whose alpha-labelled
+path is deliberately not matched. Its flattened text (`TextFlattener.SystemOneQuestions` /
+`SystemOneAnswers`, shared with the read store's MCP `include=text` path) is the state plus
+one block per question, and one `key: value (confidence n)` line per answer.
 Any adapter exception falls the row back to `raw` + `parse_error` with bytes intact.
 
 **Storage/** — `SqliteCaptureStore` (the writer's store: migrations, batched inserts,
@@ -127,7 +135,8 @@ frontend/
   src/components/ui/        # shadcn-style primitives (button, badge, dialog, tabs,
                             #   popover, input) + Mark, ErrorState, PrettyJson
   src/render/               # per-format rendering of captured bodies into message
-                            #   structures (openai, openaiResponses, anthropic, ollama)
+                            #   structures (openai, openaiResponses, anthropic, ollama,
+                            #   typesafe → a decisions structure instead of messages)
                             #   + tools.ts (declared tool lists → ToolDef)
   src/lib/                  # curl generation, formatting, warnings vocabulary, tags,
                             #   theme, cn() utility
@@ -250,6 +259,11 @@ one mechanical dialect fix-up its target calls for (issue #28) — `max_tokens` 
 exact `api.openai.com` host match — and stamps the applied rule id on
 `X-Vessel-Replay-Fixups` so Compare's parameter diff can render it "(auto)" from that
 recorded fact instead of guessing from the before/after shape.
+
+Replay compatibility (`ReplayEndpoint.IsCompatible`, mirrored by `ReplayDialog`'s
+`compatible`) is by captured format against the target backend's `type`; a format with no
+case is not replayable at all. `typesafe-systemone` replays to the same backend only, with a
+model override allowed (alias vs pinned build); `raw` is same-backend with no override.
 
 A replay is always a *fan* (issue #48): the endpoint takes a `variations` list — today's
 `{backend, model}` body is accepted as a fan of one — validates every variation before
@@ -457,7 +471,15 @@ function tools get a parameter tree walked from their JSON Schema (type unions, 
 defaults, nesting capped at depth 4), and schema-less server tools (Anthropic
 `web_search_20250305`, Responses `web_search_preview`) keep only their non-null config.
 `countToolCalls` tallies `toolUse` blocks plus Anthropic `server_tool_use` blocks, read back
-from their JSON text. Two hard rules there: captured content never
+from their JSON text. `typesafe-systemone` (#113) does not fit role + blocks, so its extractors
+(`render/typesafe.ts`) fill `RenderedView.decisions` instead — the state plus one entry per
+question, joined to its answer by key, with unknown answer types and unmatched keys kept as
+JSON — and `MessageView` hands such a view to `DecisionsView` (one card per question;
+probability bars as `role="meter"` divs in chart-token colors). That single branch is what
+gives `DetailPane` and `CompareView` the view without either knowing the format.
+`typeSafeMetrics` reads display-only Overview extras from the bodies at render time: the
+requested alias when it resolved to a different build, and OpenRouter's `usage.cost`, `id`
+and `provider`. Two hard rules there: captured content never
 produces a live `src`/`href` (defense in depth behind the CSP served on `/vessel/*`),
 and rendering failures are contained by `RenderErrorBoundary` per pane rather than
 taking down the app.

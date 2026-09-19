@@ -285,6 +285,7 @@ public static class ReplayEndpoint
             "openai-responses" => type == "openai" || type == "auto" && sameBackend,
             "anthropic-messages" => type is "anthropic" or "ollama" || type == "auto" && sameBackend,
             "ollama-chat" or "ollama-generate" => type == "ollama" || type == "auto" && sameBackend,
+            "typesafe-systemone" => sameBackend,
             "raw" => sameBackend && !modelOverride,
             _ => false,
         };

@@ -38,6 +38,11 @@ public static class FormatDetector
             return FormatNames.AnthropicMessages;
         }
 
+        if (p.EndsWith("/systemone", StringComparison.Ordinal))
+        {
+            return FormatNames.TypeSafeSystemOne;
+        }
+
         return SniffPayload(request, responseText, backendType);
     }
 
@@ -49,6 +54,14 @@ public static class FormatDetector
         bool hasMessages = req?["messages"] is JsonArray;
         bool hasPrompt = req?["prompt"] is not null;
         bool hasInput = req?["input"] is not null;
+
+        // #113 — TypeSafe System One. Shape only: OpenRouter serves it on an alpha-labelled
+        // `/decisions` path that is deliberately not matched by suffix.
+        if (req?["questions"] is JsonObject && req.ContainsKey("state")
+            && (response is null || response["answers"] is JsonObject))
+        {
+            return FormatNames.TypeSafeSystemOne;
+        }
 
         if (hasInput && (response?["output"] is JsonArray || JsonUtil.Str(response?["object"]) == "response"))
         {

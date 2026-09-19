@@ -8,5 +8,6 @@ public static class FormatNames
     public const string AnthropicMessages = "anthropic-messages";
     public const string OllamaChat = "ollama-chat";
     public const string OllamaGenerate = "ollama-generate";
+    public const string TypeSafeSystemOne = "typesafe-systemone";
     public const string Raw = "raw";
 }
