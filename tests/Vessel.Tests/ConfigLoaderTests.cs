@@ -217,6 +217,9 @@ public class ConfigLoaderTests : IDisposable
         """{ "defaultBackend": "ollama", "backends": { "ollama": null } }""",
         "backend 'ollama' is null")]
     [InlineData(
+        """{ "defaultBackend": "ollama", "backends": { "ollama": { "baseUrl": "http://localhost:11434", "type": null } } }""",
+        "backend 'ollama' type")]
+    [InlineData(
         """{ "defaultBackend": "ollama", "backends": { "ollama": { "baseUrl": "http://localhost:11434" } }, "retention": null }""",
         "retention is null")]
     [InlineData(
