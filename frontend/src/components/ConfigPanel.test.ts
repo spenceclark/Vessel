@@ -82,28 +82,32 @@ describe('ConfigPanel add-backend picker (#9)', () => {
       'OpenAI',
       'Anthropic / Claude',
       'Gemini',
+      'OpenRouter',
+      'TypeSafe',
       'Custom…',
     ])
   })
 
-  it('prefills baseUrl/type/authEnv for a known backend, without disturbing the existing row', async () => {
+  it.each([
+    ['openai', 'https://api.openai.com', 'OPENAI_API_KEY'],
+    ['openrouter', 'https://openrouter.ai/api', 'OPENROUTER_API_KEY'], // #115
+    ['typesafe', 'https://api.typesafe.ai', 'TYPESAFE_API_KEY'], // #115
+  ])('prefills baseUrl/type/authEnv for %s, without disturbing the existing row', async (name, baseUrl, authEnv) => {
     renderConfigPanel('dark')
 
-    fireEvent.change(await screen.findByLabelText('Add backend'), { target: { value: 'openai' } })
+    fireEvent.change(await screen.findByLabelText('Add backend'), { target: { value: name } })
 
     const nameInputs = await screen.findAllByPlaceholderText('name')
-    expect(nameInputs.map((el) => (el as HTMLInputElement).value).sort()).toEqual(['ollama', 'openai'])
+    expect(nameInputs.map((el) => (el as HTMLInputElement).value).sort()).toEqual(['ollama', name])
 
-    const openaiRow = nameInputs
-      .find((el) => (el as HTMLInputElement).value === 'openai')!
+    const row = nameInputs
+      .find((el) => (el as HTMLInputElement).value === name)!
       .closest('div.rounded-control') as HTMLElement
-    expect((within(openaiRow).getByPlaceholderText('http://localhost:11434') as HTMLInputElement).value).toBe(
-      'https://api.openai.com',
-    )
-    expect((within(openaiRow).getByRole('combobox') as HTMLSelectElement).value).toBe('openai')
+    expect((within(row).getByPlaceholderText('http://localhost:11434') as HTMLInputElement).value).toBe(baseUrl)
+    expect((within(row).getByRole('combobox') as HTMLSelectElement).value).toBe('openai')
     expect(
-      (within(openaiRow).getByLabelText('Authentication environment variable for openai') as HTMLInputElement).value,
-    ).toBe('OPENAI_API_KEY')
+      (within(row).getByLabelText(`Authentication environment variable for ${name}`) as HTMLInputElement).value,
+    ).toBe(authEnv)
   })
 
   it('resolves a name collision instead of overwriting the existing row', async () => {
