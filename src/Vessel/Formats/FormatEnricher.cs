@@ -19,6 +19,9 @@ public sealed class FormatEnricher
     private readonly ILogger<FormatEnricher>? _logger;
     private readonly ConfigStore? _configStore;
     private IReadOnlyDictionary<string, string> _backendTypes = new Dictionary<string, string>();
+
+    /// <summary>#114 — backends whose <c>baseUrl</c> carries its own path (<c>/v1beta/openai</c>, <c>/api/v1</c>).</summary>
+    private IReadOnlySet<string> _backendsWithBasePath = new HashSet<string>();
     private int _slowTtftMs;
     private int _slowResponseMs;
 
@@ -73,6 +76,10 @@ public sealed class FormatEnricher
         _maxDecodedBytes = CaptureBudget.MaxDecodedBytes(config);
         _backendTypes = config.Backends.ToDictionary(
             kvp => kvp.Key, kvp => kvp.Value.Type, StringComparer.OrdinalIgnoreCase);
+        _backendsWithBasePath = config.Backends
+            .Where(kvp => Uri.TryCreate(kvp.Value.BaseUrl, UriKind.Absolute, out Uri? uri) && uri.AbsolutePath.Trim('/').Length > 0)
+            .Select(kvp => kvp.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         _builtFrom = snapshot;
     }
 
@@ -295,7 +302,7 @@ public sealed class FormatEnricher
 
         // Issue #57: the classic base_url mistake — the OpenAI SDK appends a fixed suffix
         // like /chat/completions to whatever base_url it's given, and OpenAI (and Ollama's
-        // OpenAI-compatible surface) serve it under /v1/. Path/status only, no body read.
+        // OpenAI-compatible surface) serve it under /v1/. Path/status/config only, no body read.
         if (record.StatusCode == 404 && IsOpenAiPathMissingV1(record, format))
         {
             warnings.Add(Warnings.PathMissingV1);
@@ -328,9 +335,16 @@ public sealed class FormatEnricher
         return warnings;
     }
 
+    /// <summary>The fixed suffixes the OpenAI SDK appends to its <c>base_url</c>.</summary>
+    private static readonly string[] _openAiSdkSuffixes =
+        ["/chat/completions", "/completions", "/responses", "/embeddings", "/models"];
+
     /// <summary>
-    /// Issue #57 scope: backend type says "openai" outright, or "auto" resolved to an
-    /// OpenAI-shaped format — and the forwarded path doesn't start with /v1/.
+    /// Issue #57 scope, narrowed by #114 to the one mistake the warning names: backend type
+    /// says "openai" outright, or "auto" resolved to an OpenAI-shaped format — and the
+    /// forwarded path is a bare SDK suffix with no /v1/ segment anywhere (hosts like
+    /// OpenRouter serve /api/v1/…), on a backend whose baseUrl has no path of its own (one
+    /// that does, e.g. Gemini's /v1beta/openai, makes the bare suffix the correct client path).
     /// </summary>
     private bool IsOpenAiPathMissingV1(CaptureRecord record, string format)
     {
@@ -339,7 +353,11 @@ public sealed class FormatEnricher
         bool isOpenAiBackend = string.Equals(backendType, "openai", StringComparison.OrdinalIgnoreCase)
             || (openAiShaped && string.Equals(backendType, "auto", StringComparison.OrdinalIgnoreCase));
 
-        return isOpenAiBackend && !record.Path.StartsWith("/v1/", StringComparison.Ordinal);
+        string path = record.Path.Split('?')[0];
+        return isOpenAiBackend
+            && !_backendsWithBasePath.Contains(record.Backend)
+            && !path.Contains("/v1/", StringComparison.Ordinal)
+            && _openAiSdkSuffixes.Any(suffix => path.EndsWith(suffix, StringComparison.Ordinal));
     }
 
     private static string? SerializeWarnings(IEnumerable<string> warnings)

@@ -296,7 +296,7 @@ Rows carry a warning count; the Overview tab names each one.
 | `tokens_estimated` | The backend reported no usage; counts are estimated (chars ÷ 4). |
 | `usage_injected` | Vessel added `stream_options.include_usage` (the opt-in `injectStreamUsage`). |
 | `tool_call_in_text` | The request declared tools, but the model wrote a tool call as plain text instead of a structured call. Detection only — nothing is rewritten. |
-| `path_missing_v1` | 404 from an OpenAI-compatible backend on a path without `/v1/` — put `/v1` in the client’s `base_url`. |
+| `path_missing_v1` | 404 from an OpenAI-compatible backend on a bare SDK path (`/chat/completions`, `/responses`, `/embeddings`, `/models`, …) with no `/v1/` in it — put `/v1` in the client’s `base_url`. Not raised when the backend’s own `baseUrl` already carries a path. |
 | `stream_incomplete` | A streamed response never reached its terminal marker. |
 | `client_disconnect` | The client went away before the exchange completed. |
 | `body_truncated` | The stored body hit `capture.maxBodyMb`; forwarding was not truncated. |
