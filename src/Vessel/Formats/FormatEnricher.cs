@@ -155,7 +155,8 @@ public sealed class FormatEnricher
         string? responseText = hasRealResponse && response.Bytes is not null ? Utf8(response.Bytes) : null;
 
         string format = FormatDetector.Detect(
-            record.Path, requestNode, responseText, _backendTypes.GetValueOrDefault(record.Backend));
+            record.Path, requestNode, responseText, _backendTypes.GetValueOrDefault(record.Backend),
+            responseFailed: record.StatusCode >= 400);
 
         if (format == FormatNames.Raw)
         {

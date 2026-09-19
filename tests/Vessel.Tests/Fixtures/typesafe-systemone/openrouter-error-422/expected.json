@@ -1,0 +1,16 @@
+{
+  "format": "typesafe-systemone",
+  "model": "~typesafe/jev-latest",
+  "tokensIn": null,
+  "tokensOut": null,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": null,
+  "tokPerSec": null,
+  "warnings": [
+    "http_error"
+  ],
+  "promptText": "state: You have charged me twice and my account is now overdrawn. I need this reversed today.\nurgent (noul): urgent\nDoes this need a reply within the hour?\nTriage a support ticket.\narea (choice): area\nWhich team owns it?\nTriage a support ticket.\nbilling\nbug\naccount\nother",
+  "responseText": null
+}

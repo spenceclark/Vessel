@@ -55,6 +55,18 @@ public class FormatDetectorTests
         Assert.Equal(FormatNames.TypeSafeSystemOne, FormatDetector.Detect("/api/alpha/decisions", request, response, null));
     }
 
+    // PR #122 review — a 422/429 from OpenRouter carries a JSON error body with no `answers`;
+    // that must not veto the request side, while a 2xx body of some other shape still does.
+    [Theory]
+    [InlineData(true, FormatNames.TypeSafeSystemOne)]
+    [InlineData(false, FormatNames.Raw)]
+    public void PayloadSniff_TypeSafeSystemOne_JsonErrorBody(bool responseFailed, string expected)
+    {
+        JsonNode request = JsonNode.Parse("""{"state":"x","model":"~typesafe/jev-latest","questions":{"urgent":{"type":"noul"}}}""")!;
+        string response = """{"error":{"code":422,"message":"criteria is required"}}""";
+        Assert.Equal(expected, FormatDetector.Detect("/api/alpha/decisions", request, response, null, responseFailed));
+    }
+
     [Fact]
     public void PayloadSniff_QuestionsWithoutState_StaysRaw()
     {

@@ -96,8 +96,8 @@ stop reason, flattened prompt/response text, and structured message/tool-call sh
 `TypeSafeSystemOneAdapter` (`typesafe-systemone`, #113) is the one non-chat format: TypeSafe
 System One's `state` + typed `questions` in, typed `answers` out, always a single JSON
 document (no streaming, no stop reason). It is detected by the `/systemone` path suffix or by
-payload shape (`questions` object + `state` key, and an `answers` object when a response
-exists) — the shape is what catches OpenRouter's `/api/alpha/decisions`, whose alpha-labelled
+payload shape (`questions` object + `state` key, and an `answers` object when a successful
+response exists; a 4xx/5xx error body never vetoes the request side) — the shape is what catches OpenRouter's `/api/alpha/decisions`, whose alpha-labelled
 path is deliberately not matched. Its flattened text (`TextFlattener.SystemOneQuestions` /
 `SystemOneAnswers`, shared with the read store's MCP `include=text` path) is the state plus
 one block per question, and one `key: value (confidence n)` line per answer.
