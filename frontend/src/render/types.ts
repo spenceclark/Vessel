@@ -65,9 +65,47 @@ export interface ToolDef {
   rawJson: string
 }
 
+// #113 — TypeSafe System One. Not role + blocks: a `state` plus one entry per question, each
+// joined to its answer by key. The extractor pre-stringifies everything, so the view never
+// touches captured JSON.
+export interface DecisionBar {
+  label: string
+  note?: string // the option's rubric / the level's description
+  probability: number
+  chosen?: boolean
+}
+
+export interface DecisionAnswer {
+  value: string
+  confidence?: number
+  scale?: { value: number; max: number } // score only: where the value sits on its levels
+  bars: DecisionBar[]
+}
+
+/** `json: false` is a wire string shown verbatim; `json: true` is the JSON text of an object/array. */
+export interface DecisionText {
+  text: string
+  json: boolean
+}
+
+export interface Decision {
+  key: string
+  type: string // 'noul' | 'choice' | 'score', or whatever the wire said
+  instructions?: DecisionText
+  criteria: { label: string; text?: string }[]
+  answer?: DecisionAnswer
+  rawJson?: string // an answer with an unknown type or no matching question — shown, never dropped
+}
+
+export interface Decisions {
+  state?: DecisionText
+  items: Decision[]
+}
+
 export interface RenderedView {
   system?: string
   messages: RenderMessage[]
   params: { k: string; v: string }[]
   tools?: ToolDef[]
+  decisions?: Decisions
 }

@@ -263,6 +263,105 @@ public static class TextFlattener
         return NullIfEmpty(sb);
     }
 
+    /// <summary>
+    /// #113 — flattens a TypeSafe System One request: the <c>state</c>, then one block per
+    /// question (key, type, instructions, criteria labels/levels).
+    /// </summary>
+    public static string? SystemOneQuestions(JsonNode? request)
+    {
+        JsonObject? obj = JsonUtil.Object(request);
+        var sb = new StringBuilder();
+
+        string state = JsonUtil.Str(obj?["state"]) ?? Compact(obj?["state"]);
+        if (state.Length > 0)
+        {
+            AppendLine(sb, "state", state);
+        }
+
+        foreach ((string key, JsonNode? node) in JsonUtil.Object(obj?["questions"]) ?? [])
+        {
+            JsonObject? question = JsonUtil.Object(node);
+            var instructions = new StringBuilder();
+            AppendStringLeaves(instructions, question?["instructions"]);
+            Append(sb, $"{key} ({JsonUtil.Str(question?["type"])}): {instructions}".TrimEnd(' ', ':'));
+
+            // noul/choice criteria are label → rubric maps (a rubric may be null); score
+            // criteria are an ordered array of level descriptions.
+            if (question?["criteria"] is JsonObject labelled)
+            {
+                foreach ((string label, JsonNode? rubric) in labelled)
+                {
+                    Append(sb, JsonUtil.Str(rubric) is string text ? $"{label}: {text}" : label);
+                }
+            }
+            else if (question?["criteria"] is JsonArray levels)
+            {
+                for (int i = 0; i < levels.Count; i++)
+                {
+                    Append(sb, $"{i}: {JsonUtil.Str(levels[i]) ?? Compact(levels[i])}");
+                }
+            }
+        }
+
+        return NullIfEmpty(sb);
+    }
+
+    /// <summary>
+    /// #113 — one line per System One answer: <c>key: value</c>, plus the confidence when the
+    /// answer carries one. The value sits in the field named by the answer's own <c>type</c>;
+    /// an unknown type, or one missing its value, flattens to its compact JSON.
+    /// </summary>
+    public static string? SystemOneAnswers(JsonNode? response)
+    {
+        JsonObject? answers = JsonUtil.Object(JsonUtil.Object(response)?["answers"]);
+        if (answers is null)
+        {
+            return null;
+        }
+
+        var sb = new StringBuilder();
+        foreach ((string key, JsonNode? node) in answers)
+        {
+            JsonObject? answer = JsonUtil.Object(node);
+            string? type = JsonUtil.Str(answer?["type"]);
+            if (type is "noul" or "choice" or "score" && answer?[type] is JsonValue value)
+            {
+                string confidence = answer["confidence"] is JsonValue c ? $" (confidence {Compact(c)})" : "";
+                Append(sb, $"{key}: {JsonUtil.Str(value) ?? Compact(value)}{confidence}");
+            }
+            else
+            {
+                Append(sb, $"{key}: {Compact(node)}");
+            }
+        }
+
+        return NullIfEmpty(sb);
+    }
+
+    private static void AppendStringLeaves(StringBuilder sb, JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach ((string _, JsonNode? child) in obj)
+                {
+                    AppendStringLeaves(sb, child);
+                }
+
+                break;
+            case JsonArray array:
+                foreach (JsonNode? child in array)
+                {
+                    AppendStringLeaves(sb, child);
+                }
+
+                break;
+            default:
+                Append(sb, JsonUtil.Str(node));
+                break;
+        }
+    }
+
     private static void AppendMessage(StringBuilder sb, JsonNode? message)
     {
         JsonObject? obj = JsonUtil.Object(message);

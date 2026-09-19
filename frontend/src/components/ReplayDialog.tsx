@@ -105,7 +105,7 @@ export function ReplayDialog({
             <Button
               key={item}
               variant={mode === item ? 'primary' : 'ghost'}
-              disabled={raw && item !== 'single'}
+              disabled={(raw && item !== 'single') || (item === 'params' && params.length === 0)}
               onClick={() => setMode(item)}
             >
               {item === 'single' ? 'Single' : item === 'models' ? 'Models' : 'Params'}
@@ -247,6 +247,8 @@ function compatible(detail: RequestDetail, backend: StatusBackend): boolean {
     case 'anthropic-messages': return type === 'anthropic' || type === 'ollama' || (type === 'auto' && same)
     case 'ollama-chat':
     case 'ollama-generate': return type === 'ollama' || (type === 'auto' && same)
+    // #113 — System One has one vendor surface per backend; the model (alias vs pinned build) may still change.
+    case 'typesafe-systemone': return same
     case 'raw': return same
     default: return false
   }

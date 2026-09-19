@@ -297,7 +297,7 @@ CREATE TABLE requests (
     tags                TEXT,                         -- JSON array
     method              TEXT NOT NULL,
     path                TEXT NOT NULL,
-    format              TEXT NOT NULL,                -- openai-chat | openai-responses | anthropic-messages | ollama-chat | ollama-generate | raw
+    format              TEXT NOT NULL,                -- openai-chat | openai-responses | anthropic-messages | ollama-chat | ollama-generate | typesafe-systemone | raw
     model               TEXT,
     status_code         INTEGER,
     error               TEXT,                         -- proxy-level failure detail

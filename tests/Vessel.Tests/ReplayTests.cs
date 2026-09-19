@@ -164,6 +164,7 @@ public sealed class ReplayTests
             ("anthropic-messages", await CaptureJson(client, vessel, "/v1/messages?matrix-anthropic", "{\"model\":\"m\",\"max_tokens\":1,\"messages\":[]}"), ["stub", "anthropic", "ollama"]),
             ("ollama-chat", await CaptureJson(client, vessel, "/api/chat?matrix-ollama-chat", "{\"model\":\"m\",\"messages\":[]}"), ["stub", "ollama"]),
             ("ollama-generate", await CaptureJson(client, vessel, "/api/generate?matrix-ollama-generate", "{\"model\":\"m\",\"prompt\":\"x\"}"), ["stub", "ollama"]),
+            ("typesafe-systemone", await CaptureJson(client, vessel, "/v1/systemone?matrix-systemone", "{\"model\":\"m\",\"state\":\"x\",\"questions\":{}}"), ["stub"]),
             ("raw", await CaptureRaw(vessel, client), ["stub"]),
         ];
 
@@ -200,6 +201,13 @@ public sealed class ReplayTests
         Assert.Equal(HttpStatusCode.BadRequest, rawOverride.StatusCode);
         await Task.Delay(50, CT);
         Assert.Equal(before, (await GetReplays(client, vessel.BaseUrl, rawId)).GetArrayLength());
+
+        // #113 — unlike raw, a System One row may swap its model (alias vs pinned build) on the same backend.
+        long systemOneId = rows.Single(row => row.Format == "typesafe-systemone").Id;
+        using HttpResponseMessage systemOneOverride = await client.PostAsJsonAsync(
+            $"{vessel.BaseUrl}/vessel/api/requests/{systemOneId}/replay", new { model = "jev-1.13.0" }, CT);
+        Assert.Equal(HttpStatusCode.Accepted, systemOneOverride.StatusCode);
+        await WaitForReplayCount(client, vessel.BaseUrl, systemOneId, 2);
     }
 
     [Fact]

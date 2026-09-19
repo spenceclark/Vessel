@@ -12,6 +12,7 @@ import { RenderErrorBoundary } from '@/components/RenderErrorBoundary'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { DecodeTruncatedNotice } from '@/components/DecodeTruncatedNotice'
 import { renderRequest, renderResponse } from '@/render'
+import { typeSafeMetrics } from '@/render/typesafe'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatMs, formatTimestamp, formatTokPerSec, formatTokenCount, relativeDate } from '@/lib/format'
 import { warningHint, warningLabel, warningVariant } from '@/lib/warnings'
@@ -351,6 +352,15 @@ function OverviewTab({ detail, isError, replays, onCompare }: { detail: import('
         )}
       </div>
 
+      {detail.format === 'typesafe-systemone' && typeSafeMetrics(detail).length > 0 && (
+        <div>
+          <SectionLabel>Decision</SectionLabel>
+          <CardGrid>
+            {typeSafeMetrics(detail).map((m) => <MetricCard key={m.k} label={m.k} value={m.v} />)}
+          </CardGrid>
+        </div>
+      )}
+
       <RateLimitCards headers={detail.responseHeaders} />
 
       {detail.tags.length > 0 && (
@@ -453,7 +463,7 @@ export function MetricCard({ label, value, danger }: { label: string; value: str
   return (
     <div className="rounded-control bg-surface-2 p-2.5">
       <div className="text-xs font-[550] uppercase tracking-[0.06em] text-text-muted">{label}</div>
-      <div className={cn('mt-1 truncate font-mono text-sm', danger ? 'text-danger' : 'text-text')}>{value}</div>
+      <div className={cn('mt-1 truncate font-mono text-sm', danger ? 'text-danger' : 'text-text')} title={value}>{value}</div>
     </div>
   )
 }

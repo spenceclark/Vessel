@@ -7,10 +7,13 @@ namespace Vessel.Formats;
 /// backend <c>type</c> as a tiebreak. Detection runs from the request side alone for
 /// error/failed rows (a 502 to <c>/api/chat</c> is still <c>ollama-chat</c>). Nothing
 /// matching is <c>raw</c>, silently — unknown traffic is normal.
+/// <c>responseFailed</c> marks a backend HTTP error: its body is an error document, so a
+/// shape check that needs the success response must not let it veto the request side.
 /// </summary>
 public static class FormatDetector
 {
-    public static string Detect(string path, JsonNode? request, string? responseText, string? backendType)
+    public static string Detect(
+        string path, JsonNode? request, string? responseText, string? backendType, bool responseFailed = false)
     {
         string p = StripQuery(path);
         if (p.EndsWith("/api/chat", StringComparison.Ordinal))
@@ -38,10 +41,15 @@ public static class FormatDetector
             return FormatNames.AnthropicMessages;
         }
 
-        return SniffPayload(request, responseText, backendType);
+        if (p.EndsWith("/systemone", StringComparison.Ordinal))
+        {
+            return FormatNames.TypeSafeSystemOne;
+        }
+
+        return SniffPayload(request, responseText, backendType, responseFailed);
     }
 
-    private static string SniffPayload(JsonNode? request, string? responseText, string? backendType)
+    private static string SniffPayload(JsonNode? request, string? responseText, string? backendType, bool responseFailed)
     {
         JsonObject? req = JsonUtil.Object(request);
         JsonObject? response = FirstResponseObject(responseText);
@@ -49,6 +57,15 @@ public static class FormatDetector
         bool hasMessages = req?["messages"] is JsonArray;
         bool hasPrompt = req?["prompt"] is not null;
         bool hasInput = req?["input"] is not null;
+
+        // #113 — TypeSafe System One. Shape only: OpenRouter serves it on an alpha-labelled
+        // `/decisions` path that is deliberately not matched by suffix. A 4xx/5xx JSON error
+        // body has no `answers`; the request alone still identifies the row.
+        if (req?["questions"] is JsonObject && req.ContainsKey("state")
+            && (response is null || responseFailed || response["answers"] is JsonObject))
+        {
+            return FormatNames.TypeSafeSystemOne;
+        }
 
         if (hasInput && (response?["output"] is JsonArray || JsonUtil.Str(response?["object"]) == "response"))
         {
