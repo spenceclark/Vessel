@@ -281,6 +281,38 @@ public class FormatEnricherTests
         Assert.Contains(Warnings.PathMissingV1, Warns(enriched));
     }
 
+    // #114 — the warning names one mistake (an SDK suffix appended to a base_url lacking /v1),
+    // so a 404 that isn't that mistake must not carry the hint.
+    [Theory]
+    [InlineData("https://openrouter.ai", "/api/alpha/decisions")] // capture #5280: not an SDK path at all
+    [InlineData("https://openrouter.ai", "/api/v1/chat/completions")] // /v1/ present, just not leading
+    [InlineData("https://generativelanguage.googleapis.com/v1beta/openai", "/chat/completions")] // baseUrl carries the version
+    [InlineData("https://api.openai.com", "/v1")] // /v1 as the final segment
+    public void OpenAiBackend_404_NotTheMissingV1Mistake_IsNotWarned(string baseUrl, string path)
+    {
+        var config = new VesselConfig();
+        config.Backends["test"] = new BackendConfig { BaseUrl = baseUrl, Type = "openai" };
+        var enricher = new FormatEnricher(config, FormatEnricher.DefaultAdapters());
+
+        CaptureRecord record = Record(path, null, null) with { StatusCode = 404 };
+
+        Assert.DoesNotContain(Warnings.PathMissingV1, Warns(enricher.Enrich(record)));
+    }
+
+    [Theory]
+    [InlineData("/chat/completions?api-version=1")] // query stripped before the suffix match
+    [InlineData("/models")]
+    public void OpenAiBackend_404_BareSdkSuffixOnBareHost_IsWarned(string path)
+    {
+        var config = new VesselConfig();
+        config.Backends["test"] = new BackendConfig { BaseUrl = "https://api.openai.com/", Type = "openai" };
+        var enricher = new FormatEnricher(config, FormatEnricher.DefaultAdapters());
+
+        CaptureRecord record = Record(path, null, null) with { StatusCode = 404 };
+
+        Assert.Contains(Warnings.PathMissingV1, Warns(enricher.Enrich(record)));
+    }
+
     // Ollama's OpenAI-compatible surface has the same base_url mistake shape, but it's a
     // different backend type and out of this issue's scope (see #57's "Not doing").
     [Fact]
