@@ -13,7 +13,7 @@ respective package distributions.
 | React / React DOM | MIT |
 | TanStack React Query / Virtual | MIT |
 | Tailwind CSS / `@tailwindcss/vite` / tailwind-merge | MIT |
-| `@fontsource-variable/inter` / `@fontsource-variable/jetbrains-mono` | SIL OFL-1.1 |
+| `@fontsource-variable/ibm-plex-sans` / `@fontsource-variable/jetbrains-mono` | SIL OFL-1.1 |
 | class-variance-authority | Apache-2.0 |
 | clsx / react-markdown / remark-gfm | MIT |
 | lucide-react | ISC |

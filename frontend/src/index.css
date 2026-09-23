@@ -50,7 +50,7 @@
   --color-chart-5: var(--color-tag-fuchsia);
   --color-chart-6: var(--color-tag-steel);
 
-  --font-ui: InterVariable, system-ui, sans-serif;
+  --font-ui: 'IBM Plex Sans Variable', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, Consolas, monospace;
 
   --radius-panel: 12px;
