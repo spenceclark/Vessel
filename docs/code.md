@@ -437,7 +437,7 @@ variables named per-backend (`authEnv`) — no secret is stored in config or DB.
 **Stack:** React 19 + TypeScript, built with Vite 8, styled with Tailwind CSS 4,
 components in the shadcn/ui style (cva + tailwind-merge + clsx primitives in
 `components/ui`), icons via lucide-react, `react-markdown` (+ GFM) for rendered
-message text. Fonts ship as `@fontsource-variable` packages (Inter UI, JetBrains Mono
+message text. Fonts ship as `@fontsource-variable` packages (IBM Plex Sans UI, JetBrains Mono
 for code). Tests: vitest + Testing Library; lint: oxlint. No router — the product is
 one screen.
 

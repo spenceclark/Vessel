@@ -162,13 +162,20 @@ Form rules that go with the tokens:
 
 ## 3. Typography
 
-Two families, both **bundled via npm** (`@fontsource-variable/inter`,
+Two families, both **bundled via npm** (`@fontsource-variable/ibm-plex-sans`,
 `@fontsource-variable/jetbrains-mono`) — no CDN fonts ever (the UI must work
 air-gapped from a single binary). System stacks as fallback.
 
+IBM Plex Sans replaced Inter (#126): drawn for engineering tooling, visibly different from
+the Inter/Geist default at 12px, weight axis covers the 550/650 steps below, tabular
+figures. The token's family name must match the fontsource `@font-face` exactly:
+`'IBM Plex Sans Variable'`, with the space. The old `InterVariable` token never matched
+`'Inter Variable'`, so the bundled Inter never applied and the shipped UI fell back to
+`system-ui`.
+
 | Token | Stack | Use |
 |---|---|---|
-| `--font-ui` | `InterVariable, system-ui, sans-serif` | everything by default |
+| `--font-ui` | `'IBM Plex Sans Variable', system-ui, sans-serif` | everything by default |
 | `--font-mono` | `"JetBrains Mono Variable", ui-monospace, Consolas, monospace` | paths, models, ids, headers, JSON, code, all metric *values* |
 
 Scale (UI is deliberately dense — this is a data tool):
@@ -477,7 +484,7 @@ than signal. On narrow viewports, response panels stack.
   looks. The old ad-hoc vars (`--background`, `--card`, `--muted`, …) are **removed,
   not aliased** — a sweep must touch every `var(--…)` usage or the build of stale
   names would silently keep working.
-- `npm i @fontsource-variable/inter @fontsource-variable/jetbrains-mono`; import
+- `npm i @fontsource-variable/ibm-plex-sans @fontsource-variable/jetbrains-mono`; import
   both in `main.tsx` (they bundle into the embedded dist; adds roughly 150–400KB —
   acceptable, and verify the publish smoke still passes).
 - Favicon: replace Vite's default with `favicon.svg` per §1.2 (`<link rel="icon"
