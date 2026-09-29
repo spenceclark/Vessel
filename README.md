@@ -2,7 +2,8 @@
 
 > The lightweight, local-first observability proxy for LLM traffic. Point a client’s
 > `base_url` at one small binary and get capture, search, metrics, replay, Compare, and
-> a private UI—without sending prompts to a third party.
+> a private UI. Captured traffic is stored only on your machine; prompts are forwarded
+> only to the model providers you configure.
 
 ![Main Screen Shot](docs/assets/main_screen.png)
 
