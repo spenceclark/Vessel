@@ -317,7 +317,8 @@ startup log warn that people on the network may read captured prompts (and acces
 when enabled). Keep retention caps appropriate, and use the UI’s Data panel to clear
 history or bulk-delete non-current sessions; individual sessions can be deleted from the
 session picker. To remove Vessel completely: delete the executable and the `vessel-proxy`
-data folder — there is nothing else.
+data folder — there is nothing else. The full [privacy policy](PRIVACY.md) covers all of
+this in detail.
 
 ## Building from source
 
