@@ -1,0 +1,14 @@
+{
+  "format": "typesafe-systemone",
+  "model": "tev1",
+  "tokensIn": 727,
+  "tokensOut": 4,
+  "tokensCachedRead": null,
+  "tokensCachedWrite": null,
+  "tokensEstimated": false,
+  "stopReason": null,
+  "tokPerSec": null,
+  "warnings": [],
+  "promptText": "state: {\"ticket\":\"I was charged twice. Please refund the extra payment.\"}\nteam (choice): Which team should handle this ticket?\nbilling: Payments and refunds\ntechnical: Bugs and integrations\nother: None of the above\nrefund (noul): Does the customer explicitly ask for a refund?\nurgency (score): How urgent is this ticket?\n0: Routine\n1: Soon\n2: Urgent",
+  "responseText": "team: billing (confidence 0.9489535035400174)\nrefund: 0.9671419589105983\nurgency: 1.0698404125866774 (confidence 0.04662075653267361)"
+}

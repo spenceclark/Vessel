@@ -94,7 +94,7 @@ generate modes) — fold SSE/NDJSON streams back into a reassembled message
 (`SseParser`, `NdjsonParser`) and extract model, tokens (incl. cache read/write),
 stop reason, flattened prompt/response text, and structured message/tool-call shapes.
 `TypeSafeSystemOneAdapter` (`typesafe-systemone`, #113) is the one non-chat format: TypeSafe
-System One's `state` + typed `questions` in, typed `answers` out, always a single JSON
+System One (also served by OpenRouter and by Ollama 0.35+, #136): `state` + typed `questions` in, typed `answers` out, always a single JSON
 document (no streaming, no stop reason). It is detected by the `/systemone` path suffix or by
 payload shape (`questions` object + `state` key, and an `answers` object when a successful
 response exists; a 4xx/5xx error body never vetoes the request side) — the shape is what catches OpenRouter's `/api/alpha/decisions`, whose alpha-labelled
@@ -262,8 +262,11 @@ recorded fact instead of guessing from the before/after shape.
 
 Replay compatibility (`ReplayEndpoint.IsCompatible`, mirrored by `ReplayDialog`'s
 `compatible`) is by captured format against the target backend's `type`; a format with no
-case is not replayable at all. `typesafe-systemone` replays to the same backend only, with a
-model override allowed (alias vs pinned build); `raw` is same-backend with no override.
+case is not replayable at all. `typesafe-systemone` replays to the same backend, or to an `ollama`
+backend or one on host `api.typesafe.ai` when the target's base path plus the stored path (query
+aside) is exactly `/v1/systemone` (#136; OpenRouter's path, or a base URL already ending in
+`/v1`, never is), with a model override allowed (alias vs pinned build,
+`nimble` on Ollama, `jev-latest` on TypeSafe); `raw` is same-backend with no override.
 
 A replay is always a *fan* (issue #48): the endpoint takes a `variations` list — today's
 `{backend, model}` body is accepted as a fan of one — validates every variation before
@@ -475,8 +478,12 @@ from their JSON text. `typesafe-systemone` (#113) does not fit role + blocks, so
 (`render/typesafe.ts`) fill `RenderedView.decisions` instead — the state plus one entry per
 question, joined to its answer by key, with unknown answer types and unmatched keys kept as
 JSON — and `MessageView` hands such a view to `DecisionsView` (one card per question;
-probability bars as `role="meter"` divs in chart-token colors). That single branch is what
-gives `DetailPane` and `CompareView` the view without either knowing the format.
+probability bars as `role="meter"` divs in chart-token colors, in the request's criteria order
+so every Compare column lines up; shown values are rounded to 3 places, #136). That single
+branch is what gives `DetailPane` and `CompareView` the view without either knowing the format;
+`CompareView` only empties the shared request's question list, since each column's cards
+already carry their question (#136), and keeps it when no column renders cards (every
+response an error body).
 `typeSafeMetrics` reads display-only Overview extras from the bodies at render time: the
 requested alias when it resolved to a different build, and OpenRouter's `usage.cost`, `id`
 and `provider`. Two hard rules there: captured content never

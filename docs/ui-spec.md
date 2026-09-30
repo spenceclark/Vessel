@@ -375,9 +375,12 @@ values (`content_filter`, `refusal`, `error`) rather than a normal completion
 Compare replaces the detail pane only for a direct `replay_of` pair. Its compact header
 identifies `#original → #replay` and each backend/model, with Close returning to the replay
 detail. A metric strip shows original → replay for duration, TTFT, tok/s, tokens in/out and
-stop reason; numeric deltas are neutral data, never success/error colors — larger and smaller
+stop reason, leaving out any row no column has a value for (#136: TTFT on a non-streamed call,
+stop reason on a System One decision); numeric deltas are neutral data, never success/error colors — larger and smaller
 are contextual, not inherently good or bad. The request is rendered once with a short list of
-the differing top-level parameters (`name: before → after`). Responses are two equal side-by-
+the differing top-level parameters (`name: before → after`). For a System One decision the
+shared request shows only its state, since each column's answer cards already carry their
+question; when no column renders answer cards (both sides errored), the questions stay. Responses are two equal side-by-
 side panels using the ordinary MessageView/raw fallback. There is deliberately no inline word
 diff: sampled generations differ throughout, so word-level highlighting would add noise rather
 than signal. On narrow viewports, response panels stack.

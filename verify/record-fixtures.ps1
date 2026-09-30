@@ -10,16 +10,20 @@ enriched fields (format/model/tokens/tok_per_sec/stop_reason) so you can hand-wr
 expected.json. Malformed/truncated cases are derived by hand from these (cut mid-event, cut
 mid-UTF-8-codepoint, inject a garbage line) — never recorded.
 
-Requires a running Vessel (dotnet run --project src/Vessel) with an Ollama backend, and the
-project's build output (for the SQLite/zstd assemblies used to read vessel.db).
+Requires PowerShell 7 (pwsh), a running Vessel (dotnet run --project src/Vessel) with an Ollama
+backend, and the project's build output (for the SQLite/zstd assemblies used to read vessel.db).
+The System One case (#136) needs Ollama 0.35+ and the decision model pulled (ollama pull nimble);
+an older Ollama answers /v1/systemone with a 404, so check the printed status before keeping it.
 
 .EXAMPLE
-./record-fixtures.ps1 -Model qwen2.5:1.5b
+pwsh ./record-fixtures.ps1 -Model qwen2.5:1.5b
 #>
+#Requires -Version 7
 [CmdletBinding()]
 param(
     [string]$VesselUrl = "http://127.0.0.1:4550",
     [string]$Model = "qwen2.5:1.5b",
+    [string]$DecisionModel = "nimble",
     [string]$DbPath = "",
     [string]$OutRoot = ""
 )
@@ -115,5 +119,13 @@ Record-Case -Format "ollama-generate" -Case "recorded-nonstreamed" -Path "/api/g
 Record-Case -Format "ollama-generate" -Case "recorded-streamed" -Path "/api/generate" `
     -BodyJson "{`"model`":`"$Model`",`"prompt`":`"Reply with exactly the word: Hello`",`"stream`":true,$opts}"
 
+# #136 — the three-question example from Ollama's decision-model announcement, object state included.
+$questions = '"questions":{"team":{"type":"choice","instructions":"Which team should handle this ticket?",' +
+    '"criteria":{"billing":"Payments and refunds","technical":"Bugs and integrations","other":"None of the above"}},' +
+    '"refund":{"type":"noul","instructions":"Does the customer explicitly ask for a refund?"},' +
+    '"urgency":{"type":"score","instructions":"How urgent is this ticket?","criteria":["Routine","Soon","Urgent"]}}'
+Record-Case -Format "typesafe-systemone" -Case "ollama-three-answers" -Path "/v1/systemone" `
+    -BodyJson ('{"model":"' + $DecisionModel + '","state":{"ticket":"I was charged twice. Please refund the extra payment."},' + $questions + '}')
+
 Write-Host ""
-Write-Host "Recorded 4 cases under $OutRoot. Fill in each expected.json, then run: dotnet test" -ForegroundColor Green
+Write-Host "Recorded 5 cases under $OutRoot. Fill in each expected.json, then run: dotnet test" -ForegroundColor Green

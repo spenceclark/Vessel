@@ -92,20 +92,26 @@ function criteriaOf(criteria: unknown): Decision['criteria'] {
 
 function answerOf(question: Decision, answer: unknown): DecisionAnswer | undefined {
   if (!isRecord(answer)) return undefined
-  const confidence = typeof answer.confidence === 'number' ? answer.confidence : undefined
+  const confidence = typeof answer.confidence === 'number' ? round(answer.confidence) : undefined
   const note = (label: string) => question.criteria.find((c) => c.label === label)?.text
+  // #136 — request order, not probability: the same option sits on the same row in every Compare column.
+  // Labels the request didn't list keep their wire order after the rest (sort is stable).
+  const rank = (label: string) => {
+    const index = question.criteria.findIndex((c) => c.label === label)
+    return index < 0 ? question.criteria.length : index
+  }
 
   switch (answer.type) {
     case 'noul':
       return typeof answer.noul === 'number'
-        ? { value: String(answer.noul), bars: [{ label: 'true', probability: answer.noul }] }
+        ? { value: String(round(answer.noul)), bars: [{ label: 'true', probability: answer.noul }] }
         : undefined
 
     case 'choice': {
       if (typeof answer.choice !== 'string') return undefined
       const bars = probabilityBars(answer.probabilities)
         .map((bar): DecisionBar => ({ ...bar, note: note(bar.label), chosen: bar.label === answer.choice }))
-        .sort((a, b) => b.probability - a.probability)
+        .sort((a, b) => rank(a.label) - rank(b.label))
       return { value: answer.choice, confidence, bars }
     }
 
@@ -119,12 +125,18 @@ function answerOf(question: Decision, answer: unknown): DecisionAnswer | undefin
         })
         .sort((a, b) => Number(a.label) - Number(b.label))
       const levels = Math.max(bars.length, question.criteria.length)
-      return { value: String(answer.score), confidence, bars, scale: levels > 1 ? { value: answer.score, max: levels - 1 } : undefined }
+      const score = round(answer.score)
+      return { value: String(score), confidence, bars, scale: levels > 1 ? { value: score, max: levels - 1 } : undefined }
     }
 
     default:
       return undefined
   }
+}
+
+/** #136 — Ollama's decision models answer in full float precision; 3 places is plenty to read (raw JSON keeps the rest). */
+function round(value: number): number {
+  return Math.round(value * 1000) / 1000
 }
 
 function probabilityBars(probabilities: unknown): DecisionBar[] {

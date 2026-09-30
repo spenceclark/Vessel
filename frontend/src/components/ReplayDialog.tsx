@@ -247,9 +247,25 @@ function compatible(detail: RequestDetail, backend: StatusBackend): boolean {
     case 'anthropic-messages': return type === 'anthropic' || type === 'ollama' || (type === 'auto' && same)
     case 'ollama-chat':
     case 'ollama-generate': return type === 'ollama' || (type === 'auto' && same)
-    // #113 — System One has one vendor surface per backend; the model (alias vs pinned build) may still change.
-    case 'typesafe-systemone': return same
+    // #113/#136 — System One replays to its own backend (the model may still change), or between Ollama 0.35+
+    // and TypeSafe when the replay would land on the `/v1/systemone` they share.
+    case 'typesafe-systemone': return same || reachesSystemOne(detail.path, backend)
     case 'raw': return same
     default: return false
+  }
+}
+
+/**
+ * #136 — mirrors `ReplayEndpoint.ReachesSystemOne`: an ollama target, or one on api.typesafe.ai (its preset is
+ * `auto`, so only the host says so), where the target's base path plus the stored path (query aside) is exactly
+ * `/v1/systemone`. OpenRouter's `/api/alpha/decisions` never is, nor is a base URL already ending in `/v1`.
+ */
+function reachesSystemOne(path: string, backend: StatusBackend): boolean {
+  try {
+    const url = new URL(backend.baseUrl)
+    return (backend.type.toLowerCase() === 'ollama' || url.hostname === 'api.typesafe.ai')
+      && url.pathname.replace(/\/+$/, '') + path.split('?')[0] === '/v1/systemone'
+  } catch {
+    return false
   }
 }
