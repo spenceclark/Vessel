@@ -285,11 +285,31 @@ public static class ReplayEndpoint
             "openai-responses" => type == "openai" || type == "auto" && sameBackend,
             "anthropic-messages" => type is "anthropic" or "ollama" || type == "auto" && sameBackend,
             "ollama-chat" or "ollama-generate" => type == "ollama" || type == "auto" && sameBackend,
-            "typesafe-systemone" => sameBackend,
+            "typesafe-systemone" => sameBackend
+                || IsSystemOnePath(detail.Path) && (type == "ollama" || IsTypeSafeHost(target.BaseUrl)),
             "raw" => sameBackend && !modelOverride,
             _ => false,
         };
     }
+
+    /// <summary>
+    /// #136 — TypeSafe and Ollama 0.35+ both serve System One at <c>/v1/systemone</c>. Replay
+    /// re-sends the stored path to the target, so only a capture on exactly that path (query
+    /// aside) can move between them; OpenRouter's <c>/api/alpha/decisions</c> cannot.
+    /// </summary>
+    private static bool IsSystemOnePath(string path)
+    {
+        int query = path.IndexOf('?', StringComparison.Ordinal);
+        return (query < 0 ? path : path[..query]) == "/v1/systemone";
+    }
+
+    /// <summary>
+    /// #136 — TypeSafe's catalog preset is <c>auto</c> like every other untyped backend, so the
+    /// exact host is the only sign a target speaks System One (the #28 test for OpenAI's own API).
+    /// </summary>
+    private static bool IsTypeSafeHost(string baseUrl) =>
+        Uri.TryCreate(baseUrl, UriKind.Absolute, out Uri? uri)
+        && string.Equals(uri.Host, "api.typesafe.ai", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// #28 — the "current" spelling is OpenAI's own Chat Completions API; every other

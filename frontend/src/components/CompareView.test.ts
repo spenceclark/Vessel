@@ -41,9 +41,33 @@ describe('CompareView', () => {
     expect(modelDiff?.textContent).toContain('"after"')
     expect(screen.getByText('response 1')).toBeTruthy()
     expect(screen.getByText('response 2')).toBeTruthy()
-    // #48 review — metrics are one table of a fixed row set whatever N is, pair included
-    // (#49 added the Score row to it).
-    expect(screen.getByText('Duration').closest('table')?.querySelectorAll('tbody tr')).toHaveLength(7)
+    // #48 review — metrics are one table whatever N is, pair included. #136 — rows no column has
+    // a value for (TTFT, Tok/s, and Score until one is set) are left out.
+    const metrics = screen.getByText('Duration').closest('table')
+    expect(Array.from(metrics?.querySelectorAll('tbody tr td:first-child') ?? []).map((td) => td.textContent))
+      .toEqual(['Duration', 'Tokens in', 'Tokens out', 'Stop reason'])
+  })
+
+  // #136 — each decision column's cards carry their question, so the shared request shows only
+  // the state; System One has no stop reason, so that row goes too.
+  it('shows a decision pair state once and each question only in the answer columns', async () => {
+    const decision = (id: number, model: string, replayOf: number | null): RequestDetail => ({
+      ...detail(id, model, replayOf),
+      path: '/v1/systemone', format: 'typesafe-systemone', stopReason: null,
+      requestBody: { text: JSON.stringify({
+        model, state: 'charged twice',
+        questions: { area: { type: 'choice', instructions: 'Which team owns it?', criteria: { billing: null, bug: null } } },
+      }) },
+      responseBody: { text: JSON.stringify({
+        answers: { area: { type: 'choice', choice: 'billing', probabilities: { billing: 0.9, bug: 0.1 }, confidence: 0.8 } },
+      }) },
+    })
+    vi.spyOn(api, 'getRequest').mockImplementation(async (id) => id === 1 ? decision(1, 'tev1', null) : decision(2, 'jev-latest', 1))
+    render(createElement(CompareView, { originalId: 1, replayIds: [2], onClose: () => undefined }), { wrapper: wrapper() })
+
+    expect(await screen.findByText('charged twice')).toBeTruthy()
+    expect(await screen.findAllByText('Which team owns it?')).toHaveLength(2)
+    expect(screen.queryByText('Stop reason')).toBeNull()
   })
 
   it('formats a negative multi-second delta with magnitude then sign', () => {

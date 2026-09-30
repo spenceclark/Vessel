@@ -79,7 +79,11 @@ function CompareBody({ original, members, pending, onClose }: {
 }) {
   const pair = members.length === 1
   const diff = useMemo(() => mergedDiff(original, members), [original, members])
-  const requestView = useMemo(() => renderRequest(original), [original])
+  const requestView = useMemo(() => {
+    const view = renderRequest(original)
+    // #136 — every decision column's cards already carry their question, so the shared request keeps only the state.
+    return view?.decisions ? { ...view, decisions: { state: view.decisions.state, items: [] } } : view
+  }, [original])
   // The original is a scorable column like any other — that is what makes "did the swap
   // beat what I already had" answerable.
   const columns = useMemo(() => [original, ...members], [original, members])
@@ -150,10 +154,15 @@ function CompareBody({ original, members, pending, onClose }: {
 }
 
 /**
- * Metrics on the same axis as the response columns: six rows whatever N is, so a wide fan
- * is scanned left to right rather than down sixteen rows of cards.
+ * Metrics on the same axis as the response columns: one row per metric whatever N is, so a
+ * wide fan is scanned left to right rather than down sixteen rows of cards. #136 — a row no
+ * column has a value for (TTFT on a non-streamed call, stop reason on a System One decision)
+ * is left out rather than shown as a line of dashes.
  */
 function MetricsTable({ original, members }: { original: RequestDetail; members: RequestDetail[] }) {
+  const columns = [original, ...members]
+  const rows = METRIC_ROWS.filter((row) => columns.some((detail) => row.pick(detail) != null))
+  const showStopReason = columns.some((detail) => detail.stopReason != null)
   return (
     <section>
       <h3 className="mb-2 text-xs font-[550] uppercase tracking-[0.06em] text-text-muted">Metrics</h3>
@@ -167,7 +176,7 @@ function MetricsTable({ original, members }: { original: RequestDetail; members:
             </tr>
           </thead>
           <tbody>
-            {METRIC_ROWS.map((row) => (
+            {rows.map((row) => (
               <tr key={row.label} className="align-top">
                 <td className="py-1 pr-3 font-[550] uppercase tracking-[0.06em] text-text-muted">{row.label}</td>
                 <td className="py-1 pr-3 font-mono">{row.format(row.pick(original))}</td>
@@ -182,15 +191,17 @@ function MetricsTable({ original, members }: { original: RequestDetail; members:
                 ))}
               </tr>
             ))}
-            <tr className="align-top">
-              <td className="py-1 pr-3 font-[550] uppercase tracking-[0.06em] text-text-muted">Stop reason</td>
-              <td className="py-1 pr-3 font-mono">{original.stopReason ?? '—'}</td>
-              {members.map((member) => (
-                <td key={member.id} className="py-1 pr-3">
-                  <MetricCell value={member.stopReason ?? '—'} delta={null} />
-                </td>
-              ))}
-            </tr>
+            {showStopReason && (
+              <tr className="align-top">
+                <td className="py-1 pr-3 font-[550] uppercase tracking-[0.06em] text-text-muted">Stop reason</td>
+                <td className="py-1 pr-3 font-mono">{original.stopReason ?? '—'}</td>
+                {members.map((member) => (
+                  <td key={member.id} className="py-1 pr-3">
+                    <MetricCell value={member.stopReason ?? '—'} delta={null} />
+                  </td>
+                ))}
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

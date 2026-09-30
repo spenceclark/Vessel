@@ -83,18 +83,35 @@ describe('typesafe-systemone request', () => {
 })
 
 describe('typesafe-systemone response', () => {
-  it('joins answers to questions: noul bar, choice bars sorted with rubrics and the winner marked', () => {
+  // #136 — bars keep the request's criteria order, so an option sits on the same row in every Compare column.
+  it('joins answers to questions: noul bar, choice bars in request order with rubrics and the winner marked', () => {
     const items = renderResponse(detail(DIRECT_REQUEST, DIRECT_RESPONSE))?.decisions?.items ?? []
     expect(items[0].answer).toEqual({ value: '0.92', bars: [{ label: 'true', probability: 0.92 }] })
     expect(items[1].answer).toEqual({
       value: 'technical',
       confidence: 0.82,
       bars: [
-        { label: 'technical', probability: 0.85, note: 'Bugs and outages', chosen: true },
         { label: 'billing', probability: 0.08, note: 'Payments', chosen: false },
+        { label: 'technical', probability: 0.85, note: 'Bugs and outages', chosen: true },
         { label: 'sales', probability: 0.07, note: undefined, chosen: false },
       ],
     })
+  })
+
+  // #136 — Ollama's decision models answer in full float precision.
+  it('rounds shown values to 3 places and puts options the request did not list last', () => {
+    const response = {
+      answers: {
+        is_urgent: { type: 'noul', noul: 0.97951971019273 },
+        department: { type: 'choice', choice: 'billing', probabilities: { other: 0.01, sales: 0.02, billing: 0.97 }, confidence: 0.7532738545034185 },
+        frustration: { type: 'score', score: 2.695340616471748, probabilities: { 0: 0.1, 1: 0.2, 2: 0.7 }, confidence: 0.5300299137381747 },
+      },
+    }
+    const items = renderResponse(detail(DIRECT_REQUEST, response))?.decisions?.items ?? []
+    expect(items[0].answer?.value).toBe('0.98')
+    expect(items[1].answer?.confidence).toBe(0.753)
+    expect(items[1].answer?.bars.map((b) => b.label)).toEqual(['billing', 'sales', 'other'])
+    expect([items[2].answer?.value, items[2].answer?.confidence, items[2].answer?.scale]).toEqual(['2.695', 0.53, { value: 2.695, max: 2 }])
   })
 
   it('labels score levels from the legend, falling back to the request criteria', () => {

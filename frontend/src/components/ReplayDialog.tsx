@@ -247,9 +247,20 @@ function compatible(detail: RequestDetail, backend: StatusBackend): boolean {
     case 'anthropic-messages': return type === 'anthropic' || type === 'ollama' || (type === 'auto' && same)
     case 'ollama-chat':
     case 'ollama-generate': return type === 'ollama' || (type === 'auto' && same)
-    // #113 — System One has one vendor surface per backend; the model (alias vs pinned build) may still change.
-    case 'typesafe-systemone': return same
+    // #113/#136 — System One replays to its own backend (the model may still change), or between Ollama 0.35+
+    // and TypeSafe (known only by host: its preset is `auto`) when captured on the `/v1/systemone` path they
+    // share; OpenRouter's `/api/alpha/decisions` cannot move.
+    case 'typesafe-systemone':
+      return same || (detail.path.split('?')[0] === '/v1/systemone' && (type === 'ollama' || isTypeSafeHost(backend.baseUrl)))
     case 'raw': return same
     default: return false
+  }
+}
+
+function isTypeSafeHost(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname === 'api.typesafe.ai'
+  } catch {
+    return false
   }
 }

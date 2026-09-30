@@ -201,7 +201,7 @@ public sealed class ReplayTests
             ("anthropic-messages", await CaptureJson(client, vessel, "/v1/messages?matrix-anthropic", "{\"model\":\"m\",\"max_tokens\":1,\"messages\":[]}"), ["stub", "anthropic", "ollama"]),
             ("ollama-chat", await CaptureJson(client, vessel, "/api/chat?matrix-ollama-chat", "{\"model\":\"m\",\"messages\":[]}"), ["stub", "ollama"]),
             ("ollama-generate", await CaptureJson(client, vessel, "/api/generate?matrix-ollama-generate", "{\"model\":\"m\",\"prompt\":\"x\"}"), ["stub", "ollama"]),
-            ("typesafe-systemone", await CaptureJson(client, vessel, "/v1/systemone?matrix-systemone", "{\"model\":\"m\",\"state\":\"x\",\"questions\":{}}"), ["stub"]),
+            ("typesafe-systemone", await CaptureJson(client, vessel, "/v1/systemone?matrix-systemone", "{\"model\":\"m\",\"state\":\"x\",\"questions\":{}}"), ["stub", "ollama"]),
             ("raw", await CaptureRaw(vessel, client), ["stub"]),
         ];
 
@@ -244,7 +244,80 @@ public sealed class ReplayTests
         using HttpResponseMessage systemOneOverride = await client.PostAsJsonAsync(
             $"{vessel.BaseUrl}/vessel/api/requests/{systemOneId}/replay", new { model = "jev-1.13.0" }, CT);
         Assert.Equal(HttpStatusCode.Accepted, systemOneOverride.StatusCode);
-        await WaitForReplayCount(client, vessel.BaseUrl, systemOneId, 2);
+        await WaitForReplayCount(client, vessel.BaseUrl, systemOneId, 3);
+    }
+
+    // #136 — TypeSafe and Ollama 0.35+ share `/v1/systemone`, so a capture on that path may move
+    // to an ollama backend or to one on api.typesafe.ai (its preset is `auto`, so only the host
+    // says so); OpenRouter's path may not, nor may any other `auto` backend. The source's key
+    // never follows the row to Ollama.
+    [Fact]
+    public async Task Replay_SystemOne_MovesBetweenOllamaAndTypeSafeOnlyFromTheSharedPath()
+    {
+        string env = $"VESSEL_TEST_TYPESAFE_{Guid.NewGuid():N}";
+        Environment.SetEnvironmentVariable(env, "typesafe-test-secret");
+        try
+        {
+            await using TestVessel vessel = await TestVessel.StartAsync(config =>
+            {
+                config.Backends["typesafe"] = new() { BaseUrl = VesselPlaceholder, Type = "auto", AuthEnv = env };
+                config.Backends["open-router"] = new() { BaseUrl = VesselPlaceholder, Type = "auto" };
+                config.Backends["ollama"] = new() { BaseUrl = VesselPlaceholder, Type = "ollama" };
+                // Never dispatched to: its authEnv is unset, so a compatible replay stops at
+                // missing_replay_auth — after the compatibility check, before any network call.
+                config.Backends["typesafe-live"] = new()
+                {
+                    BaseUrl = "https://API.typesafe.ai", Type = "auto", AuthEnv = $"VESSEL_TEST_UNSET_{Guid.NewGuid():N}",
+                };
+            });
+            ConfigStore store = vessel.Services.GetRequiredService<ConfigStore>();
+            VesselConfig config = store.Current;
+            foreach (string name in new[] { "typesafe", "open-router", "ollama" })
+            {
+                config.Backends[name].BaseUrl = vessel.Stub.BaseUrl;
+            }
+
+            store.Apply(config);
+            using var client = new HttpClient();
+            const string body = "{\"model\":\"jev-latest\",\"state\":{\"ticket\":\"x\"},\"questions\":{}}";
+
+            long directId = await CaptureJson(client, vessel, "/b/typesafe/v1/systemone?s1-direct", body);
+            long openRouterId = await CaptureJson(client, vessel, "/b/open-router/api/alpha/decisions?s1-openrouter", body);
+            long ollamaId = await CaptureJson(client, vessel, "/b/ollama/v1/systemone?s1-ollama", body);
+            foreach (long id in new[] { directId, openRouterId, ollamaId })
+            {
+                Assert.Equal("typesafe-systemone", (await GetDetail(client, vessel.BaseUrl, id)).GetProperty("format").GetString());
+            }
+
+            using HttpResponseMessage accepted = await client.PostAsJsonAsync(
+                $"{vessel.BaseUrl}/vessel/api/requests/{directId}/replay", new { backend = "ollama", model = "nimble" }, CT);
+            Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+            // The stub reflects only on `/v1/systemone`, so a reflect payload proves the path.
+            ReflectPayload wire = await ReplayReflect(client, vessel.BaseUrl, await WaitForReplay(client, vessel.BaseUrl, directId));
+            Assert.Contains("\"model\":\"nimble\"", wire.SeenBody);
+            Assert.False(wire.HasAuthorization);
+
+            // `typesafe` points at the stub, so it is an `auto` backend off api.typesafe.ai.
+            (long Id, string Target, string Error)[] cases =
+            [
+                (openRouterId, "ollama", "format_mismatch"),
+                (openRouterId, "typesafe-live", "format_mismatch"),
+                (ollamaId, "typesafe", "format_mismatch"),
+                (ollamaId, "open-router", "format_mismatch"),
+                (ollamaId, "typesafe-live", "missing_replay_auth"),
+            ];
+            foreach ((long id, string target, string error) in cases)
+            {
+                using HttpResponseMessage response = await client.PostAsJsonAsync(
+                    $"{vessel.BaseUrl}/vessel/api/requests/{id}/replay", new { backend = target, model = "jev-latest" }, CT);
+                Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+                Assert.Equal(error, response.Headers.GetValues("X-Vessel-Error").Single());
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(env, null);
+        }
     }
 
     [Fact]

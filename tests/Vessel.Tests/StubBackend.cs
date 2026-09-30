@@ -156,6 +156,13 @@ public sealed class StubBackend : IAsyncDisposable
         app.Map("/v1/messages", reflectRequest);
         app.Map("/v1/systemone", reflectRequest);
 
+        // #136 — OpenRouter's System One path is detected by shape, so it must answer with `answers`.
+        app.Map("/api/alpha/decisions", (RequestDelegate)(async context =>
+        {
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync("{\"answers\":{}}");
+        }));
+
         // D01/R05 — a gzip-encoded JSON response. ?bomb=1 makes the *decoded* size huge from
         // a tiny wire body (highly compressible zeros), which is how the decode budget gets
         // exercised end to end; otherwise it's an ordinary small compressed chat completion.

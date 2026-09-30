@@ -530,11 +530,14 @@ decisions endpoint at `/alpha/decisions` (#113) — stay reachable. TypeSafe's S
 (`POST /v1/systemone`) is not an OpenAI wire format, so its entry is `auto` rather than
 `openai`: an `openai` type would offer it as a replay target for every chat/Responses capture.
 Replay auth does not need the type — any non-Anthropic backend with `authEnv` sends Bearer —
-and `typesafe-systemone` rows replay to their own backend regardless of type.
+and `typesafe-systemone` rows replay to their own backend regardless of type. A row captured
+on `/v1/systemone`, the path TypeSafe and Ollama 0.35+ share, may also go to any `ollama`
+backend or to one whose host is exactly `api.typesafe.ai` (#136): the preset's `auto` type
+says nothing, so the host is the signal, and a TypeSafe backend behind a proxy isn't recognised.
 
 | Backend | Default endpoint | Wire format | Authentication at default | Auth environment variable when enabled/required |
 | --- | --- | --- | --- | --- |
-| Ollama | `http://localhost:11434` | Ollama native | none | — |
+| Ollama | `http://localhost:11434` | Ollama native; System One (`/v1/systemone`, 0.35+) | none | — |
 | LM Studio | `http://localhost:1234` | OpenAI-compatible | none | `LM_API_TOKEN` if API-token auth is enabled |
 | Unsloth Desktop | `http://localhost:8888` | OpenAI-compatible | required | none; create the key in Unsloth Desktop and choose an `authEnv` name in Vessel if replay needs it |
 | llama.cpp `llama-server` | `http://localhost:8080` | OpenAI-compatible | none | `LLAMA_ARG_API_KEY` if API-key auth is enabled |
