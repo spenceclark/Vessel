@@ -16,6 +16,12 @@ function Import-VesselSqlite {
 
     if ($script:VesselSqliteReady) { return $true }
 
+    # The loader needs .NET Core's NativeLibrary; Windows PowerShell 5.1 runs on .NET Framework.
+    if ($PSVersionTable.PSVersion.Major -lt 7) {
+        Write-Warning "DB checks skipped: reading vessel.db needs PowerShell 7 (pwsh); this is $($PSVersionTable.PSVersion)."
+        return $false
+    }
+
     $binRoot = Join-Path $RepoRoot "src/Vessel/bin"
     if (-not (Test-Path $binRoot)) {
         Write-Warning "DB checks skipped: no build output under $binRoot (build the project first)."

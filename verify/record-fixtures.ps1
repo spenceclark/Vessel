@@ -10,14 +10,15 @@ enriched fields (format/model/tokens/tok_per_sec/stop_reason) so you can hand-wr
 expected.json. Malformed/truncated cases are derived by hand from these (cut mid-event, cut
 mid-UTF-8-codepoint, inject a garbage line) — never recorded.
 
-Requires a running Vessel (dotnet run --project src/Vessel) with an Ollama backend, and the
-project's build output (for the SQLite/zstd assemblies used to read vessel.db). The System One
-case (#136) needs Ollama 0.35+ and the decision model pulled (ollama pull nimble); an older
-Ollama answers /v1/systemone with a 404, so check the printed status before keeping it.
+Requires PowerShell 7 (pwsh), a running Vessel (dotnet run --project src/Vessel) with an Ollama
+backend, and the project's build output (for the SQLite/zstd assemblies used to read vessel.db).
+The System One case (#136) needs Ollama 0.35+ and the decision model pulled (ollama pull nimble);
+an older Ollama answers /v1/systemone with a 404, so check the printed status before keeping it.
 
 .EXAMPLE
-./record-fixtures.ps1 -Model qwen2.5:1.5b
+pwsh ./record-fixtures.ps1 -Model qwen2.5:1.5b
 #>
+#Requires -Version 7
 [CmdletBinding()]
 param(
     [string]$VesselUrl = "http://127.0.0.1:4550",
