@@ -51,12 +51,15 @@ describe('ReplayDialog', () => {
   })
 
   // #136 — TypeSafe and Ollama 0.35+ share `/v1/systemone`, so a capture on that path (query
-  // aside) may move between them, TypeSafe known by host; OpenRouter's path may not.
+  // aside) may move between them, TypeSafe known by host; OpenRouter's path may not, and neither
+  // may a target whose base URL already ends in `/v1` (it would receive /v1/v1/systemone).
   it('offers ollama and api.typesafe.ai backends to System One rows captured on /v1/systemone only', () => {
     const typesafe: StatusBackend = { ...backends[0], name: 'typesafe', baseUrl: 'https://api.typesafe.ai', type: 'auto', default: false, requiresAuth: true }
     const openRouter: StatusBackend = { ...typesafe, name: 'open-router', baseUrl: 'https://openrouter.ai' }
     const ollama: StatusBackend = { ...backends[0], name: 'ollama', baseUrl: 'http://localhost:11434', type: 'ollama', default: false }
-    const all = [typesafe, openRouter, ollama]
+    const typesafeV1: StatusBackend = { ...typesafe, name: 'typesafe-v1', baseUrl: 'https://api.typesafe.ai/v1' }
+    const ollamaV1: StatusBackend = { ...ollama, name: 'ollama-v1', baseUrl: 'http://localhost:11434/v1/' }
+    const all = [typesafe, openRouter, ollama, typesafeV1, ollamaV1]
     const targets = () => Array.from((screen.getByLabelText('Backend') as HTMLSelectElement).options).map((o) => o.value)
 
     const rendered = render(createElement(ReplayDialog, {

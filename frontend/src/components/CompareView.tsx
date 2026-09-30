@@ -79,14 +79,16 @@ function CompareBody({ original, members, pending, onClose }: {
 }) {
   const pair = members.length === 1
   const diff = useMemo(() => mergedDiff(original, members), [original, members])
-  const requestView = useMemo(() => {
-    const view = renderRequest(original)
-    // #136 — every decision column's cards already carry their question, so the shared request keeps only the state.
-    return view?.decisions ? { ...view, decisions: { state: view.decisions.state, items: [] } } : view
-  }, [original])
   // The original is a scorable column like any other — that is what makes "did the swap
   // beat what I already had" answerable.
   const columns = useMemo(() => [original, ...members], [original, members])
+  const requestView = useMemo(() => {
+    const view = renderRequest(original)
+    // #136 — a decision column's cards already carry their question, so the shared request keeps only the
+    // state; but when no column renders cards (every response an error body), it keeps the questions too.
+    const carried = columns.some((detail) => (renderResponse(detail)?.decisions?.items.length ?? 0) > 0)
+    return view?.decisions && carried ? { ...view, decisions: { state: view.decisions.state, items: [] } } : view
+  }, [original, columns])
   const { setScore, error } = useScore(original.id)
   // Scoring is a volume activity (15 prompts x 5 columns is 75 clicks), so the focused
   // column takes 1-5 from the keyboard. Same pattern as RequestList's arrow keys.

@@ -265,10 +265,12 @@ public sealed class ReplayTests
                 config.Backends["ollama"] = new() { BaseUrl = VesselPlaceholder, Type = "ollama" };
                 // Never dispatched to: its authEnv is unset, so a compatible replay stops at
                 // missing_replay_auth — after the compatibility check, before any network call.
-                config.Backends["typesafe-live"] = new()
-                {
-                    BaseUrl = "https://API.typesafe.ai", Type = "auto", AuthEnv = $"VESSEL_TEST_UNSET_{Guid.NewGuid():N}",
-                };
+                string unset = $"VESSEL_TEST_UNSET_{Guid.NewGuid():N}";
+                config.Backends["typesafe-live"] = new() { BaseUrl = "https://API.typesafe.ai/", Type = "auto", AuthEnv = unset };
+                // Review — replay appends the stored path to the base URL, so a base already ending
+                // in /v1 would receive /v1/v1/systemone.
+                config.Backends["typesafe-v1"] = new() { BaseUrl = "https://api.typesafe.ai/v1", Type = "auto", AuthEnv = unset };
+                config.Backends["ollama-v1"] = new() { BaseUrl = VesselPlaceholder + "/v1", Type = "ollama" };
             });
             ConfigStore store = vessel.Services.GetRequiredService<ConfigStore>();
             VesselConfig config = store.Current;
@@ -305,6 +307,8 @@ public sealed class ReplayTests
                 (ollamaId, "typesafe", "format_mismatch"),
                 (ollamaId, "open-router", "format_mismatch"),
                 (ollamaId, "typesafe-live", "missing_replay_auth"),
+                (ollamaId, "typesafe-v1", "format_mismatch"),
+                (directId, "ollama-v1", "format_mismatch"),
             ];
             foreach ((long id, string target, string error) in cases)
             {

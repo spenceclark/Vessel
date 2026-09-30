@@ -70,6 +70,24 @@ describe('CompareView', () => {
     expect(screen.queryByText('Stop reason')).toBeNull()
   })
 
+  // #136 review — with no answer cards anywhere (both sides an error body), the shared request
+  // keeps its questions, or a failed replay would show none at all.
+  it('keeps the questions of a decision pair in the request when neither side renders answer cards', async () => {
+    const failed = (id: number, replayOf: number | null): RequestDetail => ({
+      ...detail(id, 'jev-latest', replayOf),
+      path: '/v1/systemone', format: 'typesafe-systemone', statusCode: 422, stopReason: null,
+      requestBody: { text: JSON.stringify({
+        model: 'jev-latest', state: 'charged twice',
+        questions: { area: { type: 'choice', instructions: 'Which team owns it?', criteria: { billing: null, bug: null } } },
+      }) },
+      responseBody: { text: JSON.stringify({ error: { message: 'criteria must have at least two options' } }) },
+    })
+    vi.spyOn(api, 'getRequest').mockImplementation(async (id) => id === 1 ? failed(1, null) : failed(2, 1))
+    render(createElement(CompareView, { originalId: 1, replayIds: [2], onClose: () => undefined }), { wrapper: wrapper() })
+
+    expect(await screen.findAllByText('Which team owns it?')).toHaveLength(1)
+  })
+
   it('formats a negative multi-second delta with magnitude then sign', () => {
     render(createElement(MetricCell, { value: '1.00s', delta: -1500, formatDelta: formatMs }))
     expect(screen.getByText('Δ −1.50s')).toBeTruthy()

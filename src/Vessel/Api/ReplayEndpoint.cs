@@ -286,7 +286,7 @@ public static class ReplayEndpoint
             "anthropic-messages" => type is "anthropic" or "ollama" || type == "auto" && sameBackend,
             "ollama-chat" or "ollama-generate" => type == "ollama" || type == "auto" && sameBackend,
             "typesafe-systemone" => sameBackend
-                || IsSystemOnePath(detail.Path) && (type == "ollama" || IsTypeSafeHost(target.BaseUrl)),
+                || (type == "ollama" || IsTypeSafeHost(target.BaseUrl)) && ReachesSystemOne(target.BaseUrl, detail.Path),
             "raw" => sameBackend && !modelOverride,
             _ => false,
         };
@@ -294,13 +294,15 @@ public static class ReplayEndpoint
 
     /// <summary>
     /// #136 — TypeSafe and Ollama 0.35+ both serve System One at <c>/v1/systemone</c>. Replay
-    /// re-sends the stored path to the target, so only a capture on exactly that path (query
-    /// aside) can move between them; OpenRouter's <c>/api/alpha/decisions</c> cannot.
+    /// appends the stored path (query aside) to the target's base URL, so the row may move only
+    /// when that lands exactly there: OpenRouter's <c>/api/alpha/decisions</c> never does, and
+    /// neither does <c>/v1/systemone</c> sent to a base URL that already ends in <c>/v1</c>.
     /// </summary>
-    private static bool IsSystemOnePath(string path)
+    private static bool ReachesSystemOne(string baseUrl, string path)
     {
         int query = path.IndexOf('?', StringComparison.Ordinal);
-        return (query < 0 ? path : path[..query]) == "/v1/systemone";
+        return Uri.TryCreate(baseUrl, UriKind.Absolute, out Uri? uri)
+            && uri.AbsolutePath.TrimEnd('/') + (query < 0 ? path : path[..query]) == "/v1/systemone";
     }
 
     /// <summary>
