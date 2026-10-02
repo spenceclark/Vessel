@@ -2,6 +2,32 @@
 
 All notable changes are documented here. Vessel follows Semantic Versioning.
 
+## 0.3.1 — 2026-10-02
+
+System One replay between TypeSafe and Ollama, a tidier Compare view, IBM Plex Sans, and winget.
+
+### Added
+
+- System One decisions replay between TypeSafe and Ollama 0.35, which serves the same
+  `POST /v1/systemone` API: a `typesafe-systemone` capture can replay to any `ollama` backend
+  or to an `api.typesafe.ai` backend. Credentials come only from the target, so a TypeSafe key
+  never reaches Ollama. OpenRouter's `/api/alpha/decisions` stays same-backend only (#137).
+- Package-manager install on Windows with winget: `winget install spenceclark.Vessel` (#32).
+
+### Changed
+
+- Compare hides metric rows that no column has a value for, in every format — for example
+  TTFT, Tok/s and Stop reason for System One (#137).
+- For a decision pair, Compare's shared request shows only the parameter diff and `state`;
+  each answer column already carries its questions (#137).
+- Decision values, confidence and the score scale are shown rounded to 3 places; Raw JSON
+  keeps full precision (#137).
+- Choice bars follow the request's criteria order, so Compare columns line up. In the request
+  detail view the winning option is no longer always the top bar (#137).
+- The UI font is now IBM Plex Sans, bundled with the app. The previous Inter font never
+  loaded because of a font-name mismatch, so the UI fell back to the system font (#127).
+- Dependency bumps: @tanstack/react-query 5.104.0, @tanstack/react-virtual 3.14.13 (#128, #131).
+
 ## 0.3.0 — 2026-09-19
 
 Tools tab, Anthropic server tools, TypeSafe System One, MCP resources, and two new warnings.

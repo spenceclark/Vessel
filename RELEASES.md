@@ -59,9 +59,15 @@ which bumps each package manager gated on its secret (see
 - **Scoop** — pushes straight to `spenceclark/scoop-bucket`. Nothing to do.
 - **AUR** — blocked: the AUR isn't accepting new account signups, so there is
   no `AUR_SSH_PRIVATE_KEY` and the step is skipped.
-- **winget** — blocked: the initial `spenceclark.Vessel` manifest PR to
-  `microsoft/winget-pkgs` is awaiting manual approval on their side. Until it
-  merges there is no `WINGET_TOKEN` and the step is skipped.
+- **winget** — opens a PR against `microsoft/winget-pkgs` from the
+  `spenceclark/winget-pkgs` fork. A moderator approves it and a bot merges it,
+  usually within a couple of hours. Nothing to do unless it gets a
+  `Needs-Author-Feedback` label. If the step fails, submit by hand with
+  [komac](https://github.com/russellbanks/Komac) (PowerShell):
+
+  ```powershell
+  $env:GITHUB_TOKEN = gh auth token; komac update spenceclark.Vessel --version X.Y.Z --urls https://github.com/spenceclark/Vessel/releases/download/vX.Y.Z/vessel-X.Y.Z-win-x64.zip --submit
+  ```
 
 So a release currently ships as direct binaries (GitHub release assets), the
-Docker image, Homebrew, and Scoop.
+Docker image, Homebrew, Scoop, and winget.

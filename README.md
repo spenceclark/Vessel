@@ -17,6 +17,9 @@
    brew install spenceclark/tap/vessel
 
    # Windows
+   winget install spenceclark.Vessel
+
+   # Windows (Scoop)
    scoop bucket add spenceclark https://github.com/spenceclark/scoop-bucket
    scoop install vessel
    ```
