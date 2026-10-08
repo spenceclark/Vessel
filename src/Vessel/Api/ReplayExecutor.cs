@@ -95,8 +95,16 @@ public sealed class ReplayExecutor(IServer server, ILogger<ReplayExecutor> logge
 
             using HttpResponseMessage response = await _client.SendAsync(
                 request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+            timeout.CancelAfter(plan.ActivityTimeout);
             await using Stream stream = await response.Content.ReadAsStreamAsync(timeout.Token);
-            await stream.CopyToAsync(Stream.Null, timeout.Token);
+
+            // #96 — an activity timeout, like the proxy's: every read that moves bytes restarts
+            // the clock, so a long but healthy stream survives replay and only an idle one dies.
+            byte[] buffer = new byte[16 * 1024];
+            while (await stream.ReadAsync(buffer, timeout.Token) > 0)
+            {
+                timeout.CancelAfter(plan.ActivityTimeout);
+            }
         }
         catch (Exception ex)
         {
