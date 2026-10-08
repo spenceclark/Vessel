@@ -445,6 +445,31 @@ public sealed class ReplayTests
         });
     }
 
+    // #96 — replay honours the activity timeout as an idle limit, not a total deadline: a
+    // stream that runs longer than the timeout but never pauses that long completes.
+    [Fact]
+    public async Task Replay_LongActiveStreamOutlivesTheActivityTimeout()
+    {
+        await using TestVessel vessel = await TestVessel.StartAsync(config =>
+        {
+            config.Backends["stub"].Type = "ollama";
+            config.Timeouts.ActivitySeconds = 1;
+        });
+        using var client = new HttpClient();
+        const string path = "/api/chat?stream=1&delayMs=700&marker=replay-activity";
+        long original = await CaptureJson(client, vessel, path, "{\"model\":\"m\",\"messages\":[],\"stream\":true}");
+
+        using HttpResponseMessage accepted = await client.PostAsJsonAsync(
+            $"{vessel.BaseUrl}/vessel/api/requests/{original}/replay", new { }, CT);
+        Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+
+        CapturedRow replay = await CaptureDb.WaitForRow(
+            vessel.DbPath, row => row.Id != original && row.Path.Contains("marker=replay-activity"));
+        Assert.Null(replay.Error);
+        Assert.Equal(2, replay.TokensOut);
+        Assert.True(replay.DurationMs > 1000, $"replay took {replay.DurationMs}ms; the stream should outlast the timeout");
+    }
+
     [Fact]
     public async Task Replay_LocalAnthropicTarget_OmitsAuth()
     {
