@@ -48,7 +48,6 @@ public static class SessionsEndpoints
         }
 
         var channel = context.RequestServices.GetRequiredService<CaptureChannel>();
-        var currentSession = context.RequestServices.GetRequiredService<CurrentSession>();
 
         // D4 — the insert runs on the writer thread; this handler never touches SQLite directly.
         var completion = new TaskCompletionSource<SessionInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -67,8 +66,6 @@ public static class SessionsEndpoints
                 context, StatusCodes.Status503ServiceUnavailable, VesselErrors.CaptureStopped, ex.Message);
             return;
         }
-
-        currentSession.Set(info.Id);
 
         context.Response.StatusCode = StatusCodes.Status201Created;
         context.Response.ContentType = "application/json; charset=utf-8";

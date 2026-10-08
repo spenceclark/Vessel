@@ -323,12 +323,19 @@ public sealed class CaptureWriterService(
         }
     }
 
-    /// <summary>D4 — runs a <c>POST /sessions</c> insert on the writer thread; never throws out.</summary>
+    /// <summary>
+    /// D4 — runs a <c>POST /sessions</c> insert on the writer thread and activates it; never
+    /// throws out. #95 — activation happens here, in writer order, so a caller that disconnects
+    /// after enqueueing (or concurrent resets resuming out of order) cannot leave routing on a
+    /// different session than the store's current marker.
+    /// </summary>
     private void RunCreateSession(CreateSessionCommand command)
     {
         try
         {
-            command.Completion.TrySetResult(store.CreateSession(command.Name));
+            SessionInfo info = store.CreateSession(command.Name);
+            currentSession.Set(info.Id);
+            command.Completion.TrySetResult(info);
         }
         catch (Exception ex)
         {

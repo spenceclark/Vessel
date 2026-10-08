@@ -116,8 +116,8 @@ public class CaptureWriterResilienceTests : IDisposable
     }
 
     private CaptureWriterService NewWriter(
-        CaptureChannel channel, ICaptureStore store, CaptureEvents? events = null) =>
-        new(channel, store, new FormatEnricher(new VesselConfig()), events ?? new CaptureEvents(), new CurrentSession(),
+        CaptureChannel channel, ICaptureStore store, CaptureEvents? events = null, CurrentSession? currentSession = null) =>
+        new(channel, store, new FormatEnricher(new VesselConfig()), events ?? new CaptureEvents(), currentSession ?? new CurrentSession(),
             NullLogger<CaptureWriterService>.Instance, _healthTracker);
 
     private static async Task WaitFor(Func<bool> condition)
@@ -476,5 +476,51 @@ public class CaptureWriterResilienceTests : IDisposable
         Assert.Equal(
             ["insert:/before-session-delete", "delete-session:2", "insert:/after-session-delete"],
             store.Operations);
+    }
+
+    // #95 — a reset whose HTTP caller disconnects after enqueueing still activates the new
+    // session: activation belongs to the writer's commit, not to the caller's await.
+    [Fact]
+    public async Task CreateSession_ActivatesSession_WhenCallerCancelsAfterEnqueue()
+    {
+        var channel = new CaptureChannel();
+        var currentSession = new CurrentSession();
+        CaptureWriterService writer = NewWriter(channel, new FakeStore(), currentSession: currentSession);
+
+        var completion = new TaskCompletionSource<SessionInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+        channel.Enqueue(new CreateSessionCommand("reset", completion));
+        using var aborted = new CancellationTokenSource();
+        await aborted.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion.Task.WaitAsync(aborted.Token));
+
+        await writer.StartAsync(TestContext.Current.CancellationToken);
+        SessionInfo info = await completion.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await writer.StopAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, info.Id);
+        Assert.Equal(info.Id, currentSession.Id);
+    }
+
+    // #95 — concurrent resets activate in writer commit order, so the last committed session
+    // wins regardless of which HTTP handler resumes last.
+    [Fact]
+    public async Task ConcurrentCreateSessions_ActivateInWriterOrder()
+    {
+        var channel = new CaptureChannel();
+        var currentSession = new CurrentSession();
+        CaptureWriterService writer = NewWriter(channel, new FakeStore(), currentSession: currentSession);
+
+        var first = new TaskCompletionSource<SessionInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = new TaskCompletionSource<SessionInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+        channel.Enqueue(new CreateSessionCommand("first", first));
+        channel.Enqueue(new CreateSessionCommand("second", second));
+
+        await writer.StartAsync(TestContext.Current.CancellationToken);
+        SessionInfo[] infos = await Task.WhenAll(first.Task, second.Task)
+            .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await writer.StopAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(infos[1].Id > infos[0].Id);
+        Assert.Equal(infos[1].Id, currentSession.Id);
     }
 }

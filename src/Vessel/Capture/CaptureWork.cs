@@ -13,8 +13,8 @@ public sealed record CapturedRequest(CaptureRecord Record) : CaptureWork;
 
 /// <summary>
 /// D4 — <c>POST /sessions</c> enqueues this instead of writing to SQLite itself; the
-/// writer executes the insert and completes <see cref="Completion"/> with the new row so
-/// the API handler can respond (and update <see cref="CurrentSession"/>) without a second
+/// writer executes the insert, activates it on <see cref="CurrentSession"/>, and completes
+/// <see cref="Completion"/> with the new row so the API handler can respond without a second
 /// write connection or a lock dance.
 /// </summary>
 public sealed record CreateSessionCommand(string? Name, TaskCompletionSource<SessionInfo> Completion) : CaptureWork;
