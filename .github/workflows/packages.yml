@@ -24,7 +24,7 @@ jobs:
       AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
       WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Compute version and checksums
         id: vars
@@ -147,7 +147,7 @@ jobs:
       # to it. aur-render/PKGBUILD from the step above satisfies that.
       - name: Push to AUR
         if: env.AUR_SSH_PRIVATE_KEY != ''
-        uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
+        uses: KSXGitHub/github-actions-deploy-aur@084b0d9b15415bf9cdb65d44dad1efe37a354050 # v4.2.0
         with:
           pkgname: vessel-bin
           pkgbuild: aur-render/PKGBUILD
@@ -161,7 +161,7 @@ jobs:
       # see packaging/README.md for the one-time manual bootstrap.
       - name: Submit winget manifest
         if: env.WINGET_TOKEN != ''
-        uses: vedantmgoyal9/winget-releaser@v2
+        uses: vedantmgoyal9/winget-releaser@f29ed1ffd34f91223a2aebaa71beaab0901ff9fd # v2
         with:
           identifier: spenceclark.Vessel
           installers-regex: '\.zip$'
