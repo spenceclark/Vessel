@@ -5,8 +5,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description"
-        content="vessel is a local-first observability proxy for LLM traffic: capture, search, replay, and compare every prompt across Ollama, OpenAI, and Anthropic backends. One binary, no account, nothing leaves your machine.">
-    <title>vessel — local LLM proxy: capture, replay, and compare Ollama, OpenAI, and Anthropic requests</title>
+        content="Capture, search, replay, and compare every LLM request to Ollama, OpenAI, and Anthropic. One local binary, no account, captures stay on your machine.">
+    <title>Local LLM proxy for Ollama, OpenAI, and Anthropic | vessel</title>
     <link rel="canonical" href="https://vesselproxy.app/">
     <link rel="icon" href="favicon.svg">
     <meta property="og:type" content="website">
@@ -14,7 +14,7 @@
     <meta property="og:title" content="vessel — see what your agents are actually doing">
     <meta property="og:description"
         content="Capture, search, replay, and compare every LLM prompt — locally. One binary, no account, nothing leaves your machine.">
-    <meta property="og:url" content="https://vesselproxy.app">
+    <meta property="og:url" content="https://vesselproxy.app/">
     <meta property="og:image" content="https://vesselproxy.app/og-card.png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
@@ -30,7 +30,7 @@
       "@context": "https://schema.org",
       "@type": "SoftwareApplication",
       "name": "vessel",
-      "description": "vessel is a local-first observability proxy for LLM traffic: capture, search, replay, and compare every prompt across Ollama, OpenAI, and Anthropic backends. One binary, no account, nothing leaves your machine.",
+      "description": "Capture, search, replay, and compare every LLM request to Ollama, OpenAI, and Anthropic. One local binary, no account, captures stay on your machine.",
       "url": "https://vesselproxy.app/",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "Windows, macOS, Linux",
@@ -156,6 +156,17 @@
             line-height: 1.05;
             letter-spacing: -.045em;
             font-weight: 600;
+        }
+
+        .eyebrow {
+            display: block;
+            margin-bottom: 16px;
+            color: var(--secondary);
+            font-size: 12px;
+            font-weight: 550;
+            line-height: 1.4;
+            letter-spacing: .06em;
+            text-transform: uppercase;
         }
 
         .lead {
@@ -381,7 +392,8 @@
                 <path d="M7 12h10" stroke="var(--accent)" stroke-linecap="round" stroke-width="2" />
             </svg>vessel</header>
         <section class="panel hero">
-            <h1>See what your agents are actually doing.</h1>
+            <h1><span class="eyebrow">Local-first LLM observability proxy</span> See what your agents are
+                actually doing.</h1>
             <p class="lead">vessel sits between your LLM clients and any backend — Ollama, OpenAI, Anthropic, or
                 anything compatible. Change one base URL and every request is captured live: prompts, responses, timing,
                 token counts. Search it, replay it across other models, score what comes back. One small binary. No
