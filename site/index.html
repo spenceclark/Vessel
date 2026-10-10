@@ -11,19 +11,19 @@
     <link rel="icon" href="favicon.svg">
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="vessel">
-    <meta property="og:title" content="vessel — see what your agents are actually doing">
+    <meta property="og:title" content="vessel: see what your agents are actually doing">
     <meta property="og:description"
-        content="Capture, search, replay, and compare every LLM prompt — locally. One binary, no account, nothing leaves your machine.">
+        content="Capture, search, replay, and compare every LLM prompt, locally. One binary, no account, captured traffic stays on your machine.">
     <meta property="og:url" content="https://vesselproxy.app/">
     <meta property="og:image" content="https://vesselproxy.app/og-card.png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
     <meta property="og:image:alt"
-        content="vessel — local-first LLM observability. Capture, search, replay, and compare every prompt.">
+        content="vessel: See what your agents are actually doing. Capture, search, replay, and compare every prompt, locally.">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="vessel — see what your agents are actually doing">
+    <meta name="twitter:title" content="vessel: see what your agents are actually doing">
     <meta name="twitter:description"
-        content="Capture, search, replay, and compare every LLM prompt — locally. One binary, no account, nothing leaves your machine.">
+        content="Capture, search, replay, and compare every LLM prompt, locally. One binary, no account, captured traffic stays on your machine.">
     <meta name="twitter:image" content="https://vesselproxy.app/og-card.png">
     <script type="application/ld+json">
     {
@@ -52,7 +52,7 @@
         {
           "@type": "Question",
           "name": "Where does the data go?",
-          "acceptedAnswer": { "@type": "Answer", "text": "A SQLite file next to the config. Nothing leaves the machine; auth headers are redacted at rest; keys are never stored." }
+          "acceptedAnswer": { "@type": "Answer", "text": "A SQLite file next to the config. Captured traffic is stored only on your machine; prompts are forwarded only to the model providers you configure. Auth headers are redacted at rest and keys are never stored." }
         },
         {
           "@type": "Question",
@@ -394,26 +394,26 @@
         <section class="panel hero">
             <h1><span class="eyebrow">Local-first LLM observability proxy</span> See what your agents are
                 actually doing.</h1>
-            <p class="lead">vessel sits between your LLM clients and any backend — Ollama, OpenAI, Anthropic, or
+            <p class="lead">vessel sits between your LLM clients and any backend: Ollama, OpenAI, Anthropic, or
                 anything compatible. Change one base URL and every request is captured live: prompts, responses, timing,
                 token counts. Search it, replay it across other models, score what comes back. One small binary. No
-                account. Nothing leaves your machine.</p>
+                account. Captured traffic stays on your machine.</p>
             <div class="actions"><a id="download" class="button"
                     href="https://github.com/spenceclark/Vessel/releases/latest">Download Vessel</a><a class="text-link"
                     href="https://github.com/spenceclark/Vessel">GitHub →</a></div>
             <p id="download-note" class="download-note">Finding the latest release for your operating system…</p>
             <div class="label">Or install with a package manager</div>
-            <div class="install-name">Homebrew — macOS (Apple Silicon) and Linux</div>
+            <div class="install-name">Homebrew for macOS (Apple Silicon) and Linux</div>
             <div class="install-row">
                 <code>brew trust spenceclark/tap &amp;&amp; brew install spenceclark/tap/vessel</code><button
                     type="button" class="copy">Copy</button>
             </div>
-            <div class="install-name">winget — Windows</div>
+            <div class="install-name">winget for Windows</div>
             <div class="install-row">
                 <code>winget install spenceclark.Vessel</code><button
                     type="button" class="copy">Copy</button>
             </div>
-            <div class="install-name">Scoop — Windows</div>
+            <div class="install-name">Scoop for Windows</div>
             <div class="install-row">
                 <code>scoop bucket add spenceclark https://github.com/spenceclark/scoop-bucket &amp;&amp; scoop install vessel</code><button
                     type="button" class="copy">Copy</button>
@@ -424,7 +424,7 @@
         <section class="features">
             <article class="panel feature">
                 <h2>Drop-in capture</h2>
-                <p>Change one base URL. Every request and response — streamed or not — captured byte-for-byte with
+                <p>Change one base URL. Every request and response, streamed or not, captured byte-for-byte with
                     timing, TTFT, and token counts. Unknown traffic passes through untouched.</p>
             </article>
             <article class="panel feature">
@@ -434,24 +434,24 @@
             </article>
             <article class="panel feature">
                 <h2>Tag agents, name runs</h2>
-                <p>Each agent sends its own tag and each run its own session — a header, a path prefix, or a LangGraph
+                <p>Each agent sends its own tag and each run its own session: a header, a path prefix, or a LangGraph
                     callback. Filter, compare, and report per agent, per run.</p>
             </article>
             <article class="panel feature">
                 <h2>Replay, fan out, compare</h2>
-                <p>Re-send a captured request to a different backend or model — or to eight at once, or one model across
-                    a sweep of temperatures — and see every response beside the original with timing and token deltas.
+                <p>Re-send a captured request to a different backend or model (or to eight at once, or one model across
+                    a sweep of temperatures) and see every response beside the original with timing and token deltas.
                 </p>
             </article>
             <article class="panel feature">
                 <h2>Score it, rank it, report it</h2>
-                <p>Rate responses 1–5 as you compare; Reports ranks models and parameter sets by score and win rate, and
+                <p>Rate responses 1 to 5 as you compare; Reports ranks models and parameter sets by score and win rate, and
                     charts tokens, tok/s, duration, cache efficiency, and warnings by model, tag, or backend. Export any
                     filtered list to CSV or JSONL.</p>
             </article>
             <article class="panel feature">
                 <h2>Ask your AI about it</h2>
-                <p>A built-in read-only MCP server lets Claude Code — or any MCP client — search and inspect your
+                <p>A built-in read-only MCP server lets Claude Code, or any MCP client, search and inspect your
                     captured traffic directly. &ldquo;Why did my agent stall?&rdquo; is now a question you can just ask.
                 </p>
             </article>
@@ -470,7 +470,7 @@
             </h3>
             <ul>
                 <li>Application-level vs wire-level. They instrument your code with an SDK and show you spans; Vessel
-                    observes the HTTP and shows you bytes. No SDK, no language binding &mdash; anything with a base URL,
+                    observes the HTTP and shows you bytes. No SDK, no language binding: anything with a base URL,
                     including tools you didn&rsquo;t write (Open WebUI, aider, Cline).</li>
                 <li>Language-neutral. Langfuse is Python/TypeScript SDKs; Vessel is one base URL from any language, or a
                     header, or a path prefix.</li>
@@ -482,8 +482,8 @@
             <h3>Vessel vs <a href="https://www.litellm.ai/" target="_blank">LiteLLM</a> (and other gateways)</h3>
             <ul>
                 <li>A gateway <em>routes and transforms</em>: load-balancing, key management, format translation,
-                    retries. Vessel deliberately forwards byte-for-byte and never mutates. Different job; they stack
-                    &mdash; put Vessel in front of LiteLLM to see what the gateway actually sent.</li>
+                    retries. Vessel deliberately forwards byte-for-byte and never mutates. Different job, and they stack:
+                    put Vessel in front of LiteLLM to see what the gateway actually sent.</li>
                 <li>If your question is &ldquo;what did my agent send?&rdquo;, a gateway&rsquo;s logs are one more layer
                     between you and the answer.</li>
             </ul>
@@ -492,7 +492,7 @@
                     target="_blank">Proxyman</a></h3>
             <ul>
                 <li>They&rsquo;re general HTTP interceptors: you get raw JSON and streaming chunks, and you do the
-                    parsing. Vessel speaks the three wire formats natively &mdash; it reassembles the stream, counts
+                    parsing. Vessel speaks the three wire formats natively: it reassembles the stream, counts
                     tokens (exact when the backend reports them), measures TTFT, flags cold loads and truncations, and
                     lets you replay and compare. Wireshark has dissectors; this is the LLM dissector.</li>
                 <li>No certificate install, no MITM: Vessel is a reverse proxy the client is pointed at.</li>
@@ -500,9 +500,9 @@
             <h3>Vessel vs &ldquo;just log it in my code&rdquo;</h3>
             <ul>
                 <li>Works before you&rsquo;ve written any code, and for code that isn&rsquo;t yours.</li>
-                <li>Sees what actually went on the wire after the SDK&rsquo;s defaults, retries, and transformations
-                    &mdash; the &ldquo;is it my code or the model?&rdquo; question that logging inside the code
-                    can&rsquo;t answer.</li>
+                <li>Sees what actually went on the wire after the SDK&rsquo;s defaults, retries, and transformations.
+                    That answers the &ldquo;is it my code or the model?&rdquo; question, which logging inside the
+                    code can&rsquo;t.</li>
             </ul>
         </section>
         <section class="panel prose">
@@ -511,8 +511,8 @@
             <p>No. Byte-for-byte, with only <code>X-Vessel-*</code> headers stripped. <code>injectStreamUsage</code> is
                 the single opt-in exception, and it&rsquo;s flagged on the row.</p>
             <h3>Where does the data go?</h3>
-            <p>A SQLite file next to the config. Nothing leaves the machine; auth headers are redacted at rest; keys are
-                never stored.</p>
+            <p>A SQLite file next to the config. Captured traffic is stored only on your machine; prompts are forwarded
+                only to the model providers you configure. Auth headers are redacted at rest and keys are never stored.</p>
             <h3>Which backends?</h3>
             <p>Ollama native, any OpenAI-compatible server (LM Studio, llama.cpp, vLLM, OpenRouter, the OpenAI API
                 itself), and Anthropic Messages. Unknown formats pass through and are stored raw.</p>
@@ -525,7 +525,7 @@
         const os = navigator.userAgent.includes('Windows') ? 'win-x64' : navigator.userAgent.includes('Mac') ? 'osx-arm64' : 'linux-x64'; // macOS builds are Apple Silicon only; Intel Macs build from source
         fetch(`https://api.github.com/repos/${repository}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
             .then(response => response.ok ? response.json() : Promise.reject(response.status))
-            .then(release => { const asset = release.assets.find(item => item.name.includes(`-${os}.`) && !item.name.endsWith('.sha256')); if (!asset) throw new Error('asset missing'); button.href = asset.browser_download_url; button.textContent = `Download for ${os}`; note.textContent = os === 'osx-arm64' ? `Latest ${release.tag_name} — Apple Silicon build; Intel Macs build from source.` : `Latest ${release.tag_name}`; })
+            .then(release => { const asset = release.assets.find(item => item.name.includes(`-${os}.`) && !item.name.endsWith('.sha256')); if (!asset) throw new Error('asset missing'); button.href = asset.browser_download_url; button.textContent = `Download for ${os}`; note.textContent = os === 'osx-arm64' ? `Latest ${release.tag_name} for Apple Silicon; Intel Macs build from source.` : `Latest ${release.tag_name}`; })
             .catch(() => { note.textContent = 'Choose your platform from the latest GitHub release.'; });
         for (const copy of document.querySelectorAll('.copy')) copy.addEventListener('click', async () => {
             try { await navigator.clipboard.writeText(copy.previousElementSibling.textContent); copy.textContent = 'Copied'; } catch { copy.textContent = 'Select & copy'; }
