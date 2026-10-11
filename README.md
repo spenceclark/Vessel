@@ -193,6 +193,25 @@ Captured requests and sessions are also MCP resources (`vessel://requests/{id}`,
 `@` mentions) can attach one to a prompt directly. The 20 most recent requests and 10
 most recent sessions are listed; older ones are reachable by URI.
 
+### Use as a Claude Code or Codex plugin
+
+The repo is also a plugin for Claude Code and Codex that registers the same read-only
+endpoint (`http://127.0.0.1:4550/vessel/mcp`), so use it instead of `claude mcp add`, not
+as well. It bundles no server: install and start Vessel first, on the default
+`127.0.0.1:4550`.
+
+```bash
+# Claude Code
+claude plugin marketplace add spenceclark/Vessel
+claude plugin install vessel@vessel
+
+# Codex
+codex plugin marketplace add spenceclark/Vessel
+codex plugin add vessel@vessel
+```
+
+In a session, `/plugin` (Claude Code) and `/plugins` (Codex) list it under the `vessel` marketplace.
+
 ## Container / compose
 
 For Docker users, the shipped [`compose.yaml`](compose.yaml) is the canonical setup:

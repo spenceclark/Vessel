@@ -1,7 +1,8 @@
 # Releasing Vessel
 
 The version comes from the git tag (MinVer reads `v*` tags at build time), so
-there is no version file to bump. A release is a changelog entry, a tag, and
+the app has no version file to bump (the plugin manifests are the one exception,
+see step 1). A release is a changelog entry, a tag, and
 one click on GitHub.
 
 ## 1. Write the changelog entry
@@ -18,6 +19,10 @@ git log --oneline "$(git describe --tags --abbrev=0)..HEAD"
 
 Group entries under `### Added`, `### Changed`, `### Fixed` and reference the
 PR number. Merge the entry to `main` via a PR like any other change.
+
+In the same PR, set `version` in `.claude-plugin/plugin.json` and
+`.codex-plugin/plugin.json` to X.Y.Z. Claude Code keeps plugin users on the
+manifest version until it changes.
 
 ## 2. Tag and push
 

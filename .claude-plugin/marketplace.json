@@ -1,0 +1,15 @@
+{
+  "name": "vessel",
+  "description": "Vessel's read-only MCP endpoint as a Claude Code and Codex plugin.",
+  "owner": {
+    "name": "Spencer Clark",
+    "url": "https://github.com/spenceclark"
+  },
+  "plugins": [
+    {
+      "name": "vessel",
+      "source": "./",
+      "description": "Search and inspect LLM traffic captured by a running Vessel proxy."
+    }
+  ]
+}
