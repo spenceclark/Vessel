@@ -284,3 +284,48 @@ describe('MessageView — JSON-only block pretty-printing', () => {
     expect(document.querySelector('pre')).toBeNull()
   })
 })
+
+/**
+ * #147 — with `turn`, messages before `start` (the leading system prompt) render as usual,
+ * the `carried` messages from `start` fold away, the previous turn's reply is labelled, and
+ * only what follows it is marked new.
+ */
+describe('MessageView — previous turn', () => {
+  const text = (role: string, t: string) => ({ role, blocks: [{ kind: 'text' as const, text: t }] })
+
+  function renderTurn(messages: RenderedView['messages'], turn: { prevId: number; start: number; carried: number }) {
+    return render(createElement(MessageView, { view: view({ messages }), turn }))
+  }
+
+  it('folds carried messages, labels the reply, and marks the rest new', () => {
+    const { container } = renderTurn(
+      [text('system', 'be terse'), text('user', 'old question'), text('assistant', 'the reply'), text('tool', 'fresh result')],
+      { prevId: 5, start: 1, carried: 1 },
+    )
+
+    // The system prompt sits outside the fold; the carried message sits inside it.
+    const fold = container.querySelector('details')!
+    expect(fold.querySelector('summary')!.textContent).toBe('1 message carried over from #5')
+    expect(fold.textContent).toContain('old question')
+    expect(fold.textContent).not.toContain('be terse')
+
+    expect(screen.getByText('· reply from #5').closest('div.rounded-control')!.textContent).toContain('the reply')
+    const newMarkers = screen.getAllByText('· new')
+    expect(newMarkers).toHaveLength(1)
+    expect(newMarkers[0].closest('div.rounded-control')!.textContent).toContain('fresh result')
+  })
+
+  it('marks the first message new when it is not an assistant reply', () => {
+    renderTurn([text('user', 'old'), text('user', 'edited follow-up')], { prevId: 2, start: 0, carried: 1 })
+
+    expect(screen.queryByText(/reply from/)).toBeNull()
+    expect(screen.getAllByText('· new')).toHaveLength(1)
+  })
+
+  it('shows no fold or markers without a turn', () => {
+    const { container } = render(createElement(MessageView, { view: view({ messages: [text('user', 'hi')] }) }))
+
+    expect(container.querySelector('details')).toBeNull()
+    expect(screen.queryByText('· new')).toBeNull()
+  })
+})

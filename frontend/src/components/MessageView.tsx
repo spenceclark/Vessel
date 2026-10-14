@@ -6,11 +6,20 @@ import { tryPrettyJson } from '@/render/prettyJson'
 import { Badge } from '@/components/ui/badge'
 import { ServerToolResultCard, ToolCallCard } from '@/components/ToolCallCard'
 import { DecisionsView } from '@/components/DecisionsView'
+import { cn } from '@/lib/utils'
 
 const CLAMP_LENGTH = 4000
 
-/** D4 — renders a normalized `RenderedView`: system block, per-message blocks, params. */
-export function MessageView({ view }: { view: RenderedView }) {
+/**
+ * D4 — renders a normalized `RenderedView`: system block, per-message blocks, params.
+ * #147 — with `turn`, the `carried` messages from `start` (the previous turn's conversation)
+ * fold away, that turn's reply is labelled, and everything after it is marked new. Messages
+ * before `start` are the leading system prompt and render as usual.
+ */
+export function MessageView({ view, turn }: { view: RenderedView; turn?: { prevId: number; start: number; carried: number } }) {
+  const start = turn?.start ?? 0
+  const carried = turn?.carried ?? 0
+  const after = start + carried
   // #113 — System One has no messages; every caller (DetailPane, CompareView) routes through
   // here, so this one branch gives them all the dedicated view.
   if (view.decisions) return <DecisionsView decisions={view.decisions} />
@@ -23,9 +32,34 @@ export function MessageView({ view }: { view: RenderedView }) {
         </Card>
       )}
 
-      {view.messages.map((message, i) => (
+      {view.messages.slice(0, start).map((message, i) => (
         <MessageCard key={i} message={message} />
       ))}
+
+      {turn && carried > 0 && (
+        <details className="rounded-control border border-border bg-surface-2 p-2 text-xs">
+          <summary className="cursor-pointer select-none text-text-muted">
+            {carried} message{carried === 1 ? '' : 's'} carried over from #{turn.prevId}
+          </summary>
+          <div className="mt-2 flex flex-col gap-3">
+            {view.messages.slice(start, after).map((message, i) => (
+              <MessageCard key={start + i} message={message} />
+            ))}
+          </div>
+        </details>
+      )}
+
+      {view.messages.slice(after).map((message, i) => {
+        const isReply = turn !== undefined && i === 0 && message.role === 'assistant'
+        return (
+          <MessageCard
+            key={after + i}
+            message={message}
+            label={isReply ? `reply from #${turn.prevId}` : undefined}
+            isNew={turn !== undefined && !isReply}
+          />
+        )
+      })}
 
       {view.params.length > 0 && (
         <details className="rounded-control border border-border bg-surface-2 p-2 text-xs">
@@ -44,14 +78,14 @@ export function MessageView({ view }: { view: RenderedView }) {
   )
 }
 
-function MessageCard({ message }: { message: RenderMessage }) {
+function MessageCard({ message, label, isNew }: { message: RenderMessage; label?: string; isNew?: boolean }) {
   // #82 — citations are numbered across the whole message and listed once at the end.
   const blockCitations = message.blocks.map((b) => ((b.kind === 'markdown' || b.kind === 'text') && b.citations) || [])
   const citations = blockCitations.flat()
   const citeStarts = blockCitations.map((_, i) => blockCitations.slice(0, i).reduce((n, c) => n + c.length, 0))
 
   return (
-    <Card role={message.role}>
+    <Card role={message.role} label={label} isNew={isNew}>
       {message.blocks.length === 0 ? (
         <span className="text-xs text-text-muted">(empty)</span>
       ) : (
@@ -92,10 +126,14 @@ function MessageCard({ message }: { message: RenderMessage }) {
   )
 }
 
-function Card({ role, children }: { role: string; children: ReactNode }) {
+function Card({ role, label, isNew, children }: { role: string; label?: string; isNew?: boolean; children: ReactNode }) {
   return (
-    <div className="rounded-control border border-border p-2.5">
-      <div className="mb-1.5 text-xs font-[550] uppercase tracking-[0.06em] text-text-muted">{role}</div>
+    <div className={cn('rounded-control border border-border p-2.5', isNew && 'border-l-2 border-l-accent')}>
+      <div className="mb-1.5 text-xs font-[550] uppercase tracking-[0.06em] text-text-muted">
+        {role}
+        {label && <span className="ml-2 normal-case tracking-normal">· {label}</span>}
+        {isNew && <span className="ml-2 normal-case tracking-normal text-accent">· new</span>}
+      </div>
       {children}
     </div>
   )
