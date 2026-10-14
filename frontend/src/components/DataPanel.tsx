@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ApiError } from '@/api/client'
 import { AGGREGATE_QUERY_ROOT, SERIES_QUERY_ROOT } from '@/api/queryKeys'
-import type { RequestClearScope, SessionDeleteSummary, SessionInfo } from '@/api/types'
+import type { SessionDeleteSummary, SessionInfo } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -18,7 +18,8 @@ export function DataPanel({
   onDeleteSessions,
 }: {
   sessions: SessionInfo[]
-  onCleared?: (scope: RequestClearScope) => void
+  /** #105 — a clear succeeded; App runs recovery so it does not depend on the `cleared` frame. */
+  onCleared?: () => void
   onDeleteSessions: (sessionIds: number[]) => Promise<SessionDeleteSummary>
 }) {
   const queryClient = useQueryClient()
@@ -72,11 +73,12 @@ export function DataPanel({
     try {
       const result = await api.deleteRequests(scope)
       setMessage(`Deleted ${result.deleted} request${result.deleted === 1 ? '' : 's'}.`)
-      // R14a — evict the selected row's stale detail cache / selection (App owns both). The
-      // live list + completion-buffer purge is driven separately by the server's in-band
-      // `cleared` SSE event (R23/H0a), which orders correctly against completions; this ack is
-      // UX only. The refetch below just refreshes stats/facets and the authoritative list.
-      onCleared?.(scope)
+      // R14a/#105 — the selection, per-request caches and the live list + completion buffer
+      // are reconciled from the server's in-band `cleared` SSE event (R23/H0a), which orders
+      // correctly against completions and reaches every tab. That frame may never arrive here
+      // (the feed can be down while REST works), so the ack also runs recovery, which refreshes
+      // per-request state and the authoritative list without it.
+      onCleared?.()
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['requests'] }),
         queryClient.invalidateQueries({ queryKey: ['stats'] }),

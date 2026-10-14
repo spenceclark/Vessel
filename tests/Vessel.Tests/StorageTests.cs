@@ -532,6 +532,61 @@ public class StorageTests
         }
     }
 
+    // #100 — a gzip-encoded stream stores its reassembled JSON, already decoded, in
+    // response_body. Detail, export and MCP read it as-is; only response_raw keeps the wire
+    // Content-Encoding.
+    [Fact]
+    public void CompressedStream_ReassembledBodyIsNotDecodedAgainWithTheWireEncoding()
+    {
+        string dir = Directory.CreateTempSubdirectory("vessel-store-").FullName;
+        try
+        {
+            const string sse =
+                "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"}}]}\n\n" +
+                "data: [DONE]\n\n";
+            using var compressed = new MemoryStream();
+            using (var gzip = new System.IO.Compression.GZipStream(compressed, System.IO.Compression.CompressionLevel.Optimal, leaveOpen: true))
+            {
+                gzip.Write(System.Text.Encoding.UTF8.GetBytes(sse));
+            }
+
+            CaptureRecord record = TestCapture.Record(
+                "/v1/chat/completions", """{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}""", streamed: true) with
+            {
+                ResponseRaw = compressed.ToArray(),
+                ResponseHeadersJson = """{"Content-Type":["text/event-stream"],"Content-Encoding":["gzip"]}""",
+            };
+            var enricher = new FormatEnricher(new VesselConfig(), FormatEnricher.DefaultAdapters());
+
+            using SqliteCaptureStore store = NewStore(dir);
+            store.Initialize();
+            store.EnsureInitialSession();
+            long id = store.InsertBatch([enricher.Enrich(record)])[0];
+            var reader = new SqliteReadStore(Path.Combine(dir, "vessel.db"));
+
+            RequestDetail detail = reader.GetDetail(id, 1024 * 1024)!;
+            Assert.False(detail.ResponseBody!.DecodeFailed);
+            Assert.Contains("hello", detail.ResponseBody.Text);
+            Assert.False(detail.ResponseRaw!.DecodeFailed);
+            Assert.Contains("hello", detail.ResponseRaw.Text);
+
+            ExportRow export = Assert.Single(reader.EnumerateExport(new RequestQuery(), ExportBodies.Full, 1024 * 1024));
+            Assert.False(export.ResponseBody!.DecodeFailed);
+            Assert.Contains("hello", export.ResponseBody.Text);
+            Assert.Equal("hello", export.ResponseText);
+            Assert.False(export.ResponseRaw!.DecodeFailed);
+
+            McpRequestData mcp = reader.GetMcpRequest(id, 1024 * 1024)!;
+            Assert.Equal("hello", mcp.ResponseText);
+            Assert.Contains("data: [DONE]", mcp.ResponseBody!.Text);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     private static string CollapsedPrefix(string text)
     {
         string collapsed = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));

@@ -14,7 +14,14 @@ import {
   type Summary,
 } from './types'
 import { api } from './client'
-import { AGGREGATE_QUERY_ROOT, REQUESTS_QUERY_ROOT, SERIES_QUERY_ROOT, requestsQueryKey } from './queryKeys'
+import {
+  AGGREGATE_QUERY_ROOT,
+  PREVIOUS_TURN_QUERY_ROOT,
+  REQUEST_DETAIL_QUERY_ROOT,
+  REQUESTS_QUERY_ROOT,
+  SERIES_QUERY_ROOT,
+  requestsQueryKey,
+} from './queryKeys'
 import { useEvents, type InFlightRequest } from './useEvents'
 
 /**
@@ -84,6 +91,9 @@ const EVENT_FLUSH_MS = 100
 
 type ListCache = InfiniteData<RequestListResponse, number | undefined>
 
+/** #105 — the caches that name one row by id: its detail, previous turn and replay children. */
+const PER_REQUEST_QUERY_ROOTS = [REQUEST_DETAIL_QUERY_ROOT, PREVIOUS_TURN_QUERY_ROOT, ['replays']] as const
+
 /**
  * One received SSE frame, tagged with its log position so recovery can order the client's
  * pending work against a server snapshot (J0). `id` is the frame's SSE `id:`; a frame that
@@ -105,6 +115,11 @@ export interface LiveHistory {
   /** Completions that arrived while a filter was active, so the list is knowingly stale. */
   newSinceFilter: number
   clearNewSinceFilter: () => void
+  /**
+   * #105 — run recovery now. A successful local clear calls this so its effect does not depend on
+   * its own `cleared` frame arriving: with the feed down, REST can still work.
+   */
+  recover: () => void
 }
 
 export function useLiveHistory({
@@ -112,12 +127,18 @@ export function useLiveHistory({
   sessionName = null,
   filters,
   onCompleted,
+  onCleared,
 }: {
   scope: SessionScope | null
   sessionName?: string | null
   filters: RequestFilters
   /** Fired for every completion, in arrival order, regardless of scope/filters (selection handover). */
   onCompleted?: (row: Summary | null, seq: number) => void
+  /**
+   * #105 — fired for every received clear frame, in order, before its refetch starts: the one
+   * place a tab learns of a clear made anywhere, including itself (selection reconciliation).
+   */
+  onCleared?: (event: ClearedEvent) => void
 }): LiveHistory {
   const queryClient = useQueryClient()
   const [inFlightMap, setInFlightMap] = useState<Map<number, InFlightRequest>>(new Map())
@@ -128,10 +149,12 @@ export function useLiveHistory({
   const scopeRef = useRef(scope)
   const filtersRef = useRef(filters)
   const onCompletedRef = useRef(onCompleted)
+  const onClearedRef = useRef(onCleared)
   useEffect(() => {
     scopeRef.current = scope
     filtersRef.current = filters
     onCompletedRef.current = onCompleted
+    onClearedRef.current = onCleared
   })
 
   // R10 — completions held while a list fetch is unsettled, drained once one settles.
@@ -251,10 +274,20 @@ export function useLiveHistory({
    * network too, because the list query passes TanStack's `signal` to `fetch` (`client.ts`).
    * Note what this does *not* do: no row is inspected, filtered or deleted by id or timestamp —
    * J0 rule 4's no-client-filtering stance is exactly what makes cancellation the right lever.
+   *
+   * #105 — per-request caches are keyed by row id, which a clear deletes and SQLite can then
+   * reuse (R14b). A received `cleared` frame, recovery (which may cover a missed one) and a
+   * local clear's acknowledgement (`recover`) all land here, so none can leave a deleted
+   * capture's detail to be shown again: unobserved entries are dropped, and the ones an open
+   * view is showing refetch in place rather than flashing back to loading. They are cancelled
+   * first for the same K0a reason as the list: an observed detail whose initial read is still
+   * pending would otherwise have that pre-clear read reused, and settle as the deleted capture.
    */
   const refetchAuthoritative = useCallback(async () => {
-    await queryClient.cancelQueries({ queryKey: REQUESTS_QUERY_ROOT })
+    await Promise.all([REQUESTS_QUERY_ROOT, ...PER_REQUEST_QUERY_ROOTS].map((queryKey) => queryClient.cancelQueries({ queryKey })))
+    for (const queryKey of PER_REQUEST_QUERY_ROOTS) queryClient.removeQueries({ queryKey, type: 'inactive' })
     await Promise.all([
+      ...PER_REQUEST_QUERY_ROOTS.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
       queryClient.refetchQueries({ queryKey: REQUESTS_QUERY_ROOT }),
       queryClient.invalidateQueries({ queryKey: ['stats'] }),
       queryClient.invalidateQueries({ queryKey: ['facets'] }),
@@ -331,6 +364,7 @@ export function useLiveHistory({
           }
         }
         purgeListCaches(deletedSessionId)
+        onClearedRef.current?.(event.data)
         cleared = true
         continue
       }
@@ -561,6 +595,7 @@ export function useLiveHistory({
     connected,
     newSinceFilter,
     clearNewSinceFilter: useCallback(() => setNewSince({ signature: '', count: 0 }), []),
+    recover: scheduleReconcile,
   }
 }
 

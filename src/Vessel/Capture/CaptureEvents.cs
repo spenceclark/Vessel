@@ -282,8 +282,10 @@ public sealed class CaptureEvents
     /// log. Emitted by the writer at clear-commit time, under the same publish lock as
     /// <c>completed</c>, so its id orders correctly against every completion.
     /// <para>
-    /// J0 — the frame is the fast path and carries <em>no recovery burden</em>: all/before
-    /// clears use an empty payload, while #41 session deletion carries its exact session id.
+    /// J0 — the frame is the fast path and carries <em>no recovery burden</em>: an all clear
+    /// uses an empty payload, #41 session deletion carries its exact session id, and #105 a
+    /// before clear carries its cut-off. Clients never apply that cut-off to list rows (the
+    /// refetch is authoritative); it only tells a tab whether its selected capture was reached.
     /// The server retains no clear predicate, version or history. A client that
     /// receives it drops the matching state at that position and refetches; a client that
     /// misses it recovers by snapshot instead, and the refetch that recovery schedules reads a
@@ -293,17 +295,18 @@ public sealed class CaptureEvents
     /// SQLite reused ids after a clear-all — the round-five review's §2.2 B and C.
     /// </para>
     /// </summary>
-    public void Cleared(long? sessionId = null)
+    public void Cleared(long? sessionId = null, string? before = null)
     {
         if (_subscribers.IsEmpty)
         {
             return;
         }
 
-        // Global/before clears retain the empty payload. A session deletion adds the one
-        // predicate clients can apply exactly without timestamps or id-reuse heuristics.
+        // A global clear retains the empty payload. A session deletion adds the one predicate
+        // clients can apply exactly without timestamps or id-reuse heuristics; a before clear's
+        // cut-off is for selection only (#105).
         string json = JsonSerializer.Serialize(
-            new ClearedEvent(sessionId), EventsJsonContext.Default.ClearedEvent);
+            new ClearedEvent(sessionId, before), EventsJsonContext.Default.ClearedEvent);
         Publish("cleared", json);
     }
 
@@ -402,7 +405,8 @@ internal sealed record FirstTokenEvent(long Seq, double TtftMs);
 internal sealed record CompletedEvent(long Seq, Summary? Row);
 
 internal sealed record ClearedEvent(
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? SessionId);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? SessionId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Before);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(StartedEvent))]

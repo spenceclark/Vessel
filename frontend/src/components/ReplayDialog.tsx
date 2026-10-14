@@ -34,31 +34,38 @@ export function ReplayDialog({
   const [error, setError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
 
+  // #97 — the draft resets only when the dialog opens or the captured request changes. Status is
+  // polled, and a health-only refresh rebuilds `allowed`; keying the reset on it wiped the form.
   useEffect(() => {
     if (!open) return
-    const initial = allowed.find((item) => item.name === detail.backend)?.name ?? allowed[0]?.name ?? ''
     /* oxlint-disable react/set-state-in-effect -- opening a different replay target must reset the transient form fields. */
     setMode('single')
-    setBackend(initial)
+    setBackend(detail.backend)
     setModel(detail.model ?? '')
-    setRows([{ backend: initial, model: detail.model ?? '' }])
+    setRows([{ backend: detail.backend, model: detail.model ?? '' }])
     setParamName((PARAM_PLACEMENT[detail.format] ?? [])[0]?.name ?? '')
     setParamValues('')
     setError(null)
     /* oxlint-enable react/set-state-in-effect */
-  }, [allowed, detail, open])
+  }, [detail, open])
+
+  // #97 — a chosen backend that is no longer a target (removed, or never compatible) falls back
+  // to the default at render, leaving the rest of the draft untouched.
+  const reconcile = (name: string) => (allowed.some((item) => item.name === name) ? name : defaultBackend)
+  const liveBackend = reconcile(backend)
+  const liveRows = rows.map((row) => ({ ...row, backend: reconcile(row.backend) }))
 
   // #48 — every mode produces the same `variations` list; the one-axis guard is that a mode
   // varies models or params, never both, and it lives here rather than in the API.
-  const variations = useMemo((): ReplayVariation[] => {
+  const variations = ((): ReplayVariation[] => {
     if (mode === 'single') {
       return [{
-        ...(backend !== detail.backend ? { backend } : {}),
+        ...(liveBackend !== detail.backend ? { backend: liveBackend } : {}),
         ...(model.trim() !== '' && model !== detail.model ? { model: model.trim() } : {}),
       }]
     }
     if (mode === 'models') {
-      return rows
+      return liveRows
         .filter((row) => row.backend !== '')
         .map((row) => ({
           ...(row.backend !== detail.backend ? { backend: row.backend } : {}),
@@ -68,11 +75,11 @@ export function ReplayDialog({
     const placement = params.find((item) => item.name === paramName)
     if (!placement) return []
     return parseValues(paramValues).map((value) => ({
-      ...(backend !== detail.backend ? { backend } : {}),
+      ...(liveBackend !== detail.backend ? { backend: liveBackend } : {}),
       ...(model.trim() !== '' && model !== detail.model ? { model: model.trim() } : {}),
       params: placement.under === 'options' ? { options: { [placement.name]: value } } : { [placement.name]: value },
     }))
-  }, [mode, backend, model, rows, params, paramName, paramValues, detail])
+  })()
 
   const targets = variations.map((variation) => variation.backend ?? detail.backend)
   const keyed = [...new Set(targets.filter((name) => backends.find((item) => item.name === name)?.requiresAuth))]
@@ -118,7 +125,7 @@ export function ReplayDialog({
             <span className="text-xs text-text-muted">Models ({rows.length})</span>
             {rows.map((row, index) => (
               <div key={index} className="flex gap-2">
-                <BackendSelect allowed={allowed} value={row.backend} onChange={(next) => setRows(rows.map((r, i) => (i === index ? { ...r, backend: next } : r)))} />
+                <BackendSelect allowed={allowed} value={liveRows[index].backend} onChange={(next) => setRows(rows.map((r, i) => (i === index ? { ...r, backend: next } : r)))} />
                 <Input
                   value={row.model}
                   placeholder={detail.model ?? 'model'}
@@ -152,12 +159,12 @@ export function ReplayDialog({
               <Input value={paramValues} onChange={(e) => setParamValues(e.target.value)} placeholder="0.2, 0.7, 1.0" className="font-mono" />
               <span className="text-xs text-text-muted">One replay per comma-separated value, all against the backend and model below.</span>
             </label>
-            <BackendField allowed={allowed} value={backend} onChange={setBackend} />
+            <BackendField allowed={allowed} value={liveBackend} onChange={setBackend} />
             <ModelField detail={detail} value={model} onChange={setModel} disabled={false} />
           </div>
         ) : (
           <>
-            <BackendField allowed={allowed} value={backend} onChange={setBackend} />
+            <BackendField allowed={allowed} value={liveBackend} onChange={setBackend} />
             <ModelField detail={detail} value={model} onChange={setModel} disabled={raw} />
           </>
         )}

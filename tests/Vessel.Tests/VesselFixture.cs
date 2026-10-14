@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using Microsoft.AspNetCore.Builder;
 using Vessel.Config;
 using Xunit;
@@ -29,6 +27,7 @@ public sealed class VesselFixture : IAsyncLifetime
     private string _tempDir = null!;
     private WebApplication _vessel = null!;
     private WebApplication _shortTimeoutVessel = null!;
+    private readonly RefusedPort _deadPort = new();
 
     public async ValueTask InitializeAsync()
     {
@@ -46,7 +45,7 @@ public sealed class VesselFixture : IAsyncLifetime
             {
                 ["alpha"] = new() { BaseUrl = Alpha.BaseUrl },
                 ["beta"] = new() { BaseUrl = Beta.BaseUrl },
-                ["dead"] = new() { BaseUrl = $"http://127.0.0.1:{ReserveClosedPort()}" },
+                ["dead"] = new() { BaseUrl = _deadPort.BaseUrl },
             },
         };
 
@@ -71,16 +70,6 @@ public sealed class VesselFixture : IAsyncLifetime
         ShortTimeoutBaseUrl = _shortTimeoutVessel.ListenAddress();
     }
 
-    /// <summary>A loopback port that was just bound and released — connecting to it refuses.</summary>
-    private static int ReserveClosedPort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
-
     public async ValueTask DisposeAsync()
     {
         Client.Dispose();
@@ -92,6 +81,7 @@ public sealed class VesselFixture : IAsyncLifetime
         await _vessel.DisposeAsync();
         await Beta.DisposeAsync();
         await Alpha.DisposeAsync();
+        _deadPort.Dispose();
         try
         {
             Directory.Delete(_tempDir, recursive: true);

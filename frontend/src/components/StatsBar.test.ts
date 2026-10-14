@@ -83,13 +83,13 @@ function renderStatsBar(
   payload: StatusPayload,
   onScopeChange: (scope: number | 'all') => void = () => {},
   sessions: SessionInfo[] = SESSIONS,
-  onDataCleared?: (scope: { all: true } | { before: string }) => void,
   onDeleteSessions: (sessionIds: number[]) => Promise<{
     sessionsDeleted: number
     requestsDeleted: number
     failures: { sessionId: number; message: string }[]
   }>
     = async (sessionIds) => ({ sessionsDeleted: sessionIds.length, requestsDeleted: 0, failures: [] }),
+  onDataCleared?: () => void,
 ) {
   vi.spyOn(api, 'getStats').mockResolvedValue(STATS)
   vi.spyOn(api, 'getStatus').mockResolvedValue(payload)
@@ -165,7 +165,6 @@ describe('Session deletion UX (issue #41 feedback)', () => {
       status({ firstRun: false, defaultBackendReachable: null }),
       () => {},
       SESSIONS,
-      undefined,
       onDeleteSessions,
     )
 
@@ -199,7 +198,6 @@ describe('Session deletion UX (issue #41 feedback)', () => {
       status({ firstRun: false, defaultBackendReachable: null }),
       () => {},
       sessions,
-      undefined,
       onDeleteSessions,
     )
 
@@ -221,6 +219,24 @@ describe('Session deletion UX (issue #41 feedback)', () => {
     expect(await screen.findByText(
       'Deleted 1 session and 8 requests. Failed to delete 1 session: run-43 (session is in use).',
     )).toBeTruthy()
+  })
+})
+
+// #105 review — a successful clear must not depend on its own `cleared` frame arriving (the feed
+// can be down while REST works), so the acknowledgement asks App to run recovery.
+describe('Clear acknowledgement (issue #105)', () => {
+  it('reports a successful clear all so App can refresh without the SSE frame', async () => {
+    vi.spyOn(api, 'deleteRequests').mockResolvedValue({ deleted: 3 })
+    const onDataCleared = vi.fn()
+    renderStatsBar(status({ firstRun: false, defaultBackendReachable: null }), () => {}, SESSIONS, undefined, onDataCleared)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: 'Clear all…' }))
+    fireEvent.change(screen.getByPlaceholderText('DELETE'), { target: { value: 'DELETE' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
+
+    await waitFor(() => expect(onDataCleared).toHaveBeenCalledTimes(1))
   })
 })
 

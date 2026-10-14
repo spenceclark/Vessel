@@ -1,9 +1,10 @@
 import { createElement, useState, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, ApiError } from '@/api/client'
-import { EMPTY_FILTERS, SESSION_LIST_LIMIT, type RequestFilters, type SessionDeleteSummary, type SessionInfo, type SessionScope } from '@/api/types'
+import { requestDetailQueryKey } from '@/api/queryKeys'
+import { EMPTY_FILTERS, SESSION_LIST_LIMIT, type ClearedEvent, type RequestDetail, type RequestFilters, type SessionDeleteSummary, type SessionInfo, type SessionScope } from '@/api/types'
 import App from './App'
 
 interface MockStatsProps {
@@ -18,10 +19,16 @@ interface MockFilterBarProps {
   onFiltersChange: (next: RequestFilters) => void
 }
 
+// #105 — the hook's clear callback is App's only selection reconciliation, so tests drive it.
+const live = vi.hoisted(() => ({
+  onCleared: undefined as ((event: ClearedEvent) => void) | undefined,
+  recover: (() => {}) as () => void,
+}))
 vi.mock('@/api/useLiveHistory', () => ({
-  useLiveHistory: () => ({
-    inFlight: [], connected: true, newSinceFilter: 0, clearNewSinceFilter: () => {},
-  }),
+  useLiveHistory: (options: { onCleared?: (event: ClearedEvent) => void }) => {
+    live.onCleared = options.onCleared
+    return { inFlight: [], connected: true, newSinceFilter: 0, clearNewSinceFilter: () => {}, recover: () => live.recover() }
+  },
 }))
 vi.mock('@/components/StatsBar', () => ({
   StatsBar: ({ scope, onScopeChange, onReset, onDeleteSessions }: MockStatsProps) => {
@@ -47,8 +54,14 @@ vi.mock('@/components/FilterBar', () => ({
     </>
   ),
 }))
-vi.mock('@/components/RequestList', () => ({ RequestList: () => null }))
-vi.mock('@/components/DetailPane', () => ({ DetailPane: () => null }))
+vi.mock('@/components/RequestList', () => ({
+  RequestList: ({ onSelectRow }: { onSelectRow: (id: number) => void }) => (
+    <button type="button" onClick={() => onSelectRow(5)}>Select row 5</button>
+  ),
+}))
+vi.mock('@/components/DetailPane', () => ({
+  DetailPane: ({ id }: { id: number | null }) => <div data-testid="selected">{String(id)}</div>,
+}))
 vi.mock('@/components/InFlightDetailPane', () => ({ InFlightDetailPane: () => null }))
 vi.mock('@/components/CompareView', () => ({ CompareView: () => null }))
 
@@ -73,6 +86,7 @@ function renderApp() {
   const wrapper = ({ children }: { children: ReactNode }) =>
     createElement(QueryClientProvider, { client: queryClient }, children)
   render(createElement(App), { wrapper })
+  return queryClient
 }
 
 describe('App session coordination review regressions', () => {
@@ -156,16 +170,67 @@ describe('App session coordination review regressions', () => {
       .mockResolvedValueOnce({ deleted: 4 })
       .mockRejectedValueOnce(new ApiError(409, 'invalid_request', 'session is in use'))
 
+    const recover = vi.fn()
+    live.recover = recover
+
     renderApp()
     await waitFor(() => expect(screen.getByTestId('scope').textContent).toBe('1'))
     fireEvent.click(screen.getByRole('button', { name: 'Bulk delete test' }))
 
     await waitFor(() => expect(deletion).toHaveBeenCalledTimes(2))
+    // #105 review — a successful deletion refreshes per-request state without its frame.
+    await waitFor(() => expect(recover).toHaveBeenCalledTimes(1))
     expect(deletion.mock.calls.map(([id]) => id)).toEqual([2, 3])
     await waitFor(() => expect(JSON.parse(screen.getByTestId('delete-result').textContent!)).toEqual({
       sessionsDeleted: 1,
       requestsDeleted: 4,
       failures: [{ sessionId: 3, message: 'session is in use' }],
     }))
+  })
+})
+
+// #105 — every clear reaches every tab as the `cleared` frame, the tab that made it included, so
+// the selection is reconciled there and nowhere else. A before clear's cut-off and a session
+// clear's id decide whether the selected capture was reached; an all clear always reaches it.
+describe('App selection on a received clear', () => {
+  async function selectRow(detail: Partial<RequestDetail> | null) {
+    vi.spyOn(api, 'listSessions').mockResolvedValue([current])
+    const queryClient = renderApp()
+    await waitFor(() => expect(screen.getByTestId('scope').textContent).toBe('1'))
+    if (detail) queryClient.setQueryData(requestDetailQueryKey(5), { id: 5, ...detail })
+    fireEvent.click(screen.getByRole('button', { name: 'Select row 5' }))
+    expect(screen.getByTestId('selected').textContent).toBe('5')
+  }
+
+  function clear(event: ClearedEvent) {
+    act(() => live.onCleared!(event))
+  }
+
+  it('deselects on an all clear', async () => {
+    await selectRow({ startedAt: '2026-09-01T00:00:00Z', sessionId: 1 })
+    clear({})
+    expect(screen.getByTestId('selected').textContent).toBe('null')
+  })
+
+  it('keeps a before clear survivor and deselects a row the cut-off reached', async () => {
+    await selectRow({ startedAt: '2026-09-01T00:00:00Z', sessionId: 1 })
+    clear({ before: '2026-09-01T00:00:00.0000000Z' })
+    expect(screen.getByTestId('selected').textContent).toBe('5')
+    clear({ before: '2026-09-01T00:00:00.0010000Z' })
+    expect(screen.getByTestId('selected').textContent).toBe('null')
+  })
+
+  it('deselects only for a session clear of the selected row\'s session', async () => {
+    await selectRow({ startedAt: '2026-09-01T00:00:00Z', sessionId: 1 })
+    clear({ sessionId: 2 })
+    expect(screen.getByTestId('selected').textContent).toBe('5')
+    clear({ sessionId: 1 })
+    expect(screen.getByTestId('selected').textContent).toBe('null')
+  })
+
+  it('assumes an uncached selection was reached', async () => {
+    await selectRow(null)
+    clear({ sessionId: 2 })
+    expect(screen.getByTestId('selected').textContent).toBe('null')
   })
 })

@@ -1,7 +1,6 @@
 using System.Linq;
 using System.Net;
 using System.Net.Http.Json;
-using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
@@ -60,9 +59,9 @@ public class ApiTests
     [Fact]
     public async Task Status_BackendHealth_IsPassiveAndReflectsCapturedOutcomes()
     {
-        int deadPort = ReserveClosedPort();
+        using var dead = new RefusedPort();
         await using TestVessel vessel = await TestVessel.StartAsync(config =>
-            config.Backends["dead"] = new BackendConfig { BaseUrl = $"http://127.0.0.1:{deadPort}" });
+            config.Backends["dead"] = new BackendConfig { BaseUrl = dead.BaseUrl });
         using var client = new HttpClient();
 
         JsonElement initial = await GetJson(client, $"{vessel.BaseUrl}/vessel/api/status", CT);
@@ -93,15 +92,6 @@ public class ApiTests
         JsonElement health = backend.GetProperty("health");
         Assert.Equal(state, health.GetProperty("state").GetString());
         Assert.Equal(expectedLastSeen ? JsonValueKind.String : JsonValueKind.Null, health.GetProperty("lastSeenAt").ValueKind);
-    }
-
-    private static int ReserveClosedPort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
     }
 
     // U1: reverse-chron, limit honored + capped at 500, before cursor pages without

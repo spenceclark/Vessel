@@ -289,12 +289,15 @@ export interface AggregateResponse {
   totalGroups: number
 }
 
-/** #41 — optional predicate on an ordered clear frame; absent for all/before clears. */
+/**
+ * #41 — optional predicate on an ordered clear frame: a session deletion carries its session id,
+ * a before clear (#105) its cut-off, and an all clear neither. The cut-off is for deciding whether
+ * a selected capture survived, never for filtering list rows (J0 rule 4).
+ */
 export interface ClearedEvent {
   sessionId?: number
+  before?: string
 }
-
-export type RequestClearScope = { all: true } | { before: string }
 
 /**
  * #29 — mirrors `SessionLimits.MaxMarkers` (src/Vessel/Storage/Summary.cs): `GET /sessions`

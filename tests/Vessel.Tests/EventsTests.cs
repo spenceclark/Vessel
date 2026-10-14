@@ -26,6 +26,7 @@ public class EventsTests
 
         hub.Cleared(42);
         hub.Cleared();
+        hub.Cleared(before: "2026-08-29T00:00:00.0000000Z");
 
         SseEvent scoped = await subscription.Reader.ReadAsync(CT);
         Assert.Equal("cleared", scoped.Name);
@@ -37,6 +38,11 @@ public class EventsTests
         SseEvent global = await subscription.Reader.ReadAsync(CT);
         Assert.Equal("{}", global.Json);
         Assert.True(scoped.Id < global.Id);
+
+        // #105 — a before clear names its cut-off, so another tab can tell whether its selected
+        // capture was reached.
+        SseEvent before = await subscription.Reader.ReadAsync(CT);
+        Assert.Equal("""{"before":"2026-08-29T00:00:00.0000000Z"}""", before.Json);
     }
 
     [Fact]

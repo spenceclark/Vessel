@@ -209,8 +209,9 @@ it, or (when capture admission is closed) `ProxyHandler` and the writer's drain 
 guarded span covers request preparation too — so a `seq` can never leak in the active set while
 forwarding stays independent of capture health. Clearing is the in-band `cleared` event,
 published under the same lock as `completed` so it orders correctly against them, and it
-carries no payload for all/before clears; a session-scoped clear carries the exact
-`sessionId` predicate. The client drops the matching cached rows and buffered completions at
+carries no payload for an all clear; a session-scoped clear carries the exact `sessionId`
+predicate, and a before clear its `before` cut-off (#105), used only to decide whether a tab's
+selected capture survived, never to filter list rows. The client drops the matching cached rows and buffered completions at
 that position and refetches, and REST reads remain authoritative. That
 refetch cancels any outstanding list read first, because a pending initial fetch would
 otherwise be reused rather than superseded, and its pre-clear snapshot would win. Earlier
@@ -320,7 +321,7 @@ CREATE TABLE requests (
     request_headers     TEXT NOT NULL,                -- JSON, redacted (§8)
     response_headers    TEXT,                         -- JSON
     request_body        BLOB,                         -- zstd-compressed
-    response_body       BLOB,                         -- zstd, reassembled message
+    response_body       BLOB,                         -- zstd, reassembled message (streamed: already content-decoded, #100)
     response_raw        BLOB,                         -- zstd, raw chunk stream (streamed only)
     truncated           INTEGER NOT NULL DEFAULT 0
 );
@@ -351,10 +352,15 @@ with a detail view cached against the old id (React Query's `['request', id]`) c
 therefore show a different capture's body under an id it already had open. Decision: no
 schema migration for guaranteed non-reuse — that needs `AUTOINCREMENT` plus a rebuild
 migration for existing databases, and the actual failure mode only reaches a **stale
-already-open tab**, not a freshly-loaded one. The client-side fix instead: any clear
-(all/before/session) evicts every cached `['request', *]` detail and clears the selection when
-the clear reached it (ui-spec/App.tsx, code review R14a) — closing the practical exposure
-without a migration. Revisit `AUTOINCREMENT` only if id reuse causes a real incident.
+already-open tab**, not a freshly-loaded one. The client-side fix instead (code review R14a,
+#105): every clear reaches every tab, the one that made it included, as the `cleared` frame.
+On each one App clears the selection when the clear reached it (a before clear's cut-off or a
+session clear's id against the selected capture's cached detail; an all clear always), and
+`useLiveHistory` then drops the per-request caches (`['request', *]`, `['previousTurn', *]`,
+`['replays', *]`), cancelling and refetching the ones an open view is showing. Recovery does
+the same cache pass, since it may cover a clear the feed missed, and a tab whose own clear or
+session deletion succeeds runs recovery at once rather than relying on its frame arriving —
+closing the practical exposure without a migration. Revisit `AUTOINCREMENT` only if id reuse causes a real incident.
 
 ### 6.3 Sessions
 

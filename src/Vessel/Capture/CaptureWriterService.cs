@@ -356,8 +356,10 @@ public sealed class CaptureWriterService(
             // this same FIFO stream). J0 — a client that receives the frame drops what it holds
             // at that position and refetches; one that misses it recovers by snapshot, whose
             // refetch reads this already-deleted database. Either way the frame carries no
-            // state the client has to reason about, so it is published, not remembered.
-            events.Cleared();
+            // state the client has to reason about, so it is published, not remembered. #105 —
+            // a before clear names its cut-off so another tab can tell whether its selected
+            // capture survived; nothing applies it to list rows.
+            events.Cleared(before: command.BeforeIso);
             command.Completion.TrySetResult(deleted);
         }
         catch (Exception ex)
