@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
-import { requestDetailQueryKey } from '@/api/queryKeys'
-import type { HeaderMap } from '@/api/types'
+import { previousTurnQueryKey, requestDetailQueryKey } from '@/api/queryKeys'
+import { EMPTY_FILTERS, type HeaderMap, type RequestDetail } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Mark } from '@/components/ui/Mark'
 import { PrettyJson } from '@/components/PrettyJson'
@@ -11,7 +11,8 @@ import { ToolsView } from '@/components/ToolsView'
 import { RenderErrorBoundary } from '@/components/RenderErrorBoundary'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { DecodeTruncatedNotice } from '@/components/DecodeTruncatedNotice'
-import { renderRequest, renderResponse } from '@/render'
+import { renderRequest, renderResponse, type RenderedView } from '@/render'
+import { findPreviousTurn, type PreviousTurn } from '@/render/previousTurn'
 import { typeSafeMetrics } from '@/render/typesafe'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatMs, formatTimestamp, formatTokPerSec, formatTokenCount, relativeDate } from '@/lib/format'
@@ -40,7 +41,8 @@ function isErrorStopReason(reason: string | null): boolean {
  * a toggle back to the raw-JSON view — kept exactly as-is, on every tab, regardless of
  * format.
  */
-export function DetailPane({ id, onCompare }: { id: number | null; onCompare?: (originalId: number, replayIds: number[]) => void }) {
+export function DetailPane({ id, onCompare, onSelect }: { id: number | null; onCompare?: (originalId: number, replayIds: number[]) => void; onSelect?: (id: number) => void }) {
+  const queryClient = useQueryClient()
   const [tab, setTab] = useState<TabKey>('overview')
   const [responseView, setResponseView] = useState<'reassembled' | 'raw'>('reassembled')
   const [requestDisplay, setRequestDisplay] = useState<ViewMode>('rendered')
@@ -63,6 +65,12 @@ export function DetailPane({ id, onCompare }: { id: number | null; onCompare?: (
 
   const requestRendered = useMemo(() => (query.data ? renderRequest(query.data) : null), [query.data])
   const responseRendered = useMemo(() => (query.data ? renderResponse(query.data) : null), [query.data])
+  const previousTurnQuery = useQuery({
+    queryKey: previousTurnQueryKey(id ?? -1),
+    queryFn: () => loadPreviousTurn(queryClient, query.data!, requestRendered!),
+    enabled: requestRendered != null && query.data?.sessionId != null,
+  })
+  const previousTurn = previousTurnQuery.data ?? null
 
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect -- changing the selected request must reset per-request display controls.
@@ -147,10 +155,14 @@ export function DetailPane({ id, onCompare }: { id: number | null; onCompare?: (
               <Button variant="ghost" onClick={copyCurl} disabled={!statusQuery.data}>{curlCopied ? 'Curl copied' : 'Copy as curl'}</Button>
             </div>
             {requestRendered && <ViewModeToggle mode={requestDisplay} onChange={setRequestDisplay} />}
+            {previousTurn && requestRendered && <PreviousTurnStrip turn={previousTurn} view={requestRendered} onSelect={onSelect} />}
             <DecodeTruncatedNotice body={detail.requestBody} />
             {requestDisplay === 'rendered' && requestRendered ? (
               <RenderErrorBoundary key={id} fallback={<PrettyJson body={detail.requestBody} emptyLabel="No request body" />}>
-                <MessageView view={requestRendered} />
+                <MessageView
+                  view={requestRendered}
+                  turn={previousTurn?.kind === 'match' ? { prevId: previousTurn.id, start: previousTurn.start, carried: previousTurn.carried } : undefined}
+                />
               </RenderErrorBoundary>
             ) : (
               <PrettyJson body={detail.requestBody} emptyLabel="No request body" />
@@ -217,6 +229,55 @@ export function DetailPane({ id, onCompare }: { id: number | null; onCompare?: (
         </div>
       )}
     </>
+  )
+}
+
+/**
+ * #147 — the previous turn is searched for among the last 20 earlier requests in the same
+ * session and format. Candidate bodies go through the shared detail cache, so stepping back
+ * through a session re-uses what the last search already fetched.
+ */
+async function loadPreviousTurn(queryClient: QueryClient, detail: RequestDetail, view: RenderedView): Promise<PreviousTurn | null> {
+  const { rows } = await api.listRequests({
+    limit: 20,
+    before: detail.id,
+    session: detail.sessionId ?? undefined,
+    filters: { ...EMPTY_FILTERS, format: detail.format },
+  })
+  return findPreviousTurn({ tags: detail.tags, view }, rows, async (rowId) =>
+    renderRequest(await queryClient.ensureQueryData({ queryKey: requestDetailQueryKey(rowId), queryFn: () => api.getRequest(rowId) })),
+  )
+}
+
+function PreviousTurnStrip({ turn, view, onSelect }: { turn: PreviousTurn; view: RenderedView; onSelect?: (id: number) => void }) {
+  const link = (
+    <button type="button" className="font-mono text-accent hover:underline" onClick={() => onSelect?.(turn.id)}>
+      #{turn.id}
+    </button>
+  )
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-border px-2 py-1 text-xs">
+      {turn.kind === 'match' ? (
+        <>
+          <span className="text-text-muted">Previous turn {link}</span>
+          {/* Badged only when there is something to compare: a request with no system prompt
+              on either turn has nothing to call unchanged. */}
+          {(turn.systemChanged || view.system || turn.start > 0) && (
+            <Badge variant={turn.systemChanged ? 'warn' : 'neutral'}>
+              System {turn.systemChanged ? `changed since #${turn.id}` : 'unchanged'}
+            </Badge>
+          )}
+          {(turn.toolsChanged || (view.tools?.length ?? 0) > 0) && (
+            <Badge variant={turn.toolsChanged ? 'warn' : 'neutral'}>
+              Tools {turn.toolsChanged ? `changed since #${turn.id}` : 'unchanged'}
+            </Badge>
+          )}
+        </>
+      ) : (
+        <span className="text-text-muted">Context rewritten since {link}</span>
+      )}
+    </div>
   )
 }
 

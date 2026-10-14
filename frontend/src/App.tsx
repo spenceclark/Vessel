@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
-import { AGGREGATE_QUERY_ROOT, REQUEST_DETAIL_QUERY_ROOT, REQUESTS_QUERY_ROOT, SERIES_QUERY_ROOT } from '@/api/queryKeys'
+import { AGGREGATE_QUERY_ROOT, PREVIOUS_TURN_QUERY_ROOT, REQUEST_DETAIL_QUERY_ROOT, REQUESTS_QUERY_ROOT, SERIES_QUERY_ROOT } from '@/api/queryKeys'
 import { EMPTY_FILTERS, SESSION_LIST_LIMIT, type RequestClearScope, type RequestDetail, type RequestFilters, type SessionDeleteSummary, type SessionInfo, type SessionScope } from '@/api/types'
 import { useLiveHistory } from '@/api/useLiveHistory'
 import { CaptureHealthBanner } from '@/components/CaptureHealthBanner'
@@ -141,6 +141,7 @@ export default function App() {
     (clearedScope: RequestClearScope) => {
       const cachedDetails = queryClient.getQueriesData<RequestDetail>({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
       queryClient.removeQueries({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
+      queryClient.removeQueries({ queryKey: PREVIOUS_TURN_QUERY_ROOT })
 
       setSelection((sel) => {
         if (sel?.kind !== 'row') return sel // an in-flight selection isn't stored history
@@ -161,6 +162,7 @@ export default function App() {
     const deleted = new Set(sessionIds)
     const cachedDetails = queryClient.getQueriesData<RequestDetail>({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
     queryClient.removeQueries({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
+    queryClient.removeQueries({ queryKey: PREVIOUS_TURN_QUERY_ROOT })
 
     setSelection((selected) => {
       if (selected?.kind !== 'row') return selected
@@ -273,7 +275,7 @@ export default function App() {
             ) : selection?.kind === 'inflight' ? (
               <InFlightDetailPane item={inFlight.find((i) => i.seq === selection.seq) ?? null} />
             ) : (
-              <DetailPane id={selection?.kind === 'row' ? selection.id : null} onCompare={(originalId, replayIds) => setSelection({ kind: 'compare', originalId, replayIds })} />
+              <DetailPane id={selection?.kind === 'row' ? selection.id : null} onCompare={(originalId, replayIds) => setSelection({ kind: 'compare', originalId, replayIds })} onSelect={(id) => setSelection({ kind: 'row', id })} />
             )}
           </div>
         </div>

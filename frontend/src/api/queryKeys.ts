@@ -19,6 +19,18 @@ export function requestDetailQueryKey(id: number) {
 }
 
 /**
+ * #147 — DetailPane's previous-turn lookup. Its own root rather than nested under
+ * `['request', id]`, so the clear paths' `getQueriesData<RequestDetail>` over the detail root
+ * only ever sees details; every site that evicts the detail root evicts this one too (it names
+ * row ids, which SQLite can reuse — R14b).
+ */
+export const PREVIOUS_TURN_QUERY_ROOT = ['previousTurn'] as const
+
+export function previousTurnQueryKey(id: number) {
+  return [...PREVIOUS_TURN_QUERY_ROOT, id] as const
+}
+
+/**
  * Phase 7 D14 — the chart queries, keyed beside the existing roots. Every site that
  * invalidates `['stats']` must invalidate these roots too (they are aggregates over the
  * same rows): the deletion/clear paths in App and DataPanel and useLiveHistory's
