@@ -102,11 +102,45 @@ public class EventsTests
             _reader = reader;
         }
 
+        /// <summary>
+        /// Opens the feed and returns once its <c>hello</c> frame has been read. The endpoint
+        /// flushes headers before it subscribes to the hub and writes <c>hello</c> only after,
+        /// so returning on headers alone let a test publish a frame before the subscription
+        /// existed and then wait out its timeout for a frame it could never receive.
+        /// </summary>
         public static async Task<SseReader> OpenAsync(HttpClient client, string url, CancellationToken ct)
         {
             HttpResponseMessage response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
-            Stream stream = await response.Content.ReadAsStreamAsync(ct);
-            return new SseReader(response, new StreamReader(stream));
+            var reader = new StreamReader(await response.Content.ReadAsStreamAsync(ct));
+            await ReadThroughHelloAsync(reader, ct);
+            return new SseReader(response, reader);
+        }
+
+        /// <summary>
+        /// Reads, and returns, every line up to and including the blank line that ends the
+        /// <c>hello</c> frame: once it has arrived the server is subscribed, so nothing published
+        /// afterwards can be missed. Bounded so a feed that never says hello fails fast.
+        /// </summary>
+        public static async Task<List<string>> ReadThroughHelloAsync(StreamReader reader, CancellationToken ct)
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(10));
+            var lines = new List<string>();
+            bool inHello = false;
+            while (true)
+            {
+                string line = await reader.ReadLineAsync(cts.Token)
+                    ?? throw new InvalidOperationException("the events feed closed before its hello frame");
+                lines.Add(line);
+                if (line == "event: hello")
+                {
+                    inHello = true;
+                }
+                else if (inHello && line.Length == 0)
+                {
+                    return lines;
+                }
+            }
         }
 
         /// <summary>Reads until <paramref name="count"/> named events have arrived (":" heartbeat comments are skipped).</summary>
@@ -184,7 +218,6 @@ public class EventsTests
         using var client = new HttpClient();
 
         using SseReader sse = await SseReader.OpenAsync(client, $"{vessel.BaseUrl}/vessel/api/events", CT);
-        await Task.Delay(50, CT); // subscription registers a moment after headers flush; safety margin
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
         cts.CancelAfter(TimeSpan.FromSeconds(10));
@@ -242,7 +275,6 @@ public class EventsTests
         using var client = new HttpClient();
 
         using SseReader sse = await SseReader.OpenAsync(client, $"{vessel.BaseUrl}/vessel/api/events", CT);
-        await Task.Delay(50, CT); // subscription registers a moment after headers flush; safety margin
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
         cts.CancelAfter(TimeSpan.FromSeconds(10));
@@ -297,18 +329,19 @@ public class EventsTests
             $"{vessel.BaseUrl}/vessel/api/events", HttpCompletionOption.ResponseHeadersRead, CT);
         await using Stream stream = await response.Content.ReadAsStreamAsync(CT);
         using var reader = new StreamReader(stream);
-        await Task.Delay(50, CT);
+        List<string> hello = await SseReader.ReadThroughHelloAsync(reader, CT);
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
         cts.CancelAfter(TimeSpan.FromSeconds(10));
 
         // Read raw lines until three complete frames have been seen — the first is the
-        // id-less `hello` frame (H0b), so two lifecycle frames (started + completed) follow.
+        // id-less `hello` frame (H0b), read above before anything is published, so two
+        // lifecycle frames (started + completed) follow.
         Task<List<string>> linesTask = Task.Run(
             async () =>
             {
-                var collected = new List<string>();
-                int frames = 0;
+                var collected = new List<string>(hello);
+                int frames = 1;
                 while (frames < 3)
                 {
                     string? line = await reader.ReadLineAsync(cts.Token);
@@ -656,11 +689,13 @@ public class EventsTests
         using var client = new HttpClient();
 
         HttpResponseMessage? subscriber = null;
+        StreamReader? subscriberReader = null;
         if (withSubscriber)
         {
             subscriber = await client.GetAsync(
                 $"{vessel.BaseUrl}/vessel/api/events", HttpCompletionOption.ResponseHeadersRead, CT);
-            await Task.Delay(50, CT); // let the subscription register
+            subscriberReader = new StreamReader(await subscriber.Content.ReadAsStreamAsync(CT));
+            await SseReader.ReadThroughHelloAsync(subscriberReader, CT); // subscribed from here on
         }
 
         // Enter the terminal admission state directly (the review's probe shape), rather than
@@ -684,6 +719,7 @@ public class EventsTests
 
         Assert.Empty(events.GetActiveRequests().Active);
 
+        subscriberReader?.Dispose();
         subscriber?.Dispose();
     }
 
@@ -863,9 +899,10 @@ public class EventsTests
         // must drop-oldest rather than block the publisher.
         HttpResponseMessage slowResponse = await slowClient.GetAsync(
             $"{vessel.BaseUrl}/vessel/api/events", HttpCompletionOption.ResponseHeadersRead, CT);
+        using var slowReader = new StreamReader(await slowResponse.Content.ReadAsStreamAsync(CT));
+        await SseReader.ReadThroughHelloAsync(slowReader, CT); // subscribed; never read again
 
         using SseReader active = await SseReader.OpenAsync(activeClient, $"{vessel.BaseUrl}/vessel/api/events", CT);
-        await Task.Delay(50, CT);
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(CT);
         cts.CancelAfter(TimeSpan.FromSeconds(30));
@@ -911,7 +948,8 @@ public class EventsTests
 
         using HttpResponseMessage subscriber = await client.GetAsync(
             $"{vessel.BaseUrl}/vessel/api/events", HttpCompletionOption.ResponseHeadersRead, CT);
-        await Task.Delay(50, CT); // let the subscription register
+        using var subscriberReader = new StreamReader(await subscriber.Content.ReadAsStreamAsync(CT));
+        await SseReader.ReadThroughHelloAsync(subscriberReader, CT); // subscribed from here on
 
         TimeSpan elapsed = await vessel.StopAndMeasureAsync();
         Assert.True(elapsed < TimeSpan.FromSeconds(2), $"shutdown with an open SSE connection took {elapsed}");
