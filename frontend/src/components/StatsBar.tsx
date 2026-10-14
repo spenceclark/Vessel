@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, Search, Settings, Trash2 } from 'lucide-react'
 import { api } from '@/api/client'
-import { firstRunProbeSaysUnreachable, type BackendHealth, type RequestClearScope, type SessionDeleteSummary, type SessionInfo, type SessionScope, type StatusBackend } from '@/api/types'
+import { firstRunProbeSaysUnreachable, type BackendHealth, type SessionDeleteSummary, type SessionInfo, type SessionScope, type StatusBackend } from '@/api/types'
 import { ConfigPanel } from '@/components/ConfigPanel'
 import { DataPanel } from '@/components/DataPanel'
 import { ThemePanel } from '@/components/ThemePanel'
@@ -21,7 +21,6 @@ export function StatsBar({
   sessions,
   onScopeChange,
   onReset,
-  onDataCleared,
   onDeleteSessions,
   connected,
   view,
@@ -31,7 +30,6 @@ export function StatsBar({
   sessions: SessionInfo[]
   onScopeChange: (scope: SessionScope) => void
   onReset: () => Promise<void>
-  onDataCleared?: (scope: RequestClearScope) => void
   onDeleteSessions: (sessionIds: number[]) => Promise<SessionDeleteSummary>
   /** D8 (review §4 risk) — the SSE connection state `useEvents` already tracked but no one displayed. */
   connected: boolean
@@ -204,7 +202,7 @@ export function StatsBar({
             <TabsTrigger value="appearance">Appearance</TabsTrigger>
           </TabsList>
           <TabsContent value="data" className="pt-3">
-            <DataPanel sessions={sessions} onCleared={onDataCleared} onDeleteSessions={onDeleteSessions} />
+            <DataPanel sessions={sessions} onDeleteSessions={onDeleteSessions} />
           </TabsContent>
           <TabsContent value="config" className="pt-3">
             <ConfigPanel />

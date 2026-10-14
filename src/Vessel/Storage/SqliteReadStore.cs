@@ -196,7 +196,7 @@ public sealed class SqliteReadStore(string dbPath)
         BodyPayload? requestBody = ToBodyPayload(
             reader, SummaryColumnCount + 2, requestEncoding, maxDecodedBytes);
         BodyPayload? responseBody = ToBodyPayload(
-            reader, SummaryColumnCount + 3, responseEncoding, maxDecodedBytes);
+            reader, SummaryColumnCount + 3, ResponseBodyEncoding(summary, responseEncoding), maxDecodedBytes);
         string? promptText = FlattenPrompt(summary.Format, requestBody?.Text);
         string? responseText = FlattenResponse(summary.Format, responseBody?.Text);
 
@@ -417,7 +417,7 @@ public sealed class SqliteReadStore(string dbPath)
         string? responseEncoding = ContentEncodingOf(responseHeaders);
 
         BodyPayload? requestBody = ToBodyPayload(reader, SummaryColumnCount + 2, requestEncoding, maxDecodedBytes);
-        BodyPayload? responseBody = ToBodyPayload(reader, SummaryColumnCount + 3, responseEncoding, maxDecodedBytes);
+        BodyPayload? responseBody = ToBodyPayload(reader, SummaryColumnCount + 3, ResponseBodyEncoding(summary, responseEncoding), maxDecodedBytes);
         BodyPayload? responseRaw = ToBodyPayload(reader, SummaryColumnCount + 4, responseEncoding, maxDecodedBytes);
 
         return RequestDetail.From(summary, requestHeaders, responseHeaders, requestBody, responseBody, responseRaw);
@@ -460,7 +460,7 @@ public sealed class SqliteReadStore(string dbPath)
         McpBodyData? requestBody = ToMcpBodyData(
             reader, SummaryColumnCount + 2, ContentEncodingOf(requestHeaders), maxDecodedBytes);
         McpBodyData? flattenedResponseBody = ToMcpBodyData(
-            reader, SummaryColumnCount + 3, ContentEncodingOf(responseHeaders), maxDecodedBytes);
+            reader, SummaryColumnCount + 3, ResponseBodyEncoding(summary, ContentEncodingOf(responseHeaders)), maxDecodedBytes);
 
         // Flatten against the reassembled response body, not the wire chunk stream. This
         // is exactly the normal representation the writer's adapters receive for a
@@ -1280,6 +1280,14 @@ public sealed class SqliteReadStore(string dbPath)
             FormatNames.TypeSafeSystemOne => TextFlattener.SystemOneAnswers(JsonUtil.Parse(body)),
             _ => null,
         };
+
+    /// <summary>
+    /// #100 — the encoding of the stored <c>response_body</c>. A streamed row never stores wire
+    /// bytes there (<c>CaptureContext</c> keeps them in <c>response_raw</c>), only the adapter's
+    /// already-decoded reassembled JSON, so the wire <c>Content-Encoding</c> does not apply to it.
+    /// </summary>
+    private static string? ResponseBodyEncoding(Summary summary, string? responseEncoding) =>
+        summary.Streamed ? null : responseEncoding;
 
     /// <summary>The <c>Content-Encoding</c> value from an already-parsed header object, or null.</summary>
     private static string? ContentEncodingOf(JsonNode? headers)

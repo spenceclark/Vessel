@@ -83,7 +83,6 @@ function renderStatsBar(
   payload: StatusPayload,
   onScopeChange: (scope: number | 'all') => void = () => {},
   sessions: SessionInfo[] = SESSIONS,
-  onDataCleared?: (scope: { all: true } | { before: string }) => void,
   onDeleteSessions: (sessionIds: number[]) => Promise<{
     sessionsDeleted: number
     requestsDeleted: number
@@ -106,7 +105,6 @@ function renderStatsBar(
       sessions,
       onScopeChange,
       onReset: () => Promise.resolve(),
-      onDataCleared,
       onDeleteSessions,
       connected: true,
       view: 'history',
@@ -165,7 +163,6 @@ describe('Session deletion UX (issue #41 feedback)', () => {
       status({ firstRun: false, defaultBackendReachable: null }),
       () => {},
       SESSIONS,
-      undefined,
       onDeleteSessions,
     )
 
@@ -199,7 +196,6 @@ describe('Session deletion UX (issue #41 feedback)', () => {
       status({ firstRun: false, defaultBackendReachable: null }),
       () => {},
       sessions,
-      undefined,
       onDeleteSessions,
     )
 

@@ -149,6 +149,42 @@ describe('ReplayDialog', () => {
     }))
   })
 
+  // #97 — status is polled, so a health-only refresh hands the dialog a new backends array
+  // while the user is typing. The draft survives it; only the dialog opening or the captured
+  // request changing resets the form.
+  it('keeps model and parameter drafts across a health-only status refresh', () => {
+    const d = detail()
+    const refreshed = () => backends.map((b) => ({ ...b, health: { state: 'green' as const, lastSeenAt: new Date().toISOString() } }))
+    const rendered = render(createElement(ReplayDialog, { detail: d, backends, open: true, onClose: () => undefined }))
+
+    fireEvent.change(screen.getByLabelText('Model override'), { target: { value: 'user-chosen-model' } })
+    rendered.rerender(createElement(ReplayDialog, { detail: d, backends: refreshed(), open: true, onClose: () => undefined }))
+    expect((screen.getByLabelText('Model override') as HTMLInputElement).value).toBe('user-chosen-model')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Params' }))
+    fireEvent.change(screen.getByPlaceholderText('0.2, 0.7, 1.0'), { target: { value: '0.2, 0.7' } })
+    rendered.rerender(createElement(ReplayDialog, { detail: d, backends: refreshed(), open: true, onClose: () => undefined }))
+    expect((screen.getByPlaceholderText('0.2, 0.7, 1.0') as HTMLInputElement).value).toBe('0.2, 0.7')
+    expect(screen.getByText('Sends 2 requests')).toBeTruthy()
+  })
+
+  it('keeps the model fan draft when its chosen backend is removed, falling back to a remaining target', async () => {
+    const replay = vi.spyOn(api, 'replay').mockResolvedValue({ replayGroup: 'fan0', count: 1 })
+    const d = detail()
+    const second: StatusBackend = { ...backends[1], name: 'anthropic-second' }
+    const rendered = render(createElement(ReplayDialog, { detail: d, backends: [...backends, second], open: true, onClose: () => undefined }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Models' }))
+    fireEvent.change(screen.getByLabelText('Backend'), { target: { value: 'anthropic-second' } })
+    fireEvent.change(screen.getByLabelText('Model 1'), { target: { value: 'haiku' } })
+    rendered.rerender(createElement(ReplayDialog, { detail: d, backends, open: true, onClose: () => undefined }))
+
+    expect((screen.getByLabelText('Backend') as HTMLSelectElement).value).toBe('anthropic-target')
+    expect((screen.getByLabelText('Model 1') as HTMLInputElement).value).toBe('haiku')
+    fireEvent.click(screen.getByRole('button', { name: 'Replay ×1' }))
+    await waitFor(() => expect(replay).toHaveBeenCalledWith(1, { variations: [{ backend: 'anthropic-target', model: 'haiku' }] }))
+  })
+
   it('uses Responses token-limit parameters and sends max_output_tokens in the replay patch', async () => {
     const replay = vi.spyOn(api, 'replay').mockResolvedValue({ replayGroup: 'fan0', count: 1 })
     render(createElement(ReplayDialog, {

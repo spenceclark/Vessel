@@ -86,9 +86,9 @@ public sealed class FirstRunProbeTests
     [Fact]
     public async Task Status_FirstRun_ReportsTheDefaultBackendUnreachable_WhenNothingAnswers()
     {
-        int deadPort = ReserveClosedPort();
+        using var dead = new RefusedPort();
         await using TestVessel vessel = await TestVessel.StartAsync(
-            config => config.Backends["stub"] = new BackendConfig { BaseUrl = $"http://127.0.0.1:{deadPort}" },
+            config => config.Backends["stub"] = new BackendConfig { BaseUrl = dead.BaseUrl },
             firstRun: true);
 
         JsonElement setup = await GetSetup(vessel);
@@ -112,14 +112,5 @@ public sealed class FirstRunProbeTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(CT));
         return doc.RootElement.Clone();
-    }
-
-    private static int ReserveClosedPort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
     }
 }

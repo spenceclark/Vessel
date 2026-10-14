@@ -462,8 +462,11 @@ one screen.
 
 **Selection** is a small union: a completed row (DB id), an in-flight request (SSE
 seq), or a compare pair. On `completed`, an in-flight selection hands over to the real
-row id in place. Any clear evicts every cached `['request', *]` detail and clears the
-selection if the clear reached it (guarding against SQLite id reuse).
+row id in place. Any clear, from this tab or anywhere else, arrives as the `cleared` frame:
+App clears the selection if the clear reached it, then `useLiveHistory` evicts the cached
+`['request', *]`, `['previousTurn', *]` and `['replays', *]` entries, refetching the ones on
+screen (guarding against SQLite id reuse). Recovery repeats that cache pass in case it covers
+a missed clear.
 
 **Rendering captured bodies:** `src/render/` normalizes OpenAI chat, OpenAI
 Responses, Anthropic, and Ollama payloads into a shared message shape

@@ -1,16 +1,18 @@
 import { createElement, type ReactNode } from 'react'
-import { QueryClient, QueryClientProvider, useInfiniteQuery } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, QueryObserver, useInfiniteQuery } from '@tanstack/react-query'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   EMPTY_FILTERS,
   type ActiveDescriptor,
   type ActiveRequestsResponse,
+  type ClearedEvent,
+  type RequestDetail,
   type RequestListResponse,
   type Summary,
 } from './types'
 import { api } from './client'
-import { requestsQueryKey } from './queryKeys'
+import { previousTurnQueryKey, requestDetailQueryKey, requestsQueryKey } from './queryKeys'
 import { useLiveHistory } from './useLiveHistory'
 
 /**
@@ -186,6 +188,7 @@ function setup(options: {
   listFetch: () => Promise<RequestListResponse>
   sessionName?: string | null
   scope?: number | 'all'
+  onCleared?: (event: ClearedEvent) => void
 }) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
@@ -208,6 +211,7 @@ function setup(options: {
         scope: options.scope ?? SESSION,
         sessionName: options.sessionName,
         filters: EMPTY_FILTERS,
+        onCleared: options.onCleared,
       })
       return { list, live }
     },
@@ -711,6 +715,98 @@ describe('useLiveHistory', () => {
       requestsQueryKey(SESSION, EMPTY_FILTERS),
     )
     expect(rows?.pages.flatMap((p) => p.rows).map((r) => r.path)).toEqual(['/api/chat?reused'])
+
+    rendered.unmount()
+  })
+
+  // #105 — a clear from another tab (or an API client) arrives only as this frame; App's local
+  // eviction never runs here. Details, previous turns and replay lists all name row ids.
+  it('drops per-request caches on a received clear, which App never sees from another tab', async () => {
+    const { queryClient, rendered } = setup({ listFetch: async () => listPage([summary(1)]) })
+    await waitFor(() => expect(cachedRowIds(queryClient)).toEqual([1]))
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+    queryClient.setQueryData(requestDetailQueryKey(1), { id: 1, path: '/deleted' })
+    queryClient.setQueryData(previousTurnQueryKey(1), null)
+    queryClient.setQueryData(['replays', 1], [])
+
+    act(() => {
+      FakeEventSource.latest().emit('cleared', {}, 1)
+    })
+    await settle()
+
+    expect(queryClient.getQueryData(requestDetailQueryKey(1))).toBeUndefined()
+    expect(queryClient.getQueryData(previousTurnQueryKey(1))).toBeUndefined()
+    expect(queryClient.getQueryData(['replays', 1])).toBeUndefined()
+
+    rendered.unmount()
+  })
+
+  // #105 — App reconciles its selection from this callback, so it runs once per frame, in order,
+  // while the selected capture's cached detail still says what that capture was.
+  it('hands each clear frame to onCleared before the per-request caches are evicted', async () => {
+    const seen: { event: ClearedEvent; cached: unknown }[] = []
+    let queryClient: QueryClient | undefined
+    const onCleared = (event: ClearedEvent) =>
+      seen.push({ event, cached: queryClient?.getQueryData(requestDetailQueryKey(1)) })
+    const result = setup({ listFetch: async () => listPage([]), onCleared })
+    queryClient = result.queryClient
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+    queryClient.setQueryData(requestDetailQueryKey(1), { id: 1, path: '/deleted' })
+
+    act(() => {
+      FakeEventSource.latest().emit('cleared', { before: '2026-09-01T00:00:00.0000000Z' }, 1)
+      FakeEventSource.latest().emit('cleared', { sessionId: 3 }, 2)
+    })
+    await settle()
+
+    expect(seen).toEqual([
+      { event: { before: '2026-09-01T00:00:00.0000000Z' }, cached: { id: 1, path: '/deleted' } },
+      { event: { sessionId: 3 }, cached: { id: 1, path: '/deleted' } },
+    ])
+    expect(queryClient.getQueryData(requestDetailQueryKey(1))).toBeUndefined()
+
+    result.rendered.unmount()
+  })
+
+  // #105 — an open detail pane keeps its query observed, so it is refetched rather than dropped:
+  // once the clear settles it shows whatever now owns the id, never the deleted capture.
+  it('refetches an observed detail on a received clear, so a reused id shows its new capture', async () => {
+    const getRequest = vi.spyOn(api, 'getRequest')
+      .mockResolvedValueOnce({ id: 1, path: '/deleted' } as RequestDetail)
+      .mockResolvedValue({ id: 1, path: '/reused' } as RequestDetail)
+    const { queryClient, rendered } = setup({ listFetch: async () => listPage([]) })
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+    const observer = new QueryObserver(queryClient, { queryKey: requestDetailQueryKey(1), queryFn: () => api.getRequest(1) })
+    const unsubscribe = observer.subscribe(() => undefined)
+    await waitFor(() => expect(queryClient.getQueryData<RequestDetail>(requestDetailQueryKey(1))?.path).toBe('/deleted'))
+
+    act(() => {
+      FakeEventSource.latest().emit('cleared', {}, 1)
+    })
+
+    await waitFor(() => expect(queryClient.getQueryData<RequestDetail>(requestDetailQueryKey(1))?.path).toBe('/reused'))
+    expect(getRequest).toHaveBeenCalledTimes(2)
+
+    unsubscribe()
+    rendered.unmount()
+  })
+
+  // #105 — a clear published while the stream was down is never received; recovery cannot tell
+  // whether one happened, so it treats per-request caches as suspect too.
+  it('drops per-request caches on recovery, covering a clear the stream missed', async () => {
+    const { queryClient, rendered } = setup({ listFetch: async () => listPage([summary(1)]) })
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+    act(() => {
+      FakeEventSource.latest().open()
+    })
+    queryClient.setQueryData(requestDetailQueryKey(1), { id: 1, path: '/deleted' })
+
+    serverActive({ active: [], logPosition: 5 })
+    act(() => {
+      FakeEventSource.latest().open() // reconnect
+    })
+
+    await waitFor(() => expect(queryClient.getQueryData(requestDetailQueryKey(1))).toBeUndefined())
 
     rendered.unmount()
   })

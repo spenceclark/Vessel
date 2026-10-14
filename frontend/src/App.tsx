@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
-import { AGGREGATE_QUERY_ROOT, PREVIOUS_TURN_QUERY_ROOT, REQUEST_DETAIL_QUERY_ROOT, REQUESTS_QUERY_ROOT, SERIES_QUERY_ROOT } from '@/api/queryKeys'
-import { EMPTY_FILTERS, SESSION_LIST_LIMIT, type RequestClearScope, type RequestDetail, type RequestFilters, type SessionDeleteSummary, type SessionInfo, type SessionScope } from '@/api/types'
+import { AGGREGATE_QUERY_ROOT, REQUEST_DETAIL_QUERY_ROOT, REQUESTS_QUERY_ROOT, SERIES_QUERY_ROOT } from '@/api/queryKeys'
+import { EMPTY_FILTERS, SESSION_LIST_LIMIT, type ClearedEvent, type RequestDetail, type RequestFilters, type SessionDeleteSummary, type SessionInfo, type SessionScope } from '@/api/types'
 import { useLiveHistory } from '@/api/useLiveHistory'
 import { CaptureHealthBanner } from '@/components/CaptureHealthBanner'
 import { BindAddressBanner } from '@/components/BindAddressBanner'
@@ -111,6 +111,7 @@ export default function App() {
       // the real row in place, rather than the pane reverting to empty on completion.
       setSelection((sel) => (sel?.kind === 'inflight' && sel.seq === seq && row ? { kind: 'row', id: row.id } : sel))
     },
+    onCleared: handleCleared,
   })
 
   const handleReset = useCallback(async () => {
@@ -129,50 +130,33 @@ export default function App() {
     await queryClient.invalidateQueries({ queryKey: ['sessions'] })
   }, [queryClient, changeScope])
 
-  // R14a — a clear (all/before) can delete the currently-selected row. Left alone, the
-  // detail pane keeps showing whatever `['request', id]` last cached: stale at best, and
-  // actively wrong once SQLite reuses that id for an unrelated later capture (R14b — no
-  // schema change to prevent reuse; documented in architecture.md §6 as a known caveat).
-  // Every clear evicts every cached detail unconditionally (cheap, and the only way to be
-  // sure none of them can resurface via reuse); the selection itself only clears when the
-  // clear actually reached the selected row. (The live list/buffer purge is server-driven,
-  // via the in-band `cleared` SSE event in useLiveHistory — R23/H0a — not this callback.)
-  const handleDataCleared = useCallback(
-    (clearedScope: RequestClearScope) => {
-      const cachedDetails = queryClient.getQueriesData<RequestDetail>({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
-      queryClient.removeQueries({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
-      queryClient.removeQueries({ queryKey: PREVIOUS_TURN_QUERY_ROOT })
-
-      setSelection((sel) => {
-        if (sel?.kind !== 'row') return sel // an in-flight selection isn't stored history
-        if ('all' in clearedScope) return null
-
-        const cached = cachedDetails.find(([key]) => key[1] === sel.id)?.[1]
-        // Unknown startedAt (never fetched, or evicted before this ran) is treated as
-        // "assume it was reached" — the safe default when R14 is specifically about not
-        // trusting stale state.
-        const survived = cached && new Date(cached.startedAt) >= new Date(clearedScope.before)
-        return survived ? sel : null
-      })
-    },
-    [queryClient],
-  )
+  // R14a/#105 — a clear (all/before/session) can delete the selected row, and SQLite can then
+  // reuse its id for an unrelated capture (R14b — no schema change to prevent reuse;
+  // documented in architecture.md §6 as a known caveat). Every clear reaches every tab as the
+  // in-band `cleared` frame, including the tab that made it, so this is the one place the
+  // selection is reconciled; useLiveHistory evicts or refetches the per-request caches right
+  // after, so the cached detail read here still describes the capture the user selected. The
+  // selection only clears when the clear reached that row.
+  function handleCleared(event: ClearedEvent) {
+    // Snapshot now, not inside the updater: React runs that later, after the hook's eviction.
+    const cachedDetails = queryClient.getQueriesData<RequestDetail>({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
+    setSelection((sel) => {
+      if (sel?.kind !== 'row') return sel // an in-flight selection isn't stored history
+      const cached = cachedDetails.find(([key]) => key[1] === sel.id)?.[1]
+      // Unknown (never fetched, or evicted) is treated as "assume it was reached" — the safe
+      // default when R14 is specifically about not trusting stale state.
+      if (!cached) return null
+      if (event.sessionId !== undefined) return cached.sessionId === event.sessionId ? null : sel
+      if (event.before !== undefined) return new Date(cached.startedAt) >= new Date(event.before) ? sel : null
+      return null
+    })
+  }
 
   const handleSessionsDeleted = useCallback((sessionIds: number[]) => {
-    const deleted = new Set(sessionIds)
-    const cachedDetails = queryClient.getQueriesData<RequestDetail>({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
-    queryClient.removeQueries({ queryKey: REQUEST_DETAIL_QUERY_ROOT })
-    queryClient.removeQueries({ queryKey: PREVIOUS_TURN_QUERY_ROOT })
-
-    setSelection((selected) => {
-      if (selected?.kind !== 'row') return selected
-      const cached = cachedDetails.find(([key]) => key[1] === selected.id)?.[1]
-      return cached && !deleted.has(cached.sessionId ?? -1) ? selected : null
-    })
-    if (typeof scope === 'number' && deleted.has(scope)) {
+    if (typeof scope === 'number' && sessionIds.includes(scope)) {
       changeScope(sessionsQuery.data?.find((session) => session.isCurrent)?.id ?? 'all')
     }
-  }, [queryClient, sessionsQuery.data, scope, changeScope])
+  }, [sessionsQuery.data, scope, changeScope])
 
   const handleDeleteSessions = useCallback(async (sessionIds: number[]): Promise<SessionDeleteSummary> => {
     const deletedIds: number[] = []
@@ -224,7 +208,6 @@ export default function App() {
           sessions={sessionsQuery.data ?? []}
           onScopeChange={changeScope}
           onReset={handleReset}
-          onDataCleared={handleDataCleared}
           onDeleteSessions={handleDeleteSessions}
           connected={connected}
           view={view}
