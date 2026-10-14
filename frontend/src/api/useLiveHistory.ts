@@ -115,6 +115,11 @@ export interface LiveHistory {
   /** Completions that arrived while a filter was active, so the list is knowingly stale. */
   newSinceFilter: number
   clearNewSinceFilter: () => void
+  /**
+   * #105 — run recovery now. A successful local clear calls this so its effect does not depend on
+   * its own `cleared` frame arriving: with the feed down, REST can still work.
+   */
+  recover: () => void
 }
 
 export function useLiveHistory({
@@ -271,13 +276,15 @@ export function useLiveHistory({
    * J0 rule 4's no-client-filtering stance is exactly what makes cancellation the right lever.
    *
    * #105 — per-request caches are keyed by row id, which a clear deletes and SQLite can then
-   * reuse (R14b), and a clear in another tab never runs App's local eviction. Both a received
-   * `cleared` frame and recovery (which may cover a missed one) land here, so neither can leave
-   * a deleted capture's detail to be shown again: unobserved entries are dropped, and the ones
-   * an open pane is showing refetch in place rather than flashing back to loading.
+   * reuse (R14b). A received `cleared` frame, recovery (which may cover a missed one) and a
+   * local clear's acknowledgement (`recover`) all land here, so none can leave a deleted
+   * capture's detail to be shown again: unobserved entries are dropped, and the ones an open
+   * view is showing refetch in place rather than flashing back to loading. They are cancelled
+   * first for the same K0a reason as the list: an observed detail whose initial read is still
+   * pending would otherwise have that pre-clear read reused, and settle as the deleted capture.
    */
   const refetchAuthoritative = useCallback(async () => {
-    await queryClient.cancelQueries({ queryKey: REQUESTS_QUERY_ROOT })
+    await Promise.all([REQUESTS_QUERY_ROOT, ...PER_REQUEST_QUERY_ROOTS].map((queryKey) => queryClient.cancelQueries({ queryKey })))
     for (const queryKey of PER_REQUEST_QUERY_ROOTS) queryClient.removeQueries({ queryKey, type: 'inactive' })
     await Promise.all([
       ...PER_REQUEST_QUERY_ROOTS.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
@@ -588,6 +595,7 @@ export function useLiveHistory({
     connected,
     newSinceFilter,
     clearNewSinceFilter: useCallback(() => setNewSince({ signature: '', count: 0 }), []),
+    recover: scheduleReconcile,
   }
 }
 

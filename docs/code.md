@@ -466,7 +466,8 @@ row id in place. Any clear, from this tab or anywhere else, arrives as the `clea
 App clears the selection if the clear reached it, then `useLiveHistory` evicts the cached
 `['request', *]`, `['previousTurn', *]` and `['replays', *]` entries, refetching the ones on
 screen (guarding against SQLite id reuse). Recovery repeats that cache pass in case it covers
-a missed clear.
+a missed clear, and a successful local clear or session deletion runs recovery immediately, so
+it does not depend on its own frame arriving.
 
 **Rendering captured bodies:** `src/render/` normalizes OpenAI chat, OpenAI
 Responses, Anthropic, and Ollama payloads into a shared message shape

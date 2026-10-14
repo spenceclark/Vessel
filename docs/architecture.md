@@ -357,9 +357,10 @@ already-open tab**, not a freshly-loaded one. The client-side fix instead (code 
 On each one App clears the selection when the clear reached it (a before clear's cut-off or a
 session clear's id against the selected capture's cached detail; an all clear always), and
 `useLiveHistory` then drops the per-request caches (`['request', *]`, `['previousTurn', *]`,
-`['replays', *]`), refetching the ones an open view is showing. Recovery does the same cache
-pass, since it may cover a clear the feed missed — closing the practical exposure without a
-migration. Revisit `AUTOINCREMENT` only if id reuse causes a real incident.
+`['replays', *]`), cancelling and refetching the ones an open view is showing. Recovery does
+the same cache pass, since it may cover a clear the feed missed, and a tab whose own clear or
+session deletion succeeds runs recovery at once rather than relying on its frame arriving —
+closing the practical exposure without a migration. Revisit `AUTOINCREMENT` only if id reuse causes a real incident.
 
 ### 6.3 Sessions
 

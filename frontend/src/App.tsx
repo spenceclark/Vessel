@@ -93,7 +93,7 @@ export default function App() {
 
   // R10/R11/D05 — live history (in-flight map, completion merging, reconciliation) is one
   // model, owned by one hook. App only supplies scope/filters and handles selection.
-  const { inFlight, connected, newSinceFilter, clearNewSinceFilter } = useLiveHistory({
+  const { inFlight, connected, newSinceFilter, clearNewSinceFilter, recover } = useLiveHistory({
     scope,
     sessionName: selectedSessionName,
     filters,
@@ -175,7 +175,10 @@ export default function App() {
       }
     }
 
-    if (deletedIds.length > 0) handleSessionsDeleted(deletedIds)
+    if (deletedIds.length > 0) {
+      handleSessionsDeleted(deletedIds)
+      recover() // #105 — per-request state refreshes even if the `cleared` frames never arrive
+    }
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: REQUESTS_QUERY_ROOT }),
       queryClient.invalidateQueries({ queryKey: ['stats'] }),
@@ -188,7 +191,7 @@ export default function App() {
     ])
 
     return { sessionsDeleted: deletedIds.length, requestsDeleted, failures }
-  }, [handleSessionsDeleted, queryClient])
+  }, [handleSessionsDeleted, queryClient, recover])
 
   // D11 — the Reports scope bar renders the session name alone when nothing is filtered.
   const scopeLabel =
@@ -208,6 +211,7 @@ export default function App() {
           sessions={sessionsQuery.data ?? []}
           onScopeChange={changeScope}
           onReset={handleReset}
+          onDataCleared={recover}
           onDeleteSessions={handleDeleteSessions}
           connected={connected}
           view={view}

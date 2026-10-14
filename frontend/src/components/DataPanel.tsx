@@ -14,9 +14,12 @@ const CONFIRM_WORD = 'DELETE'
  */
 export function DataPanel({
   sessions,
+  onCleared,
   onDeleteSessions,
 }: {
   sessions: SessionInfo[]
+  /** #105 — a clear succeeded; App runs recovery so it does not depend on the `cleared` frame. */
+  onCleared?: () => void
   onDeleteSessions: (sessionIds: number[]) => Promise<SessionDeleteSummary>
 }) {
   const queryClient = useQueryClient()
@@ -71,9 +74,11 @@ export function DataPanel({
       const result = await api.deleteRequests(scope)
       setMessage(`Deleted ${result.deleted} request${result.deleted === 1 ? '' : 's'}.`)
       // R14a/#105 — the selection, per-request caches and the live list + completion buffer
-      // are all reconciled from the server's in-band `cleared` SSE event (R23/H0a), which
-      // orders correctly against completions and reaches every tab; this ack is UX only. The
-      // refetch below just refreshes stats/facets and the authoritative list.
+      // are reconciled from the server's in-band `cleared` SSE event (R23/H0a), which orders
+      // correctly against completions and reaches every tab. That frame may never arrive here
+      // (the feed can be down while REST works), so the ack also runs recovery, which refreshes
+      // per-request state and the authoritative list without it.
+      onCleared?.()
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['requests'] }),
         queryClient.invalidateQueries({ queryKey: ['stats'] }),

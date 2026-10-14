@@ -791,6 +791,61 @@ describe('useLiveHistory', () => {
     rendered.unmount()
   })
 
+  // #105 review — K0a for per-request roots: an observed detail whose *initial* read is still
+  // pending when the clear lands. Invalidating alone reuses that read, so its pre-clear response
+  // would settle as the deleted capture; it must be cancelled and superseded.
+  it('supersedes an observed detail whose initial read is pending when a clear lands', async () => {
+    let resolveStale: ((detail: RequestDetail) => void) | undefined
+    const getRequest = vi.spyOn(api, 'getRequest')
+      .mockImplementationOnce(() => new Promise<RequestDetail>((resolve) => { resolveStale = resolve }))
+      .mockResolvedValue({ id: 1, path: '/reused' } as RequestDetail)
+    const { queryClient, rendered } = setup({ listFetch: async () => listPage([]) })
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+    const observer = new QueryObserver(queryClient, { queryKey: requestDetailQueryKey(1), queryFn: () => api.getRequest(1) })
+    const unsubscribe = observer.subscribe(() => undefined)
+    await waitFor(() => expect(resolveStale).toBeDefined())
+
+    act(() => {
+      FakeEventSource.latest().emit('cleared', {}, 1)
+    })
+    await waitFor(() => expect(getRequest).toHaveBeenCalledTimes(2))
+    await act(async () => {
+      resolveStale!({ id: 1, path: '/deleted' } as RequestDetail)
+    })
+
+    await waitFor(() => expect(queryClient.getQueryData<RequestDetail>(requestDetailQueryKey(1))?.path).toBe('/reused'))
+    await settle()
+    expect(queryClient.getQueryData<RequestDetail>(requestDetailQueryKey(1))?.path).toBe('/reused')
+
+    unsubscribe()
+    rendered.unmount()
+  })
+
+  // #105 review — a local clear acknowledged over REST while the feed is down: no frame ever
+  // arrives, so the ack's `recover` is what refreshes the open detail.
+  it('refreshes per-request state on recover() with no clear frame delivered', async () => {
+    vi.spyOn(api, 'getRequest')
+      .mockResolvedValueOnce({ id: 1, path: '/deleted' } as RequestDetail)
+      .mockRejectedValue(new Error('404'))
+    const { queryClient, rendered } = setup({ listFetch: async () => listPage([summary(1)]) })
+    await waitFor(() => expect(FakeEventSource.latest()).toBeDefined())
+    const observer = new QueryObserver(queryClient, { queryKey: requestDetailQueryKey(1), queryFn: () => api.getRequest(1) })
+    const unsubscribe = observer.subscribe(() => undefined)
+    await waitFor(() => expect(queryClient.getQueryData<RequestDetail>(requestDetailQueryKey(1))?.path).toBe('/deleted'))
+    queryClient.setQueryData(previousTurnQueryKey(2), null)
+
+    serverActive({ active: [], logPosition: 0 })
+    act(() => {
+      rendered.result.current.live.recover()
+    })
+
+    await waitFor(() => expect(queryClient.getQueryState(requestDetailQueryKey(1))?.status).toBe('error'))
+    expect(queryClient.getQueryData(previousTurnQueryKey(2))).toBeUndefined()
+
+    unsubscribe()
+    rendered.unmount()
+  })
+
   // #105 — a clear published while the stream was down is never received; recovery cannot tell
   // whether one happened, so it treats per-request caches as suspect too.
   it('drops per-request caches on recovery, covering a clear the stream missed', async () => {

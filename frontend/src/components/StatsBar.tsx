@@ -21,6 +21,7 @@ export function StatsBar({
   sessions,
   onScopeChange,
   onReset,
+  onDataCleared,
   onDeleteSessions,
   connected,
   view,
@@ -30,6 +31,8 @@ export function StatsBar({
   sessions: SessionInfo[]
   onScopeChange: (scope: SessionScope) => void
   onReset: () => Promise<void>
+  /** #105 — a clear succeeded; refresh per-request state without waiting for its frame. */
+  onDataCleared?: () => void
   onDeleteSessions: (sessionIds: number[]) => Promise<SessionDeleteSummary>
   /** D8 (review §4 risk) — the SSE connection state `useEvents` already tracked but no one displayed. */
   connected: boolean
@@ -202,7 +205,7 @@ export function StatsBar({
             <TabsTrigger value="appearance">Appearance</TabsTrigger>
           </TabsList>
           <TabsContent value="data" className="pt-3">
-            <DataPanel sessions={sessions} onDeleteSessions={onDeleteSessions} />
+            <DataPanel sessions={sessions} onCleared={onDataCleared} onDeleteSessions={onDeleteSessions} />
           </TabsContent>
           <TabsContent value="config" className="pt-3">
             <ConfigPanel />

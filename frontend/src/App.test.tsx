@@ -20,11 +20,14 @@ interface MockFilterBarProps {
 }
 
 // #105 — the hook's clear callback is App's only selection reconciliation, so tests drive it.
-const live = vi.hoisted(() => ({ onCleared: undefined as ((event: ClearedEvent) => void) | undefined }))
+const live = vi.hoisted(() => ({
+  onCleared: undefined as ((event: ClearedEvent) => void) | undefined,
+  recover: (() => {}) as () => void,
+}))
 vi.mock('@/api/useLiveHistory', () => ({
   useLiveHistory: (options: { onCleared?: (event: ClearedEvent) => void }) => {
     live.onCleared = options.onCleared
-    return { inFlight: [], connected: true, newSinceFilter: 0, clearNewSinceFilter: () => {} }
+    return { inFlight: [], connected: true, newSinceFilter: 0, clearNewSinceFilter: () => {}, recover: () => live.recover() }
   },
 }))
 vi.mock('@/components/StatsBar', () => ({
@@ -167,11 +170,16 @@ describe('App session coordination review regressions', () => {
       .mockResolvedValueOnce({ deleted: 4 })
       .mockRejectedValueOnce(new ApiError(409, 'invalid_request', 'session is in use'))
 
+    const recover = vi.fn()
+    live.recover = recover
+
     renderApp()
     await waitFor(() => expect(screen.getByTestId('scope').textContent).toBe('1'))
     fireEvent.click(screen.getByRole('button', { name: 'Bulk delete test' }))
 
     await waitFor(() => expect(deletion).toHaveBeenCalledTimes(2))
+    // #105 review — a successful deletion refreshes per-request state without its frame.
+    await waitFor(() => expect(recover).toHaveBeenCalledTimes(1))
     expect(deletion.mock.calls.map(([id]) => id)).toEqual([2, 3])
     await waitFor(() => expect(JSON.parse(screen.getByTestId('delete-result').textContent!)).toEqual({
       sessionsDeleted: 1,
