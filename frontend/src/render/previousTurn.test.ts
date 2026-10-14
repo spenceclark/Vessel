@@ -51,8 +51,52 @@ describe('findPreviousTurn', () => {
       systemChanged: false,
       toolsChanged: false,
     })
-    // Same-tag candidates are tried first, and the search stops at the first match.
+    // The whole same-tag group is searched for the longest prefix; agent B's rows never load.
+    expect(loaded).toEqual([3, 1])
+  })
+
+  it('prefers the longest prefix over a newer, shorter retry', async () => {
+    const c = msg('user', 'A: follow-up')
+    const d = msg('assistant', 'A: answer')
+    // #11 retried only the opening message; #10 is the turn this request actually extends.
+    const { load } = loader({ 11: view([a1]), 10: view([a1, a2, c]) })
+    const result = await findPreviousTurn(
+      { tags: ['agent-a'], view: view([a1, a2, c, d, msg('user', 'A: next')]) },
+      [{ id: 11, tags: ['agent-a'] }, { id: 10, tags: ['agent-a'] }],
+      load,
+    )
+    expect(result).toMatchObject({ kind: 'match', id: 10, carried: 3 })
+  })
+
+  it('takes the newest of equally long prefixes', async () => {
+    const { load } = loader({ 2: view([a1]), 1: view([a1]) })
+    const result = await findPreviousTurn(
+      { tags: [], view: view([a1, a2, a3]) },
+      [{ id: 2, tags: [] }, { id: 1, tags: [] }],
+      load,
+    )
+    expect(result).toMatchObject({ kind: 'match', id: 2 })
+  })
+
+  it('stops early on a prefix one message short of this request', async () => {
+    const { load, loaded } = loader({ 3: view([a1, a2]), 2: view([a1]) })
+    const result = await findPreviousTurn(
+      { tags: [], view: view([a1, a2, a3]) },
+      [{ id: 3, tags: [] }, { id: 2, tags: [] }],
+      load,
+    )
+    expect(result).toMatchObject({ kind: 'match', id: 3, carried: 2 })
     expect(loaded).toEqual([3])
+  })
+
+  it('keeps a same-tag match over a longer other-tag one', async () => {
+    const { load } = loader({ 2: view([a1, a2]), 1: view([a1]) })
+    const result = await findPreviousTurn(
+      { tags: ['agent-a'], view: view([a1, a2, a3]) },
+      [{ id: 2, tags: ['agent-b'] }, { id: 1, tags: ['agent-a'] }],
+      load,
+    )
+    expect(result).toMatchObject({ kind: 'match', id: 1, carried: 1 })
   })
 
   it('falls back to any tag when no same-tag candidate matches', async () => {

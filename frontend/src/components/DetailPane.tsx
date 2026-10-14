@@ -12,7 +12,7 @@ import { RenderErrorBoundary } from '@/components/RenderErrorBoundary'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { DecodeTruncatedNotice } from '@/components/DecodeTruncatedNotice'
 import { renderRequest, renderResponse, type RenderedView } from '@/render'
-import { findPreviousTurn, type PreviousTurn } from '@/render/previousTurn'
+import { findPreviousTurn, PREVIOUS_TURN_FORMATS, type PreviousTurn } from '@/render/previousTurn'
 import { typeSafeMetrics } from '@/render/typesafe'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatMs, formatTimestamp, formatTokPerSec, formatTokenCount, relativeDate } from '@/lib/format'
@@ -68,7 +68,7 @@ export function DetailPane({ id, onCompare, onSelect }: { id: number | null; onC
   const previousTurnQuery = useQuery({
     queryKey: previousTurnQueryKey(id ?? -1),
     queryFn: () => loadPreviousTurn(queryClient, query.data!, requestRendered!),
-    enabled: requestRendered != null && query.data?.sessionId != null,
+    enabled: requestRendered != null && query.data?.sessionId != null && PREVIOUS_TURN_FORMATS.has(query.data.format),
   })
   const previousTurn = previousTurnQuery.data ?? null
 
