@@ -19,9 +19,11 @@ import { RequestList } from './RequestList'
 
 afterEach(cleanup)
 
-// jsdom has no layout engine — the virtualizer's scroll container measures 0x0 by
-// default, so it renders zero virtual items regardless of row count. Stub a real size
-// (and a no-op ResizeObserver, which jsdom doesn't implement) so rows actually render.
+// jsdom has no layout engine, so every element reports 0×0 and the virtualizer
+// renders no rows. Since @tanstack/virtual-core 3.19.6 (react-virtual 3.14.21)
+// the scroll viewport is clientWidth/clientHeight; row measurement still reads
+// offsetWidth/offsetHeight. Stub both, plus a no-op ResizeObserver (jsdom
+// doesn't implement one), so rows actually render.
 class MockResizeObserver {
   observe() {}
   unobserve() {}
@@ -30,6 +32,8 @@ class MockResizeObserver {
 vi.stubGlobal('ResizeObserver', MockResizeObserver)
 Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })
 Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 400 })
+Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, value: 600 })
+Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, value: 400 })
 
 function summary(id: number, overrides: Partial<Summary> = {}): Summary {
   return {
