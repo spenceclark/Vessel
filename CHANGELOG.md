@@ -18,7 +18,7 @@ What's new since an agent's previous turn, Vessel as a Claude Code and Codex plu
   (#163).
 - In Claude Code the plugin adds a `vessel` skill. It connects a codebase's LLM clients to
   Vessel (base URL, backend, agent tags, sessions) and debugs agents from their captured
-  traffic through the MCP tools.
+  traffic through the MCP tools (#174).
 
 ### Changed
 
