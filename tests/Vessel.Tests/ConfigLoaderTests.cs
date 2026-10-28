@@ -293,6 +293,31 @@ public class ConfigLoaderTests : IDisposable
         }
     }
 
+    // An outside process (Defender, the indexer) briefly holding the destination fails a
+    // replace on Windows; Save must ride it out instead of reporting a failed config save.
+    // On POSIX the rename succeeds despite the open handle, so the assertions still hold.
+    [Fact]
+    public async Task Save_DestinationBrieflyHeld_RetriesAndSucceeds()
+    {
+        string path = PathFor("vessel.json");
+        ConfigLoader.Save(path, CreateDefault());
+
+        VesselConfig changed = CreateDefault();
+        changed.DefaultBackend = "changed";
+        changed.Backends["changed"] = new BackendConfig { BaseUrl = "http://localhost:9" };
+
+        Task save;
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            save = Task.Run(() => ConfigLoader.Save(path, changed), TestContext.Current.CancellationToken);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+
+        await save;
+        Assert.Contains("\"changed\"", File.ReadAllText(path));
+        Assert.Empty(Directory.GetFiles(_dir, ".vessel.json.tmp-*"));
+    }
+
     [Fact]
     public void Save_Succeeds_NoLeftoverTempFile()
     {
