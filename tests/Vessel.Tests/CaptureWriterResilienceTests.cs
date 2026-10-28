@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Logging.Abstractions;
+﻿using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using Vessel.Capture;
 using Vessel.Config;
 using Vessel.Formats;
@@ -85,6 +86,8 @@ public class CaptureWriterResilienceTests : IDisposable
             }
         }
 
+        public long? ReplayOf(long id) => null;
+
         public SessionInfo EnsureInitialSession() =>
             new(1, "2026-01-01T00:00:00.0000000Z", "session 1", true, 0, null);
 
@@ -138,6 +141,21 @@ public class CaptureWriterResilienceTests : IDisposable
 
             await Task.Delay(25, TestContext.Current.CancellationToken);
         }
+    }
+
+    /// <summary>The <c>row</c> of the next <c>completed</c> frame, skipping any other frames.</summary>
+    private static async Task<JsonElement> NextCompletedRow(CaptureSubscription subscription)
+    {
+        Capture.SseEvent frame;
+        do
+        {
+            frame = await subscription.Reader.ReadAsync(TestContext.Current.CancellationToken)
+                .AsTask().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        }
+        while (frame.Name != "completed");
+
+        using JsonDocument payload = JsonDocument.Parse(frame.Json);
+        return payload.RootElement.GetProperty("row").Clone();
     }
 
     // One batch throws → it's dropped; a later batch still lands.
@@ -205,22 +223,72 @@ public class CaptureWriterResilienceTests : IDisposable
         for (int i = 1; i <= CaptureWriterService.MaxConsecutiveFailures + 1; i++)
         {
             channel.Enqueue(TestCapture.Record($"/stored-{i}"));
-            Capture.SseEvent completed;
-            do
-            {
-                completed = await subscription.Reader.ReadAsync(TestContext.Current.CancellationToken)
-                    .AsTask().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-            }
-            while (completed.Name != "completed");
-
-            using System.Text.Json.JsonDocument payload = System.Text.Json.JsonDocument.Parse(completed.Json);
-            Assert.NotEqual(System.Text.Json.JsonValueKind.Null, payload.RootElement.GetProperty("row").ValueKind);
+            Assert.NotEqual(JsonValueKind.Null, (await NextCompletedRow(subscription)).ValueKind);
         }
 
         Assert.False(channel.IsStopped);
         Assert.Equal(CaptureWriterService.MaxConsecutiveFailures + 1, store.SnapshotInserted().Count);
 
         await writer.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    // A replay's original can be deleted while the replay is in flight (here by a clear).
+    // Its insert must store replay_of = NULL instead of failing the FK, and the completed
+    // frame must agree with the stored row.
+    [Fact]
+    public async Task ReplayCompletingAfterItsOriginalWasCleared_StoresAndReportsNoParent()
+    {
+        using var store = new SqliteCaptureStore(Path.Combine(_healthDir, "replay-cleared.db"), new VesselConfig());
+        var hub = new CaptureEvents();
+        using CaptureSubscription subscription = hub.Subscribe();
+        var channel = new CaptureChannel();
+        CaptureWriterService writer = NewWriter(channel, store, hub);
+        await writer.StartAsync(TestContext.Current.CancellationToken);
+
+        channel.Enqueue(TestCapture.Record("/original"));
+        long originalId = (await NextCompletedRow(subscription)).GetProperty("id").GetInt64();
+        channel.Enqueue(TestCapture.Record("/newer") with { StartedAt = "2026-08-29T00:00:00.0000000Z" });
+        await NextCompletedRow(subscription);
+
+        var clear = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        channel.Enqueue(new ClearCommand("2026-08-28T00:00:00.0000000Z", clear));
+        Assert.Equal(1, await clear.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+
+        channel.Enqueue(TestCapture.Record("/replay") with { ReplayOf = originalId });
+        JsonElement replay = await NextCompletedRow(subscription);
+        await writer.StopAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(JsonValueKind.Null, replay.ValueKind); // null row = batch dropped on the FK
+        Assert.Equal(JsonValueKind.Null, replay.GetProperty("replayOf").ValueKind);
+        Assert.Null(store.ReplayOf(replay.GetProperty("id").GetInt64()));
+        Assert.False(channel.IsStopped);
+    }
+
+    // A replay whose original is the oldest row of a full store: the replay's own batch
+    // pushes the store over its cap, so that batch's retention deletes the original and
+    // detaches the replay. The completed frame must report the detached state, as REST does.
+    [Fact]
+    public async Task ReplayWhoseOriginalAgesOutInItsOwnBatch_ReportsNoParent()
+    {
+        var config = new VesselConfig { Retention = new RetentionConfig { MaxRequests = 2 } };
+        using var store = new SqliteCaptureStore(Path.Combine(_healthDir, "replay-aged-out.db"), config);
+        var hub = new CaptureEvents();
+        using CaptureSubscription subscription = hub.Subscribe();
+        var channel = new CaptureChannel();
+        CaptureWriterService writer = NewWriter(channel, store, hub);
+        await writer.StartAsync(TestContext.Current.CancellationToken);
+
+        channel.Enqueue(TestCapture.Record("/original"));
+        long originalId = (await NextCompletedRow(subscription)).GetProperty("id").GetInt64();
+        channel.Enqueue(TestCapture.Record("/filler"));
+        await NextCompletedRow(subscription);
+
+        channel.Enqueue(TestCapture.Record("/replay") with { ReplayOf = originalId });
+        JsonElement replay = await NextCompletedRow(subscription);
+        await writer.StopAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(JsonValueKind.Null, replay.GetProperty("replayOf").ValueKind);
+        Assert.Null(store.ReplayOf(replay.GetProperty("id").GetInt64()));
     }
 
     // R06: after give-up the queue must not keep accepting work with no consumer, and the
@@ -448,6 +516,8 @@ public class CaptureWriterResilienceTests : IDisposable
         public void EnforceRetention(IReadOnlySet<long>? protectedSessionIds = null)
         {
         }
+
+        public long? ReplayOf(long id) => null;
 
         public SessionInfo EnsureInitialSession() =>
             new(1, "2026-01-01T00:00:00.0000000Z", "session 1", true, 0, null);

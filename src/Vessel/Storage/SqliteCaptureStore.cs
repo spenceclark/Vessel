@@ -182,7 +182,9 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     /// consistent from the moment the text exists. Bodies are zstd-compressed here, on the
     /// writer thread; the streamed <c>response_body</c> is the Vessel-synthesized document.
     /// Returns each row's new id, in <paramref name="batch"/> order, so the writer can emit
-    /// the <c>completed</c> SSE event (D5) with the real DB id.
+    /// the <c>completed</c> SSE event (D5) with the real DB id. A replay whose parent was
+    /// deleted while it was in flight (retention, clear, session delete) stores
+    /// <c>replay_of</c> as NULL instead of failing the FK.
     /// </summary>
     public IReadOnlyList<long> InsertBatch(IReadOnlyList<EnrichedRecord> batch)
     {
@@ -202,7 +204,7 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
                 prompt_preview, response_preview)
             VALUES (
                 $started_at, $session_id, $backend, $tags, $method, $path, $format, $model, $status_code, $error,
-                $streamed, $replay_of, $replay_group, $replay_patch, $duration_ms, $ttft_ms, $vessel_overhead_ms, $tok_per_sec,
+                $streamed, (SELECT id FROM requests WHERE id = $replay_of), $replay_group, $replay_patch, $duration_ms, $ttft_ms, $vessel_overhead_ms, $tok_per_sec,
                 $tokens_in, $tokens_out, $tokens_cached_read, $tokens_cached_write, $tokens_estimated,
                 $stop_reason, $warnings,
                 $request_headers, $response_headers, $request_body, $response_body, $response_raw, $truncated,
@@ -312,6 +314,15 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
 
         transaction.Commit();
         return ids;
+    }
+
+    /// <summary>The stored <c>replay_of</c> for one row; null when unset, detached, or the row is gone.</summary>
+    public long? ReplayOf(long id)
+    {
+        using SqliteCommand command = Connected().CreateCommand();
+        command.CommandText = "SELECT replay_of FROM requests WHERE id = $id";
+        command.Parameters.AddWithValue("$id", id);
+        return command.ExecuteScalar() is long parent ? parent : null;
     }
 
     /// <summary>D4/#29 — the persisted Reset-driven current session, or a freshly created "session 1".</summary>

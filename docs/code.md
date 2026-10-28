@@ -243,7 +243,9 @@ request through:
 
     Retention and clear also prune empty non-current session markers; explicit session
     deletion removes one marker plus its request/FTS rows in a transaction. All three
-    delete paths null `replay_of` on surviving replays of deleted rows first, so the FK holds. The current marker
+    delete paths null `replay_of` on surviving replays of deleted rows first, so the FK holds;
+    a replay still in flight when its parent is deleted is inserted with `replay_of` NULL, and
+    its `completed` summary carries the stored value. The current marker
     and any start-time session ids held by active captures are retained even with zero rows, so
     queued captures always have a valid destination.
 
