@@ -46,6 +46,8 @@ public class CaptureWriterResilienceTests : IDisposable
 
         public Func<int, bool> ThrowOnAttempt { get; init; } = _ => false;
 
+        public bool ThrowOnRetention { get; init; }
+
         private long _nextId = 1;
 
         private long _nextSessionId = 1;
@@ -77,6 +79,10 @@ public class CaptureWriterResilienceTests : IDisposable
 
         public void EnforceRetention(IReadOnlySet<long>? protectedSessionIds = null)
         {
+            if (ThrowOnRetention)
+            {
+                throw new InvalidOperationException("simulated FOREIGN KEY constraint failed");
+            }
         }
 
         public SessionInfo EnsureInitialSession() =>
@@ -179,6 +185,40 @@ public class CaptureWriterResilienceTests : IDisposable
 
         Assert.Equal(CaptureWriterService.MaxConsecutiveFailures, store.SnapshotAttempts());
         Assert.Empty(store.SnapshotInserted());
+
+        await writer.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    // Retention runs after the batch commits, so its failures are logged only: more than
+    // MaxConsecutiveFailures of them in a row never stop capture, and every stored row still
+    // completes with its summary rather than as dropped.
+    [Fact]
+    public async Task RetentionFailures_NeitherGiveUpNorReportStoredRowsAsDropped()
+    {
+        var hub = new CaptureEvents();
+        using CaptureSubscription subscription = hub.Subscribe();
+        var channel = new CaptureChannel();
+        var store = new FakeStore { ThrowOnRetention = true };
+        CaptureWriterService writer = NewWriter(channel, store, hub);
+        await writer.StartAsync(TestContext.Current.CancellationToken);
+
+        for (int i = 1; i <= CaptureWriterService.MaxConsecutiveFailures + 1; i++)
+        {
+            channel.Enqueue(TestCapture.Record($"/stored-{i}"));
+            Capture.SseEvent completed;
+            do
+            {
+                completed = await subscription.Reader.ReadAsync(TestContext.Current.CancellationToken)
+                    .AsTask().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            }
+            while (completed.Name != "completed");
+
+            using System.Text.Json.JsonDocument payload = System.Text.Json.JsonDocument.Parse(completed.Json);
+            Assert.NotEqual(System.Text.Json.JsonValueKind.Null, payload.RootElement.GetProperty("row").ValueKind);
+        }
+
+        Assert.False(channel.IsStopped);
+        Assert.Equal(CaptureWriterService.MaxConsecutiveFailures + 1, store.SnapshotInserted().Count);
 
         await writer.StopAsync(TestContext.Current.CancellationToken);
     }

@@ -284,8 +284,18 @@ public sealed class CaptureWriterService(
             }
 
             IReadOnlyList<long> ids = store.InsertBatch(enriched);
-            store.EnforceRetention(ActiveSessionIds());
             _consecutiveFailures = 0;
+
+            // The batch is committed, so a retention fault must neither count toward give-up
+            // nor report stored rows as dropped. Log it; the next batch retries retention.
+            try
+            {
+                store.EnforceRetention(ActiveSessionIds());
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "retention pass failed after a stored batch; capture continues");
+            }
 
             for (int i = 0; i < enriched.Count; i++)
             {

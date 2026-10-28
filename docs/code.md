@@ -71,7 +71,8 @@ backend reachable?" TCP connect on first run only.
   enforces retention, and emits `completed` SSE frames. Resilient: a failed batch is
   dropped and the loop continues; five consecutive failures put the channel into a
   terminal stopped state (captures dropped at admission, commands fail fast, forwarding
-  unaffected).
+  unaffected). A retention failure after a committed batch is logged only: it never
+  counts toward give-up or reports stored rows as dropped.
 - `CaptureEvents` — the SSE hub (see §3).
 - `RequestModelSnifferService` + `RequestModelSniffer` — dedicated background loop
   that parses the `model` field off a fully-read request body and publishes
