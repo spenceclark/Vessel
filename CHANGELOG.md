@@ -2,6 +2,44 @@
 
 All notable changes are documented here. Vessel follows Semantic Versioning.
 
+## 0.3.2 — 2026-10-28
+
+What's new since an agent's previous turn, Vessel as a Claude Code and Codex plugin with a
+`vessel` skill, and replay, session and clear fixes.
+
+### Added
+
+- The Request tab shows what's new since the same agent's previous turn: a link to that
+  request, the carried-over messages folded away, the new messages marked, and whether the
+  system prompt and tools changed. When the context was rewritten instead (compaction, a
+  sliding window, an edited retry), it says so (#165).
+- Vessel is a plugin for Claude Code and Codex that registers the read-only MCP endpoint:
+  `claude plugin marketplace add spenceclark/Vessel`, then `claude plugin install vessel@vessel`
+  (#163).
+- In Claude Code the plugin adds a `vessel` skill. It connects a codebase's LLM clients to
+  Vessel (base URL, backend, agent tags, sessions) and debugs agents from their captured
+  traffic through the MCP tools.
+
+### Changed
+
+- Dependency bumps: react 19.3.1, @tanstack/react-query 5.104.5, @tanstack/react-virtual
+  3.14.21, lucide-react 1.61.0, Microsoft.Data.Sqlite 10.0.13, ModelContextProtocol.AspNetCore
+  2.3.0 (#142, #164, #169, #170, #171, #172).
+
+### Fixed
+
+- A replay of a long streamed response no longer fails as `client_disconnect` once it outlasts
+  `timeouts.activitySeconds`. The timeout now restarts whenever bytes move, as it does for
+  proxied traffic (#145).
+- Reset session takes effect even when the request that asked for it is cancelled, and two
+  quick resets activate in the order they were saved (#144).
+- The Replay dialog keeps model and parameter edits instead of discarding them on every
+  5-second status refresh (#166).
+- Request detail, export and MCP read compressed streamed responses correctly. The reassembled
+  response was being decompressed a second time (#166).
+- Clearing history or deleting a session in one tab removes the deleted request from other
+  open tabs instead of leaving it on screen from cache (#166).
+
 ## 0.3.1 — 2026-10-02
 
 System One replay between TypeSafe and Ollama, a tidier Compare view, IBM Plex Sans, and winget.
