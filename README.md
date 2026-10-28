@@ -211,6 +211,20 @@ codex plugin add vessel@vessel
 ```
 
 In a session, `/plugin` (Claude Code) and `/plugins` (Codex) list it under the `vessel` marketplace.
+`claude plugin install` installs for your user, so it works in every project; add
+`--scope project` to record it in a repo's `.claude/settings.json` for the whole team.
+
+In Claude Code the plugin also adds a `vessel` skill. Claude reaches for it on its own, or
+run it as `/vessel:vessel`. It does two jobs:
+
+- **Connect**: finds the LLM clients in your code, proposes a base URL, backend, agent tags,
+  and session scheme for each, asks you to confirm, wires them up, and checks the traffic
+  lands in Vessel.
+- **Debug**: works out why an agent misbehaved from its captured traffic through the MCP
+  tools, citing request ids you can open in the UI.
+
+To use the skill without the plugin, copy [`skills/vessel/SKILL.md`](skills/vessel/SKILL.md)
+to `~/.claude/skills/vessel/` (or a repo's `.claude/skills/vessel/`).
 
 ## Container / compose
 
