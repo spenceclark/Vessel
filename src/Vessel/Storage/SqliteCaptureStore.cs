@@ -431,7 +431,9 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     /// <summary>
     /// Deletes the oldest <paramref name="limit"/> rows from <c>requests</c> and their
     /// matching contentless FTS rows in one transaction (D10), so retention never leaves an
-    /// orphaned FTS row. Returns the number of <c>requests</c> rows deleted.
+    /// orphaned FTS row. A surviving replay of a deleted row has its <c>replay_of</c>
+    /// detached first, as in <see cref="DeleteSession"/>, so the FK holds. Returns the
+    /// number of <c>requests</c> rows deleted.
     /// </summary>
     private long DeleteOldest(long limit)
     {
@@ -453,6 +455,14 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
             fts.ExecuteNonQuery();
         }
 
+        using (SqliteCommand replays = connection.CreateCommand())
+        {
+            replays.Transaction = transaction;
+            replays.CommandText = $"UPDATE requests SET replay_of = NULL WHERE replay_of IN ({oldest})";
+            AddTo(replays, "$limit").Value = limit;
+            replays.ExecuteNonQuery();
+        }
+
         long deleted;
         using (SqliteCommand rows = connection.CreateCommand())
         {
@@ -469,7 +479,8 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     /// <summary>
     /// D6 — deletes <c>requests</c> rows (and their FTS rows) matching
     /// <paramref name="beforeIso"/>, or every row when null, in one transaction — same
-    /// shape as <see cref="DeleteOldest"/>, filtered by <c>started_at</c> instead of an
+    /// shape as <see cref="DeleteOldest"/> (surviving replays detached included),
+    /// filtered by <c>started_at</c> instead of an
     /// oldest-<c>N</c> limit. <c>incremental_vacuum</c> runs after commit so the file
     /// actually shrinks.
     /// </summary>
@@ -491,6 +502,18 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
             }
 
             fts.ExecuteNonQuery();
+        }
+
+        using (SqliteCommand replays = connection.CreateCommand())
+        {
+            replays.Transaction = transaction;
+            replays.CommandText = $"UPDATE requests SET replay_of = NULL WHERE replay_of IN ({matching})";
+            if (beforeIso is not null)
+            {
+                AddTo(replays, "$before").Value = beforeIso;
+            }
+
+            replays.ExecuteNonQuery();
         }
 
         int deleted;
