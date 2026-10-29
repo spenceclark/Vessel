@@ -293,6 +293,37 @@ public class ConfigLoaderTests : IDisposable
         }
     }
 
+    // An outside process (Defender, the indexer) briefly holding the destination fails a
+    // replace on Windows; Save must ride it out instead of reporting a failed config save.
+    // On POSIX the rename succeeds despite the open handle, so the assertions still hold.
+    // The handle is released from a dedicated thread, not an async continuation: under a
+    // parallel test run the thread pool can resume a continuation later than Save's whole
+    // retry budget, which is what made the first version of this test flaky in CI.
+    [Fact]
+    public void Save_DestinationBrieflyHeld_RetriesAndSucceeds()
+    {
+        string path = PathFor("vessel.json");
+        ConfigLoader.Save(path, CreateDefault());
+
+        VesselConfig changed = CreateDefault();
+        changed.DefaultBackend = "changed";
+        changed.Backends["changed"] = new BackendConfig { BaseUrl = "http://localhost:9" };
+
+        var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var release = new Thread(() =>
+        {
+            Thread.Sleep(50);
+            held.Dispose();
+        });
+        release.Start();
+
+        ConfigLoader.Save(path, changed);
+        release.Join();
+
+        Assert.Contains("\"changed\"", File.ReadAllText(path));
+        Assert.Empty(Directory.GetFiles(_dir, ".vessel.json.tmp-*"));
+    }
+
     [Fact]
     public void Save_Succeeds_NoLeftoverTempFile()
     {

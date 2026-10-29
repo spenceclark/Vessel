@@ -16,6 +16,12 @@ public interface ICaptureStore
 
     void EnforceRetention(IReadOnlySet<long>? protectedSessionIds = null);
 
+    /// <summary>
+    /// The stored <c>replay_of</c> for one row: null when unset, when its parent was deleted
+    /// before the insert, or when retention later detached it.
+    /// </summary>
+    long? ReplayOf(long id);
+
     /// <summary>D4 — the newest <c>sessions</c> row, or a freshly created "session 1" on an empty database.</summary>
     SessionInfo EnsureInitialSession();
 

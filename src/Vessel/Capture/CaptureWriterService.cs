@@ -284,12 +284,23 @@ public sealed class CaptureWriterService(
             }
 
             IReadOnlyList<long> ids = store.InsertBatch(enriched);
-            store.EnforceRetention(ActiveSessionIds());
             _consecutiveFailures = 0;
 
+            // The batch is committed, so nothing from here may count toward give-up or report
+            // stored rows as dropped. Log a retention fault; the next batch retries retention.
+            try
+            {
+                store.EnforceRetention(ActiveSessionIds());
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "retention pass failed after a stored batch; capture continues");
+            }
+
+            long?[] replayOf = StoredReplayParents(ids, enriched);
             for (int i = 0; i < enriched.Count; i++)
             {
-                events.Completed(enriched[i].Record.Seq, ToSummary(ids[i], enriched[i]));
+                events.Completed(enriched[i].Record.Seq, ToSummary(ids[i], enriched[i], replayOf[i]));
             }
 
             return true;
@@ -437,7 +448,35 @@ public sealed class CaptureWriterService(
         .Select(active => active.SessionId!.Value)
         .ToHashSet();
 
-    private static Summary ToSummary(long id, EnrichedRecord enriched)
+    /// <summary>
+    /// A replay's parent can be deleted while the replay is in flight (the insert stores NULL)
+    /// or by this batch's retention pass (which detaches it), so the <c>completed</c> summary
+    /// reads the stored <c>replay_of</c> back rather than trusting the record. Read before
+    /// anything is emitted; the batch is committed, so a failed read logs and keeps the
+    /// recorded value.
+    /// </summary>
+    private long?[] StoredReplayParents(IReadOnlyList<long> ids, List<EnrichedRecord> enriched)
+    {
+        long?[] replayOf = [.. enriched.Select(e => e.Record.ReplayOf)];
+        try
+        {
+            for (int i = 0; i < replayOf.Length; i++)
+            {
+                if (replayOf[i] is not null)
+                {
+                    replayOf[i] = store.ReplayOf(ids[i]);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "could not read back replay parents after a stored batch; a completion may show a stale replay link");
+        }
+
+        return replayOf;
+    }
+
+    private static Summary ToSummary(long id, EnrichedRecord enriched, long? replayOf)
     {
         CaptureRecord record = enriched.Record;
         return new Summary(
@@ -453,7 +492,7 @@ public sealed class CaptureWriterService(
             StatusCode: record.StatusCode,
             Error: record.Error,
             Streamed: record.Streamed,
-            ReplayOf: record.ReplayOf,
+            ReplayOf: replayOf,
             DurationMs: record.DurationMs,
             TtftMs: record.TtftMs,
             VesselOverheadMs: record.VesselOverheadMs,

@@ -7,6 +7,8 @@ public sealed class ConfigException(string message) : Exception(message);
 
 public static class ConfigLoader
 {
+    private const int SaveAttempts = 5;
+
     /// <summary>
     /// Loads <paramref name="path"/>, creating it with the default config if absent.
     /// Malformed or invalid config throws <see cref="ConfigException"/> — never silently
@@ -52,6 +54,12 @@ public static class ConfigLoader
     /// partially overwrites the last valid config: the destination is either the old
     /// content or the new content, never neither. The temp file is cleaned up on any
     /// failure path.
+    /// <para>
+    /// On Windows, an outside process (Defender, the search indexer) briefly holding the
+    /// just-written destination fails ~1% of rapid back-to-back replaces. The swap step is
+    /// retried a few times; each retry re-checks whether the destination exists, so a
+    /// replace that removed it before failing finishes as a move.
+    /// </para>
     /// </summary>
     public static void Save(string path, VesselConfig config)
     {
@@ -64,15 +72,28 @@ public static class ConfigLoader
             Directory.CreateDirectory(directory);
             File.WriteAllText(tempPath, json + Environment.NewLine);
 
-            if (File.Exists(path))
+            for (int attempt = 1; ; attempt++)
             {
-                // Same volume (same directory) → atomic rename at the filesystem level;
-                // the destination is never seen half-written.
-                File.Replace(tempPath, path, destinationBackupFileName: null);
-            }
-            else
-            {
-                File.Move(tempPath, path);
+                try
+                {
+                    if (File.Exists(path))
+                    {
+                        // Same volume (same directory) → atomic rename at the filesystem level;
+                        // the destination is never seen half-written.
+                        File.Replace(tempPath, path, destinationBackupFileName: null);
+                    }
+                    else
+                    {
+                        File.Move(tempPath, path);
+                    }
+
+                    break;
+                }
+                catch (Exception ex) when (attempt < SaveAttempts && (ex is IOException or UnauthorizedAccessException))
+                {
+                    // Measured: rapid saves needed at most 3 attempts; 20+40+60+80 ms caps the wait.
+                    Thread.Sleep(20 * attempt);
+                }
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

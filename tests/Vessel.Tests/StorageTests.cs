@@ -273,6 +273,59 @@ public class StorageTests
         }
     }
 
+    // Retention and Clear(before) can delete an original whose replay survives. Like
+    // DeleteSession, the replay keeps its row with replay_of detached; before this, the
+    // replay_of FK failed the delete and five retention failures stopped capture.
+    [Fact]
+    public void RetentionAndClearBefore_DetachSurvivingReplays()
+    {
+        string dir = Directory.CreateTempSubdirectory("vessel-store-").FullName;
+        string dbPath = Path.Combine(dir, "vessel.db");
+        try
+        {
+            var config = new VesselConfig { Retention = new RetentionConfig { MaxRequests = 3 } };
+            using (var store = new SqliteCaptureStore(dbPath, config))
+            {
+                store.Initialize();
+                store.EnsureInitialSession();
+
+                EnrichedRecord Row(string path, string? startedAt = null, long? replayOf = null)
+                {
+                    EnrichedRecord row = MinimalRecord(path);
+                    return row with
+                    {
+                        Record = row.Record with
+                        {
+                            StartedAt = startedAt ?? row.Record.StartedAt,
+                            ReplayOf = replayOf,
+                        },
+                    };
+                }
+
+                long clearedId = store.InsertBatch([Row("/cleared", "2026-01-01T00:00:00Z")])[0];
+                long clearSurvivorId = store.InsertBatch([Row("/clear-replay", "2026-01-03T00:00:00Z", clearedId)])[0];
+                Assert.Equal(1, store.Clear("2026-01-02T00:00:00Z"));
+
+                // Oldest-first with a cap of 3: clearSurvivor and the original age out, its replay stays.
+                long originalId = store.InsertBatch([Row("/original")])[0];
+                long replayId = store.InsertBatch([Row("/replay", replayOf: originalId)])[0];
+                store.InsertBatch([Row("/newer")]);
+                store.InsertBatch([Row("/newest")]);
+                store.EnforceRetention();
+
+                using var verify = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+                verify.Open();
+                Assert.Equal(3L, Scalar(verify, "SELECT COUNT(*) FROM requests"));
+                Assert.Equal(0L, Scalar(verify, $"SELECT COUNT(*) FROM requests WHERE id IN ({clearSurvivorId}, {originalId})"));
+                Assert.Equal(DBNull.Value, Scalar(verify, $"SELECT replay_of FROM requests WHERE id = {replayId}"));
+            }
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     // phase-5-mcp.md §7: first-ever second migration. Build a v1 database (the original
     // schema, no preview columns) with real rows, then reopen through the current store
     // and confirm the v1→v2 upgrade runs, existing rows/FTS survive untouched, and the

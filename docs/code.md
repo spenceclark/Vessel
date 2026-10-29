@@ -71,7 +71,8 @@ backend reachable?" TCP connect on first run only.
   enforces retention, and emits `completed` SSE frames. Resilient: a failed batch is
   dropped and the loop continues; five consecutive failures put the channel into a
   terminal stopped state (captures dropped at admission, commands fail fast, forwarding
-  unaffected).
+  unaffected). A retention failure after a committed batch is logged only: it never
+  counts toward give-up or reports stored rows as dropped.
 - `CaptureEvents` — the SSE hub (see §3).
 - `RequestModelSnifferService` + `RequestModelSniffer` — dedicated background loop
   that parses the `model` field off a fully-read request body and publishes
@@ -241,7 +242,10 @@ request through:
     a `Summary`.
 
     Retention and clear also prune empty non-current session markers; explicit session
-    deletion removes one marker plus its request/FTS rows in a transaction. The current marker
+    deletion removes one marker plus its request/FTS rows in a transaction. All three
+    delete paths null `replay_of` on surviving replays of deleted rows first, so the FK holds;
+    a replay still in flight when its parent is deleted is inserted with `replay_of` NULL, and
+    its `completed` summary carries the stored value. The current marker
     and any start-time session ids held by active captures are retained even with zero rows, so
     queued captures always have a valid destination.
 

@@ -182,7 +182,9 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     /// consistent from the moment the text exists. Bodies are zstd-compressed here, on the
     /// writer thread; the streamed <c>response_body</c> is the Vessel-synthesized document.
     /// Returns each row's new id, in <paramref name="batch"/> order, so the writer can emit
-    /// the <c>completed</c> SSE event (D5) with the real DB id.
+    /// the <c>completed</c> SSE event (D5) with the real DB id. A replay whose parent was
+    /// deleted while it was in flight (retention, clear, session delete) stores
+    /// <c>replay_of</c> as NULL instead of failing the FK.
     /// </summary>
     public IReadOnlyList<long> InsertBatch(IReadOnlyList<EnrichedRecord> batch)
     {
@@ -202,7 +204,7 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
                 prompt_preview, response_preview)
             VALUES (
                 $started_at, $session_id, $backend, $tags, $method, $path, $format, $model, $status_code, $error,
-                $streamed, $replay_of, $replay_group, $replay_patch, $duration_ms, $ttft_ms, $vessel_overhead_ms, $tok_per_sec,
+                $streamed, (SELECT id FROM requests WHERE id = $replay_of), $replay_group, $replay_patch, $duration_ms, $ttft_ms, $vessel_overhead_ms, $tok_per_sec,
                 $tokens_in, $tokens_out, $tokens_cached_read, $tokens_cached_write, $tokens_estimated,
                 $stop_reason, $warnings,
                 $request_headers, $response_headers, $request_body, $response_body, $response_raw, $truncated,
@@ -312,6 +314,15 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
 
         transaction.Commit();
         return ids;
+    }
+
+    /// <summary>The stored <c>replay_of</c> for one row; null when unset, detached, or the row is gone.</summary>
+    public long? ReplayOf(long id)
+    {
+        using SqliteCommand command = Connected().CreateCommand();
+        command.CommandText = "SELECT replay_of FROM requests WHERE id = $id";
+        command.Parameters.AddWithValue("$id", id);
+        return command.ExecuteScalar() is long parent ? parent : null;
     }
 
     /// <summary>D4/#29 — the persisted Reset-driven current session, or a freshly created "session 1".</summary>
@@ -431,7 +442,9 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     /// <summary>
     /// Deletes the oldest <paramref name="limit"/> rows from <c>requests</c> and their
     /// matching contentless FTS rows in one transaction (D10), so retention never leaves an
-    /// orphaned FTS row. Returns the number of <c>requests</c> rows deleted.
+    /// orphaned FTS row. A surviving replay of a deleted row has its <c>replay_of</c>
+    /// detached first, as in <see cref="DeleteSession"/>, so the FK holds. Returns the
+    /// number of <c>requests</c> rows deleted.
     /// </summary>
     private long DeleteOldest(long limit)
     {
@@ -453,6 +466,14 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
             fts.ExecuteNonQuery();
         }
 
+        using (SqliteCommand replays = connection.CreateCommand())
+        {
+            replays.Transaction = transaction;
+            replays.CommandText = $"UPDATE requests SET replay_of = NULL WHERE replay_of IN ({oldest})";
+            AddTo(replays, "$limit").Value = limit;
+            replays.ExecuteNonQuery();
+        }
+
         long deleted;
         using (SqliteCommand rows = connection.CreateCommand())
         {
@@ -469,7 +490,8 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
     /// <summary>
     /// D6 — deletes <c>requests</c> rows (and their FTS rows) matching
     /// <paramref name="beforeIso"/>, or every row when null, in one transaction — same
-    /// shape as <see cref="DeleteOldest"/>, filtered by <c>started_at</c> instead of an
+    /// shape as <see cref="DeleteOldest"/> (surviving replays detached included),
+    /// filtered by <c>started_at</c> instead of an
     /// oldest-<c>N</c> limit. <c>incremental_vacuum</c> runs after commit so the file
     /// actually shrinks.
     /// </summary>
@@ -491,6 +513,18 @@ public sealed class SqliteCaptureStore : ICaptureStore, IDisposable
             }
 
             fts.ExecuteNonQuery();
+        }
+
+        using (SqliteCommand replays = connection.CreateCommand())
+        {
+            replays.Transaction = transaction;
+            replays.CommandText = $"UPDATE requests SET replay_of = NULL WHERE replay_of IN ({matching})";
+            if (beforeIso is not null)
+            {
+                AddTo(replays, "$before").Value = beforeIso;
+            }
+
+            replays.ExecuteNonQuery();
         }
 
         int deleted;
