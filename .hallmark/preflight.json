@@ -1,0 +1,13 @@
+{
+  "scanned": "2026-10-31",
+  "findings": {
+    "fonts": "IBM Plex Sans Variable + JetBrains Mono Variable, self-hosted woff2 (site/index.html:66-77; docs/ui-spec.md §3)",
+    "palette": "slate-cool neutrals, teal accent #2dd4bf / #0d9488, dark primary with light via prefers-color-scheme (site/index.html:79-106; docs/ui-spec.md §2.1)",
+    "brand": "vessel mark: rounded-rect vessel with flow line (site/favicon.svg; docs/ui-spec.md §1.2), lowercase wordmark 650 / -0.02em",
+    "motion": "none; one autoplay loop video assets/compare.mp4 (pre-Plex UI)",
+    "spacing": "ad hoc px, off the 4px scale",
+    "framework": "static single page, no build, _headers suggests Cloudflare Pages"
+  },
+  "preserve": ["mark and wordmark", "teal accent and slate neutrals", "IBM Plex Sans + JetBrains Mono", "every link, id, script hook, JSON-LD", "the copy"],
+  "introduce": ["shape", "composition", "type scale", "section rhythm", "states and focus", "gates"]
+}
