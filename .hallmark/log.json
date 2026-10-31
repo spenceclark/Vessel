@@ -1,0 +1,32 @@
+[
+ {
+  "mode": "redesign",
+  "depth": "full",
+  "scope": "page",
+  "shape": "Split Studio",
+  "theme": "brand",
+  "genre": "modern-minimal",
+  "axes": "dark/grotesk-sans/chromatic-teal",
+  "hero": "Stage",
+  "nav": "edge-aligned",
+  "footer": "mast",
+  "imagery": "screenshots 6 (the owner captures, cropped) and the compare video",
+  "photos": [],
+  "entry": "switcher",
+  "fingerprint": "split-studio/stage/edge-aligned/mast/switcher/rows",
+  "sections": [
+   "hero:stage",
+   "switcher",
+   "rows",
+   "statement-split",
+   "faq-split",
+   "install-split"
+  ],
+  "signature": "the real History view, every agent request tagged and timed",
+  "waived": [],
+  "draw": "7f590e",
+  "job": "try",
+  "prompt": "local proxy desktop tool for developers that captures, searches, replays and compares LLM requests on their own machine",
+  "date": "2026-10-31"
+ }
+]
